@@ -4,6 +4,7 @@ extends Control
 
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
 const Commandes = preload("res://scripts/commandes.gd")
+const PiloteAuto = preload("res://scripts/physique/pilote_auto.gd")
 const R := 600000.0
 const GM := 9.81 * 600000.0 * 600000.0
 
@@ -275,6 +276,7 @@ func _lancer() -> void:
 	_tests_position_valide()
 	_tests_commandes()
 	_tests_modele_v12()
+	_tests_pilote_auto()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
@@ -539,3 +541,104 @@ func _tests_commandes() -> void:
 	c = Commandes.new()
 	c.charger()
 	c.appliquer()
+
+
+# =====================================================================
+# TESTS : ORDINATEUR DE BORD (pilote automatique, étape 1)
+# =====================================================================
+## Une image du jeu avec le pilote auto : il calcule ses ordres, le vaisseau les exécute.
+func _image_pilote(v, p, acc: int) -> void:
+	p.calculer(v, acc / 120.0)
+	v.commander(p.gaz, p.ordres.x, p.ordres.y, p.ordres.z, p.force_cote)
+	var n: int = mini(acc, 25)
+	for i in n:
+		v.pas(acc / 120.0 / n)
+
+
+func _ecart_angle(a: Quaternion, b: Quaternion) -> float:
+	return rad_to_deg(a.angle_to(b))
+
+
+func _tests_pilote_auto() -> void:
+	# 27. Commande « pousser de côté » : les petits propulseurs donnent la force sans tourner
+	var v = _nouveau(false)
+	v.commander(0.0, 0.0, 0.0, 0.0, Vector3(8000.0, 20000.0, 0.0))
+	var e: Array = v.effet_propulseurs()
+	var f: Vector3 = e[0]
+	var c: Vector3 = e[1]
+	var ok: bool = absf(f.x - 8000.0) < 400.0 and absf(f.y - 20000.0) < 1000.0 and c.length() < 0.05 * v.couple_max.x
+	_resultat(ok, "Commande de côté (pour le pilote auto)",
+		"Demandé 8 kN à droite et 20 kN vers le haut : obtenu %.1f kN et %.1f kN, rotation parasite %.0f N·m (%.1f %% du maximum, le pilote auto la corrige)." % [f.x / 1000.0, f.y / 1000.0, c.length(), 100.0 * c.length() / v.couple_max.x])
+
+	# 28. Garder le cap : le vaisseau tourne vite dans tous les sens, le pilote revient à la
+	#     direction gardée et s'y arrête, rien qu'avec les propulseurs
+	v = _nouveau(false)
+	var p = PiloteAuto.new()
+	p.activer(PiloteAuto.CAP, v)
+	var garde: Quaternion = v.orientation
+	v.omega = Vector3(0.3, -0.25, 0.6)
+	for i in 120 * 60:
+		_image_pilote(v, p, 1)
+	var ecart: float = _ecart_angle(v.orientation, garde)
+	_resultat(ecart < 0.2 and v.omega.length() < 1e-3,
+		"Pilote auto : garder le cap",
+		"Lancé en rotation à %.0f°/s : après 60 s, écart %.3f° avec le cap gardé, rotation %.4f°/s." % [rad_to_deg(Vector3(0.3, -0.25, 0.6).length()), ecart, rad_to_deg(v.omega.length())])
+
+	# 29. Garder le cap en orbite pendant 20 minutes (le gradient de gravité tire dessus),
+	#     en temps accéléré x10
+	v = _nouveau(true)
+	v.placer_en_orbite(100000.0)
+	p = PiloteAuto.new()
+	p.activer(PiloteAuto.CAP, v)
+	garde = v.orientation
+	var pire := 0.0
+	for i in 12 * 60 * 20:
+		_image_pilote(v, p, 10)
+		pire = maxf(pire, _ecart_angle(v.orientation, garde))
+	_resultat(pire < 0.5 and _valide(v), "Pilote auto : garder le cap en orbite (x10)",
+		"20 min en orbite à 100 km : plus grand écart %.3f° (attendu < 0,5°)." % pire)
+
+	# 30. S'arrêter dans le vide : vitesse et orientation au hasard au départ
+	var hasard := RandomNumberGenerator.new()
+	hasard.seed = 7
+	var pire_v := 0.0
+	var pire_t := 0.0
+	var pire_g := 0.0
+	for essai in 5:
+		v = _nouveau(false)
+		v.vx = hasard.randf_range(-300.0, 300.0)
+		v.vy = hasard.randf_range(-300.0, 300.0)
+		v.vz = hasard.randf_range(-300.0, 300.0)
+		v.orientation = Quaternion(Vector3(hasard.randf(), hasard.randf(), hasard.randf()).normalized(), hasard.randf_range(0.0, TAU))
+		p = PiloteAuto.new()
+		p.activer(PiloteAuto.ARRET, v)
+		var t := 0.0
+		while t < 300.0 and not p.arrete:
+			_image_pilote(v, p, 1)
+			t += 1.0 / 120.0
+			pire_g = maxf(pire_g, v.acceleration_ressentie.length() / VaisseauPhysique.G0)
+		pire_v = maxf(pire_v, v.vitesse())
+		pire_t = maxf(pire_t, t)
+	_resultat(pire_v < 0.06 and pire_g < 3.05, "Pilote auto : s'arrêter dans le vide",
+		"5 départs au hasard (jusqu'à 520 m/s) : arrêté en %.0f s au plus, vitesse restante %.3f m/s, au plus %.2f g ressentis (limite 3 g)." % [pire_t, pire_v, pire_g])
+
+	# 31. S'arrêter près de la planète : le vaisseau finit en vol stationnaire, sans tomber
+	v = _nouveau(true)
+	v.px = 0.0
+	v.py = R + 5000.0
+	v.pz = 0.0
+	v.vx = 150.0
+	v.vy = -60.0
+	p = PiloteAuto.new()
+	p.activer(PiloteAuto.ARRET, v)
+	var alt_min := INF
+	for i in 120 * 180:
+		_image_pilote(v, p, 1)
+		alt_min = minf(alt_min, v.altitude())
+	var alt_fin: float = v.altitude()
+	for i in 120 * 20:
+		_image_pilote(v, p, 1)
+	var derive: float = absf(v.altitude() - alt_fin)
+	_resultat(v.vitesse() < 0.1 and alt_min > 3000.0 and derive < 1.0 and not v.au_sol,
+		"Pilote auto : s'arrêter près de la planète",
+		"Parti à 5 km d'altitude à 160 m/s : plus bas %.0f m, puis immobile (%.3f m/s, %.2f m de dérive en 20 s) sur ses moteurs." % [alt_min, v.vitesse(), derive])

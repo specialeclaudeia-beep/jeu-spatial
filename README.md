@@ -25,6 +25,8 @@ Disposition par défaut :
 | lacet (nez à gauche / à droite) | Q / D | L1 / R1 |
 | roulis (pencher à gauche / à droite) | A / E | stick gauche gauche / droite |
 | stabilisateur de rotation | T | Triangle |
+| pilote auto : garder le cap | K | — |
+| pilote auto : s'arrêter | N | — |
 | ouvrir / replier les ailes | X | croix directionnelle haut |
 | sortir / rentrer le train d'atterrissage | G | croix directionnelle bas |
 | vue cockpit / vue extérieure | V | pavé tactile |
@@ -36,6 +38,14 @@ Disposition par défaut :
 | regarder droit devant | C | R3 (enfoncer le stick droit) |
 | tests de physique | F1 (Échap pour revenir) | Rond pour revenir |
 | configurer les commandes | F2 | Options |
+
+## Ordinateur de bord (pilote automatique)
+Il pilote avec les mêmes moteurs et propulseurs que le joueur : il calcule seulement les ordres
+(gaz, tangage, lacet, roulis, et une petite force de côté). Toucher une commande de pilotage,
+ou couper la poussée, le désactive.
+- **Garder le cap (K)** : garde le nez dans la direction qu'il avait à l'activation, même lancé en rotation.
+- **S'arrêter (N)** : annule la vitesse par rapport à la planète, sans dépasser 3 g. Près de la
+  planète, il compense aussi la gravité : le vaisseau finit immobile, nez vers le haut, sur ses moteurs.
 
 ## Ce qui est simulé
 - Vaisseau de 10 t, corps rigide à 6 degrés de liberté (masse, inertie, couples).
