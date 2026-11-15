@@ -329,7 +329,9 @@ func _construire_calotte(c: Vector3, angle: float) -> void:
 	for j in n:
 		for i in n:
 			var k := j * (n + 1) + i
-			indices.append_array([k, k + 1, k + n + 1, k + 1, k + n + 2, k + n + 1])
+			# sens des triangles : face avant vers l'extérieur (vers le pilote). Dans l'autre sens,
+			# Godot voyait l'envers, retournait la normale et la calotte restait noire (invisible).
+			indices.append_array([k, k + n + 1, k + 1, k + 1, k + n + 1, k + n + 2])
 	var tableaux := []
 	tableaux.resize(Mesh.ARRAY_MAX)
 	tableaux[Mesh.ARRAY_VERTEX] = sommets

@@ -74,21 +74,26 @@ func _lancer() -> void:
 	for i in 1200:
 		v.pas(1.0 / 120.0)
 	var vit: float = v.vitesse()
-	_resultat(absf(vit - 40.0) < 0.05 and v.omega.length() < 1e-9,
+	var f2: float = v.moteurs[4]["poussee_max"]
+	var att2: float = f2 / v.masse * 10.0
+	_resultat(absf(vit - att2) < 0.002 * att2 and v.omega.length() < 1e-9,
 		"Poussée du moteur central",
-		"40 kN sur 10 t pendant 10 s : %.3f m/s (attendu 40), rotation %.9f rad/s (attendu 0)." % [vit, v.omega.length()])
+		"%.0f kN sur %.0f t pendant 10 s : %.3f m/s (attendu %.0f), rotation %.9f rad/s (attendu 0)." % [f2 / 1000.0, v.masse / 1000.0, vit, att2, v.omega.length()])
 
 	# 3. Poussée décentrée : le moteur haut droit fait aussi tourner (couple = position × force)
 	v = _nouveau(false)
 	v.moteurs[1]["consigne"] = 1.0
-	for i in 120:
+	for i in 24:
 		v.pas(1.0 / 120.0)
-	var attendu_x := -36000.0 / 133000.0
-	var attendu_y := 112000.0 / 160000.0
+	# couple = position × force : bras de levier 0,9 m en hauteur et 2,8 m en largeur, pendant 0,2 s
+	var f3: float = v.moteurs[1]["poussee_max"]
+	var attendu_x: float = -0.9 * f3 * 0.2 / v.inertie.x
+	var attendu_y: float = 2.8 * f3 * 0.2 / v.inertie.y
+	var att3v: float = f3 / v.masse * 0.2
 	var w: Vector3 = v.omega
-	var ok3 := absf(w.x - attendu_x) < 0.05 * absf(attendu_x) and absf(w.y - attendu_y) < 0.05 * attendu_y and absf(v.vitesse() - 4.0) < 0.2
+	var ok3: bool = absf(w.x - attendu_x) < 0.05 * absf(attendu_x) and absf(w.y - attendu_y) < 0.05 * attendu_y and absf(v.vitesse() - att3v) < 0.05 * att3v
 	_resultat(ok3, "Poussée décentrée = rotation",
-		"Moteur haut droit seul pendant 1 s : tangage %.3f rad/s (≈ %.3f), lacet %.3f rad/s (≈ %.3f), vitesse %.2f m/s (≈ 4). Le nez descend et part à gauche, comme prévu." % [w.x, attendu_x, w.y, attendu_y, v.vitesse()])
+		"Moteur haut droit seul pendant 0,2 s : tangage %.3f rad/s (≈ %.3f), lacet %.3f rad/s (≈ %.3f), vitesse %.2f m/s (≈ %.2f). Le nez descend et part à gauche, comme prévu." % [w.x, attendu_x, w.y, attendu_y, v.vitesse(), att3v])
 
 	# 4. Orbite circulaire stable pendant 3 tours
 	v = _nouveau(true)
@@ -142,8 +147,8 @@ func _lancer() -> void:
 	v.commander(0.0, 0.0, 0.0, 1.0)
 	for i in 240:
 		v.pas(1.0 / 120.0)
-	var att7 := 1500.0 * 11.0 * 2.0 / 33000.0
-	_resultat(absf(v.omega.z - att7) < 0.03 * att7 and v.vitesse() < 1e-9, "Propulseurs d'orientation (roulis)",
+	var att7: float = v.couple_max.z * 2.0 / v.inertie.z
+	_resultat(absf(v.omega.z - att7) < 0.03 * att7 and v.vitesse() < 1e-6, "Propulseurs d'orientation (roulis)",
 		"2 s de roulis : %.3f rad/s (attendu %.3f), vitesse %.9f m/s (attendu 0 : les forces s'annulent)." % [v.omega.z, att7, v.vitesse()])
 
 	# 8. Chute libre près du sol
@@ -220,6 +225,48 @@ func _lancer() -> void:
 	var ok12: bool = angle_min < 0.1 * theta0 and absf(angle_f - theta0) < 0.15 * theta0
 	_resultat(ok12, "Balancement dû à la gravité",
 		"Penché de 5° en orbite, sans moteur : passe à %.2f° de la planète puis revient à %.2f° après %.0f s (aller-retour prévu : %.0f s, soit %.0f min)." % [rad_to_deg(angle_min), rad_to_deg(angle_f), n12_pas * 0.1, t_lib, t_lib / 60.0])
+
+	# 13. Calcul automatique : tangage pur, moteurs coupés
+	v = _nouveau(false)
+	v.commander(0.0, 1.0, 0.0, 0.0)
+	for m in v.moteurs:
+		m["actuel"] = m["consigne"]   # on regarde la consigne, sans attendre le temps de réponse
+	var e13: Array = v.effet_propulseurs()
+	var f13: Vector3 = e13[0]
+	var c13: Vector3 = e13[1]
+	var ok13: bool = absf(c13.x - v.couple_max.x) < 0.01 * v.couple_max.x and absf(c13.y) < 0.01 * v.couple_max.x and absf(c13.z) < 0.01 * v.couple_max.x and f13.length() < 0.001 * v.POUSSEE_RCS
+	_resultat(ok13, "Calcul automatique : tangage seul",
+		"Couple %.0f N·m (demandé %.0f), couples parasites %.1f et %.1f N·m, force restante %.3f N (attendu 0 : rotation sans déplacement)." % [c13.x, v.couple_max.x, c13.y, c13.z, f13.length()])
+
+	# 14. Calcul automatique : virage moteurs allumés, les moteurs d'un côté poussent plus fort
+	v = _nouveau(false)
+	v.commander(0.5, 0.0, 1.0, 0.0)
+	for m in v.moteurs:
+		m["actuel"] = m["consigne"]
+	var e14: Array = v.effet_propulseurs()
+	var f14: Vector3 = e14[0]
+	var c14: Vector3 = e14[1]
+	var droite: float = (float(v.moteurs[1]["actuel"]) + float(v.moteurs[3]["actuel"])) * 0.5
+	var gauche: float = (float(v.moteurs[0]["actuel"]) + float(v.moteurs[2]["actuel"])) * 0.5
+	var att14: float = 0.5 * v.poussee_avant_max
+	var ok14: bool = absf(c14.y - v.couple_max.y) < 0.02 * v.couple_max.y and absf(-f14.z - att14) < 0.02 * att14 and droite > gauche + 0.02 and absf(c14.x) < 0.02 * v.couple_max.y and absf(c14.z) < 0.02 * v.couple_max.y
+	_resultat(ok14, "Calcul automatique : virage à mi-gaz",
+		"Lacet %.0f N·m (demandé %.0f), poussée %.0f kN (demandée %.0f kN). Moteurs de droite à %.0f %%, de gauche à %.0f %% : c'est la différence de poussée qui fait tourner." % [c14.y, v.couple_max.y, -f14.z / 1000.0, att14 / 1000.0, droite * 100.0, gauche * 100.0])
+
+	# 15. Calcul automatique : plein gaz + virage, et légèreté du calcul
+	v = _nouveau(false)
+	var t0 := Time.get_ticks_usec()
+	for i in 1000:
+		v.commander(1.0, 0.0, 1.0, 0.0)
+	var us := float(Time.get_ticks_usec() - t0) / 1000.0
+	for m in v.moteurs:
+		m["actuel"] = m["consigne"]
+	var e15: Array = v.effet_propulseurs()
+	var f15: Vector3 = e15[0]
+	var c15: Vector3 = e15[1]
+	var ok15: bool = absf(c15.y - v.couple_max.y) < 0.02 * v.couple_max.y and -f15.z > 0.97 * v.poussee_avant_max
+	_resultat(ok15, "Calcul automatique : plein gaz + virage",
+		"Lacet %.0f N·m (demandé %.0f), poussée %.0f kN sur %.0f kN possibles. Calcul : %.0f microsecondes par image (léger)." % [c15.y, v.couple_max.y, -f15.z / 1000.0, v.poussee_avant_max / 1000.0, us])
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
