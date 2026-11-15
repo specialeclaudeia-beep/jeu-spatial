@@ -71,7 +71,7 @@ Légende : **Décidé** = choisi par moi · **Hypothèse** = piste pas encore d�
 
 **À résoudre.** Direction des rayons fusionnés ; modèle de réflexion et nombre de rebonds ; plusieurs sources de lumière ; seuil de visibilité ; temps de propagation.
 
-**Banc d'essai (navigateur, PC).** https://claude.ai/artifact/7RTivTLhf6TDjpeZyELo2m — tests réussis : portée ×2 pour une source 4 fois plus lumineuse ; près du sol environ 21 000 triangles au lieu de 1 400 milliards ; détails qui apparaissent 7,5 fois plus en douceur avec la fusion progressive ; lumière totale conservée à moins de 3 % (moins de 0,7 % dès le niveau 2).
+**Banc d'essai (navigateur, PC).** https://claude.ai/artifact/7RTivTLhf6TDjpeZyELo2m — code source dans le dépôt : `banc-essai/banc-lumiere-fractale.html` — tests réussis : portée ×2 pour une source 4 fois plus lumineuse ; près du sol environ 21 000 triangles au lieu de 1 400 milliards ; détails qui apparaissent 7,5 fois plus en douceur avec la fusion progressive ; lumière totale conservée à moins de 3 % (moins de 0,7 % dès le niveau 2).
 
 ## 6. État du projet Godot (phase 1)
 

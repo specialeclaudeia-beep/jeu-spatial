@@ -37,3 +37,4 @@ Moteur : Godot 4.7 (rendu Compatibilité). Dossier de référence du projet : `d
 - `scripts/jeu.gd` : affichage, cockpit provisoire, instruments, commandes.
 - `scripts/tests_physique.gd` : les tests automatiques (F1).
 - `shaders/` : surface de la planète et ciel étoilé.
+- `banc-essai/banc-lumiere-fractale.html` : banc d'essai du système de lumière fractale (s'ouvre dans un navigateur, sur PC). Version en ligne : https://claude.ai/artifact/7RTivTLhf6TDjpeZyELo2m

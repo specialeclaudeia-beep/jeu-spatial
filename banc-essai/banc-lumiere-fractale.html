@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banc d'essai — lumière fractale (jeu spatial)</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #000; color: #dfe6f0; font: 13px/1.45 system-ui, "Segoe UI", sans-serif; overflow: hidden; }
+  #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+  #c:active { cursor: grabbing; }
+  .box { position: fixed; background: rgba(10,14,22,.86); border: 1px solid #243042; border-radius: 10px; padding: 12px 14px; }
+  #panel { top: 12px; left: 12px; width: 280px; max-height: calc(100% - 24px); overflow: auto; }
+  #hud { top: 12px; right: 12px; width: 300px; }
+  h1 { font-size: 15px; margin: 0 0 6px; color: #fff; }
+  h2 { font-size: 12px; margin: 12px 0 6px; color: #8fb3ff; text-transform: uppercase; letter-spacing: .06em; }
+  label { display: block; margin: 6px 0; }
+  input[type=range] { width: 100%; }
+  .row { display: flex; justify-content: space-between; gap: 8px; }
+  .v { color: #fff; font-variant-numeric: tabular-nums; }
+  .muted { color: #8a96a8; font-size: 12px; }
+  button { background: #2b5cff; color: #fff; border: 0; border-radius: 8px; padding: 9px 12px; font: inherit; font-weight: 600; cursor: pointer; width: 100%; margin-top: 8px; }
+  button:hover { background: #3d6bff; }
+  button.sec { background: #263247; }
+  #mode { font-weight: 700; }
+  #tests { left: 50%; top: 50%; transform: translate(-50%,-50%); width: min(640px, 92vw); max-height: 84vh; overflow: auto; display: none; }
+  #tests.on { display: block; }
+  .t { border-top: 1px solid #243042; padding: 8px 0; }
+  .ok { color: #5fe08a; } .warn { color: #ffcc55; } .bad { color: #ff6b6b; }
+  kbd { background: #1c2535; border-radius: 4px; padding: 0 5px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="panel" class="box">
+  <h1>Banc d'essai — lumière fractale</h1>
+  <div class="muted">Glisser = tourner autour · Molette = s'approcher / s'éloigner</div>
+
+  <h2>Distance</h2>
+  <label><div class="row"><span>Altitude</span><span class="v" id="altV"></span></div>
+    <input id="alt" type="range" min="-3.7" max="3" step="0.01" value="0.3"></label>
+
+  <h2>Ta règle</h2>
+  <label><div class="row"><span>Taille d'un rayon (pixels)</span><span class="v" id="rayV"></span></div>
+    <input id="ray" type="range" min="2" max="30" step="1" value="8"></label>
+  <label><div class="row"><span>Luminosité F / F référence</span><span class="v" id="lumV"></span></div>
+    <input id="lum" type="range" min="0.25" max="16" step="0.25" value="4"></label>
+  <label><input id="fusion" type="checkbox" checked> Fusion progressive (graduation 0 → 1)</label>
+  <label><input id="smooth" type="checkbox" checked> Lisser les couleurs entre rayons voisins</label>
+  <label><input id="wire" type="checkbox"> Afficher les triangles (pour voir la fractale)</label>
+  <label><input id="sunMove" type="checkbox"> Le soleil tourne</label>
+
+  <button id="runTests">Lancer les tests</button>
+  <button id="toSurface" class="sec">Aller près du sol (côté jour)</button>
+
+  <h2>Ce que tu vois</h2>
+  <div class="muted">Chaque triangle est un « rayon » : une seule couleur et une énergie. Quand un triangle dépasse la taille d'un rayon à l'écran, il se coupe en 4. Les enfants commencent avec la couleur du parent puis prennent la leur peu à peu (0 → 1). Le côté nuit n'active aucun rayon. Plus loin que la longueur du cône, la planète n'est plus qu'un point, puis disparaît.</div>
+</div>
+
+<div id="hud" class="box">
+  <div class="row"><span>Mode</span><span class="v" id="mode"></span></div>
+  <div class="row"><span>Taille de la planète à l'écran</span><span class="v" id="sizePx"></span></div>
+  <div class="row"><span>Niveau de détail max atteint</span><span class="v" id="lvl"></span></div>
+  <div class="row"><span>Triangles calculés</span><span class="v" id="cnt"></span></div>
+  <div class="row"><span>Si tout était calculé</span><span class="v" id="full"></span></div>
+  <div class="row"><span>Gain</span><span class="v" id="gain"></span></div>
+  <div class="row"><span>Taille de rayon utilisée</span><span class="v" id="eff"></span></div>
+  <div class="row"><span>Rayons éteints (nuit)</span><span class="v" id="dark"></span></div>
+  <div class="row"><span>Hors champ / horizon</span><span class="v" id="culled"></span></div>
+  <h2>Le cône</h2>
+  <div class="row"><span>N = rayons sur le diamètre</span><span class="v" id="N"></span></div>
+  <div class="row"><span>d = N × D (longueur du cône)</span><span class="v" id="dCone"></span></div>
+  <div class="row"><span>d visible = d × √(F/Fréf)</span><span class="v" id="dVis"></span></div>
+  <div class="row"><span>Distance actuelle</span><span class="v" id="dNow"></span></div>
+  <div class="muted">Distances en rayons de planète (R). D = 2R.</div>
+</div>
+
+<div id="tests" class="box">
+  <h1>Résultats des tests</h1>
+  <div id="testOut" class="muted">…</div>
+  <button id="closeTests" class="sec">Fermer</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+// =====================================================================
+// CONSTANTES
+// =====================================================================
+const R = 1;                 // rayon de la planète
+const MAX_LEVEL = 18;        // profondeur max de la fractale
+const BUDGET = 60000;        // triangles max par image (PC peu puissant)
+const SAMPLE_DEPTH = 2;      // chaque triangle = fusion de 4^2 = 16 sous-rayons
+const FOV = 60;              // champ de vision vertical (degrés)
+const BLACK = [0, 0, 0];
+
+// =====================================================================
+// PETITS OUTILS DE CALCUL
+// =====================================================================
+const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const len = a => Math.hypot(a[0], a[1], a[2]);
+const norm = a => { const l = len(a); return [a[0]/l, a[1]/l, a[2]/l]; };
+const dist = (a, b) => Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
+const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
+const lerp3 = (a, b, t) => [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t];
+const angle = (a, b) => Math.acos(clamp(dot(a, b) / (len(a)*len(b)), -1, 1));
+const mid = (a, b) => norm([(a[0]+b[0])/2, (a[1]+b[1])/2, (a[2]+b[2])/2]);
+const lum = c => 0.2126*c[0] + 0.7152*c[1] + 0.0722*c[2];
+// aire d'un triangle sur la sphère unité (formule de Van Oosterom)
+function sphArea(a, b, c) {
+  const num = Math.abs(dot(a, cross(b, c)));
+  const den = 1 + dot(a, b) + dot(b, c) + dot(c, a);
+  return 2 * Math.atan2(num, den);
+}
+
+// =====================================================================
+// BRUIT PROCÉDURAL (relief infini : plus on descend, plus il y a de détails)
+// =====================================================================
+function hash3(x, y, z) {
+  let h = Math.imul(x|0, 0x8da6b343) ^ Math.imul(y|0, 0xd8163841) ^ Math.imul(z|0, 0xcb1ab31f);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
+  h ^= h >>> 15;
+  return (h >>> 0) / 4294967296;
+}
+function noise3(x, y, z) {
+  const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+  const fx = x-ix, fy = y-iy, fz = z-iz;
+  const ux = fx*fx*(3-2*fx), uy = fy*fy*(3-2*fy), uz = fz*fz*(3-2*fz);
+  const n000 = hash3(ix,iy,iz),     n100 = hash3(ix+1,iy,iz);
+  const n010 = hash3(ix,iy+1,iz),   n110 = hash3(ix+1,iy+1,iz);
+  const n001 = hash3(ix,iy,iz+1),   n101 = hash3(ix+1,iy,iz+1);
+  const n011 = hash3(ix,iy+1,iz+1), n111 = hash3(ix+1,iy+1,iz+1);
+  const x00 = n000+(n100-n000)*ux, x10 = n010+(n110-n010)*ux;
+  const x01 = n001+(n101-n001)*ux, x11 = n011+(n111-n011)*ux;
+  const y0 = x00+(x10-x00)*uy, y1 = x01+(x11-x01)*uy;
+  return (y0+(y1-y0)*uz)*2 - 1;
+}
+function fbm(x, y, z, oct) {
+  let s = 0, a = 0.5, f = 1;
+  for (let i = 0; i < oct; i++) { s += a*noise3(x*f, y*f, z*f); a *= 0.5; f *= 2.03; }
+  return s;
+}
+const octavesFor = level => Math.min(22, 4 + Math.floor(level*0.9));
+
+// couleurs (converties en lumière « linéaire », pour que les moyennes soient justes)
+const lin = c => c.map(v => Math.pow(v, 2.2));
+const PAL = {
+  deep: lin([0.02,0.07,0.22]), shallow: lin([0.10,0.38,0.58]), sand: lin([0.78,0.72,0.52]),
+  grass: lin([0.27,0.50,0.18]), forest: lin([0.12,0.32,0.12]), desert: lin([0.82,0.64,0.40]),
+  rock: lin([0.46,0.40,0.33]), snow: lin([0.93,0.94,0.97]), ice: lin([0.86,0.91,0.96])
+};
+function albedoAt(x, y, z, oct) {
+  const h = fbm(x*1.6+11.3, y*1.6+2.7, z*1.6-5.1, oct);
+  const m = fbm(x*2.2-31.7, y*2.2+8.1, z*2.2+19.9, Math.min(oct, 6));
+  const lat = Math.abs(y);
+  if (lat > 0.86 - h*0.25) return PAL.ice;
+  if (h < 0) return lerp3(PAL.shallow, PAL.deep, Math.min(1, -h*4));
+  if (h < 0.025) return PAL.sand;
+  if (h > 0.32) return PAL.snow;
+  if (h > 0.2) return lerp3(PAL.rock, PAL.snow, (h-0.2)/0.12*0.3);
+  if (m < -0.12 && lat < 0.55) return PAL.desert;
+  return lerp3(PAL.grass, PAL.forest, clamp((m+0.1)*3, 0, 1));
+}
+
+// =====================================================================
+// LA FRACTALE DE TRIANGLES (chaque triangle = un rayon, coupé en 4 enfants)
+// =====================================================================
+let nodeCount = 0;
+function subdivPts(a, b, c, depth, out) {
+  if (depth === 0) { out.push(norm([a[0]+b[0]+c[0], a[1]+b[1]+c[1], a[2]+b[2]+c[2]])); return; }
+  const ab = mid(a,b), bc = mid(b,c), ca = mid(c,a);
+  subdivPts(a, ab, ca, depth-1, out); subdivPts(ab, b, bc, depth-1, out);
+  subdivPts(ca, bc, c, depth-1, out); subdivPts(ab, bc, ca, depth-1, out);
+}
+class Node {
+  constructor(a, b, c, level) {
+    this.a = a; this.b = b; this.c = c; this.level = level;
+    this.kids = null; this.samp = null;
+    this.cen = [(a[0]+b[0]+c[0])/3, (a[1]+b[1]+c[1])/3, (a[2]+b[2]+c[2])/3];
+    this.n = norm(this.cen);
+    this.r = Math.max(dist(this.cen,a), dist(this.cen,b), dist(this.cen,c));
+    this.edge = (dist(a,b) + dist(b,c) + dist(c,a)) / 3;
+    this.ang = Math.max(angle(this.n,a), angle(this.n,b), angle(this.n,c));
+    this.area = sphArea(a, b, c);
+    this.eKey = -1; this.E = [0,0,0];
+    this.dF = -1; this.dC = null;
+    nodeCount++;
+  }
+  split() {
+    if (!this.kids) {
+      const ab = mid(this.a,this.b), bc = mid(this.b,this.c), ca = mid(this.c,this.a), L = this.level+1;
+      this.kids = [new Node(this.a,ab,ca,L), new Node(ab,this.b,bc,L), new Node(ca,bc,this.c,L), new Node(ab,bc,ca,L)];
+    }
+    return this.kids;
+  }
+  // les 16 sous-rayons : position + couleur de la surface (ne dépend pas du soleil, donc gardé en mémoire)
+  samples() {
+    if (!this.samp) {
+      const pts = []; subdivPts(this.a, this.b, this.c, SAMPLE_DEPTH, pts);
+      const oct = octavesFor(this.level + SAMPLE_DEPTH);
+      const s = new Float32Array(pts.length*6);
+      pts.forEach((p, i) => { const al = albedoAt(p[0], p[1], p[2], oct); s.set([p[0],p[1],p[2], al[0],al[1],al[2]], i*6); });
+      this.samp = s;
+    }
+    return this.samp;
+  }
+  // FUSION : énergie du rayon = moyenne des énergies de ses sous-rayons (couleur × éclairement)
+  energy(L, key) {
+    if (this.eKey === key) return this.E;
+    const s = this.samples(), n = s.length/6;
+    let r = 0, g = 0, b = 0;
+    for (let i = 0; i < s.length; i += 6) {
+      const k = Math.max(0, s[i]*L[0] + s[i+1]*L[1] + s[i+2]*L[2]);
+      r += s[i+3]*k; g += s[i+4]*k; b += s[i+5]*k;
+    }
+    this.E = [r/n, g/n, b/n]; this.eKey = key;
+    return this.E;
+  }
+  contains(p) {
+    const e = -1e-12;
+    return dot(cross(this.a,this.b), p) >= e && dot(cross(this.b,this.c), p) >= e && dot(cross(this.c,this.a), p) >= e;
+  }
+}
+// icosaèdre de départ : 20 triangles
+const BASE = (() => {
+  const t = (1 + Math.sqrt(5)) / 2;
+  const V = [[-1,t,0],[1,t,0],[-1,-t,0],[1,-t,0],[0,-1,t],[0,1,t],[0,-1,-t],[0,1,-t],[t,0,-1],[t,0,1],[-t,0,-1],[-t,0,1]].map(norm);
+  const F = [[0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],[1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+             [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],[4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]];
+  return F.map(([i,j,k]) => {
+    let a = V[i], b = V[j], c = V[k];
+    const nrm = cross([b[0]-a[0],b[1]-a[1],b[2]-a[2]], [c[0]-a[0],c[1]-a[1],c[2]-a[2]]);
+    if (dot(nrm, [a[0]+b[0]+c[0], a[1]+b[1]+c[1], a[2]+b[2]+c[2]]) < 0) [b, c] = [c, b];
+    return new Node(a, b, c, 0);
+  });
+})();
+
+// =====================================================================
+// LA RÈGLE DU CÔNE : jusqu'où descendre dans la fractale
+// =====================================================================
+let frameId = 0;
+const _sphere = new THREE.Sphere();
+function selectLOD(p) {
+  // p : { cam, f, rayPx, fusion, L, lKey, frustum, budget, mark, out }
+  const st = { count: 0, visited: 0, dark: 0, culled: 0, maxLevel: 0, frame: ++frameId };
+  const out = p.out; out.length = 0;
+  const camLen = len(p.cam), camDir = p.cam.map(v => v/camLen);
+  const horizon = Math.acos(clamp(R/camLen, -1, 1));
+
+  function emit(node, col) {
+    out.push(node, col); st.count++;
+    if (node.level > st.maxLevel) st.maxLevel = node.level;
+    if (p.mark) { node.dF = st.frame; node.dC = col; }
+  }
+  function visit(node, parentE, t) {
+    if (st.over) return;
+    st.visited++;
+    // derrière l'horizon : invisible
+    if (Math.acos(clamp(dot(node.n, camDir), -1, 1)) - node.ang > horizon) { st.culled++; return; }
+    // hors du champ de vision
+    if (p.frustum) {
+      _sphere.center.set(node.cen[0], node.cen[1], node.cen[2]); _sphere.radius = node.r;
+      if (!p.frustum.intersectsSphere(_sphere)) { st.culled++; return; }
+    }
+    // côté nuit : aucun rayon activé, pas de détail
+    if (Math.acos(clamp(dot(node.n, p.L), -1, 1)) - node.ang > Math.PI/2) { st.dark++; emit(node, BLACK); return; }
+
+    const E = node.energy(p.L, p.lKey);
+    const d = Math.max(1e-9, dist(p.cam, node.cen) - node.r);
+    const size = node.edge * p.f / d;              // taille du rayon à l'écran, en pixels
+    if (st.count >= p.budget) { st.over = true; return; }
+    if (size > p.rayPx && node.level < MAX_LEVEL) {
+      // graduation 0 → 1 : 0 quand le parent vient de dépasser la taille d'un rayon, 1 quand l'enfant l'atteint
+      const ct = p.fusion ? clamp(size/p.rayPx - 1, 0, 1) : 1;
+      for (const k of node.split()) visit(k, E, ct);
+    } else {
+      emit(node, (p.fusion && parentE && t < 1) ? lerp3(parentE, E, t) : E);
+    }
+  }
+  for (const b of BASE) visit(b, null, 1);
+  return st;
+}
+// si l'écran demande trop de triangles pour le PC, on grossit un peu la taille d'un rayon partout
+// (plutôt que de laisser des zones sans détail)
+// La taille ajustée change par petits pas (8 %) et repart de la précédente : pas de saut visible.
+let lastEff = 0;
+function selectAdaptive(p) {
+  let rp = Math.max(p.rayPx, lastEff / 1.08), st;
+  for (let i = 0; i < 40; i++) {
+    st = selectLOD({ ...p, rayPx: rp });
+    if (!st.over) break;
+    rp *= 1.08;
+  }
+  lastEff = rp; st.effRay = rp;
+  return st;
+}
+// cherche un endroit avec de la terre, côté jour (pour les tests et le bouton « près du sol »)
+function findLandNear(L) {
+  const u = norm(cross(L, [0,1,0])), v = cross(L, u);
+  let best = L, bestScore = -1;
+  for (let i = 0; i < 400; i++) {
+    const a = (hash3(i, 7, 3)*2-1)*0.6, b = (hash3(i, 9, 1)*2-1)*0.6;
+    const d = norm([L[0]+u[0]*a+v[0]*b, L[1]+u[1]*a+v[1]*b, L[2]+u[2]*a+v[2]*b]);
+    const vals = [];
+    for (let j = 0; j < 9; j++) {
+      const e = 0.004, x = ((j%3)-1)*e, y = (Math.floor(j/3)-1)*e;
+      const q = norm([d[0]+u[0]*x+v[0]*y, d[1]+u[1]*x+v[1]*y, d[2]+u[2]*x+v[2]*y]);
+      vals.push(Math.pow(lum(albedoAt(q[0], q[1], q[2], 12)), 1/2.2));
+    }
+    const m = vals.reduce((s, x) => s + x, 0) / 9;
+    const score = vals.reduce((s, x) => s + (x-m)*(x-m), 0);
+    if (score > bestScore) { bestScore = score; best = d; }
+  }
+  return best;
+}
+// couleur d'ensemble de la planète vue de loin (fusion de tout en un seul rayon)
+function fusedColor(camDir, L, lKey) {
+  let r = 0, g = 0, b = 0, w = 0;
+  for (const n of BASE) {
+    const k = Math.max(0, dot(n.n, camDir)) * n.area;
+    const E = n.energy(L, lKey);
+    r += E[0]*k; g += E[1]*k; b += E[2]*k; w += k;
+  }
+  return w > 0 ? [r/w, g/w, b/w] : BLACK;
+}
+// longueur du cône et distance de visibilité
+function coneDistances(f, rayPx, Frel) {
+  const N = f / rayPx;             // nombre de rayons sur le diamètre quand on est à 1 unité de distance
+  const dCone = N * 2*R;           // d = N × D
+  return { N, dCone, dVis: dCone * Math.sqrt(Frel) };
+}
+
+// =====================================================================
+// ÉTAT DE L'APPLICATION
+// =====================================================================
+const state = {
+  theta: 0.6, phi: 1.2, alt: Math.pow(10, 0.3),
+  sunAngle: 0.9, lKey: 1,
+  rayPx: 8, Frel: 4, fusion: true, wire: false, smooth: true, sunMove: false,
+  dirty: true, stats: null, mode: ''
+};
+const sunDir = () => norm([Math.cos(state.sunAngle), 0.35, Math.sin(state.sunAngle)]);
+const camPos = () => {
+  const d = R + state.alt;
+  return [d*Math.sin(state.phi)*Math.cos(state.theta), d*Math.cos(state.phi), d*Math.sin(state.phi)*Math.sin(state.theta)];
+};
+
+// =====================================================================
+// AFFICHAGE (three.js)
+// =====================================================================
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.outputEncoding = THREE.sRGBEncoding;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);           // le vrai noir : rien n'éclaire le vide
+const camera = new THREE.PerspectiveCamera(FOV, 1, 0.001, 100);
+
+const CAP = BUDGET + 20000;
+const posArr = new Float32Array(CAP*9), colArr = new Float32Array(CAP*9), wireArr = new Float32Array(CAP*18);
+const geom = new THREE.BufferGeometry();
+geom.setAttribute('position', new THREE.BufferAttribute(posArr, 3).setUsage(THREE.DynamicDrawUsage));
+geom.setAttribute('color', new THREE.BufferAttribute(colArr, 3).setUsage(THREE.DynamicDrawUsage));
+geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(), R*1.01);
+const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.FrontSide }));
+scene.add(mesh);
+const wGeom = new THREE.BufferGeometry();
+wGeom.setAttribute('position', new THREE.BufferAttribute(wireArr, 3).setUsage(THREE.DynamicDrawUsage));
+wGeom.boundingSphere = geom.boundingSphere;
+const wire = new THREE.LineSegments(wGeom, new THREE.LineBasicMaterial({ color: 0x6fa0ff, transparent: true, opacity: 0.28 }));
+scene.add(wire);
+const ptGeom = new THREE.BufferGeometry();
+ptGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0,0,0]), 3));
+const ptMat = new THREE.PointsMaterial({ size: 6, sizeAttenuation: false, color: 0xffffff, transparent: true });
+const point = new THREE.Points(ptGeom, ptMat);
+scene.add(point);
+
+const selOut = [];
+function rebuild(f) {
+  const cam = camPos(), L = sunDir();
+  camera.position.set(cam[0], cam[1], cam[2]);
+  camera.up.set(0, 1, 0); camera.lookAt(0, 0, 0);
+  const D = len(cam);
+  camera.near = Math.max(1e-5, (D - R) * 0.3);
+  camera.far = D + 3*R;
+  camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+  const frustum = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+
+  const { dCone, dVis } = coneDistances(f, state.rayPx, state.Frel);
+  const sizePx = 2*R*f/D;
+  let st = { count: 0, visited: 0, dark: 0, culled: 0, maxLevel: 0 };
+  let n = 0;
+  if (D > dVis) {
+    state.mode = 'invisible (hors du cône)';
+    mesh.visible = wire.visible = point.visible = false;
+  } else if (sizePx < state.rayPx) {
+    // la planète tient dans un seul rayon : un point
+    state.mode = '1 seul rayon (un point)';
+    mesh.visible = wire.visible = false; point.visible = true;
+    const col = fusedColor(cam.map(v => v/D), L, state.lKey);
+    const boost = Math.sqrt(state.Frel);                 // une source plus lumineuse paraît plus brillante
+    ptMat.color.setRGB(Math.min(1, col[0]*boost), Math.min(1, col[1]*boost), Math.min(1, col[2]*boost));
+    ptMat.color.convertLinearToSRGB();
+    ptMat.size = state.rayPx;
+    ptMat.opacity = clamp((dVis - D) / (dVis*0.1), 0, 1);  // s'éteint en douceur sur les 10 % finaux
+  } else {
+    state.mode = 'détails';
+    mesh.visible = true; wire.visible = state.wire; point.visible = false;
+    st = selectAdaptive({ cam, f, rayPx: state.rayPx, fusion: state.fusion, L, lKey: state.lKey, frustum, budget: BUDGET, mark: false, out: selOut });
+    n = selOut.length / 2;
+    // LISSAGE (affichage seulement) : chaque coin prend la moyenne des rayons qui le touchent.
+    // Le calcul reste « un rayon = une couleur » ; seul l'écran fond les bords entre rayons.
+    let vKey = null, vSum = null;
+    if (state.smooth) {
+      vKey = new Map(); vSum = [];
+      const key = q => Math.round(q[0]*1e9) + ',' + Math.round(q[1]*1e9) + ',' + Math.round(q[2]*1e9);
+      for (let i = 0; i < n; i++) {
+        const node = selOut[2*i], col = selOut[2*i+1];
+        for (const q of [node.a, node.b, node.c]) {
+          const k = key(q); let id = vKey.get(k);
+          if (id === undefined) { id = vSum.length / 4; vKey.set(k, id); vSum.push(0, 0, 0, 0); }
+          vSum[id*4] += col[0]; vSum[id*4+1] += col[1]; vSum[id*4+2] += col[2]; vSum[id*4+3] += 1;
+        }
+      }
+      vSum._key = key;
+    }
+    for (let i = 0; i < n; i++) {
+      const node = selOut[2*i], col = selOut[2*i+1], o = i*9;
+      const v = [node.a, node.b, node.c];
+      for (let j = 0; j < 3; j++) {
+        posArr[o+j*3] = v[j][0]; posArr[o+j*3+1] = v[j][1]; posArr[o+j*3+2] = v[j][2];
+        if (vSum) {
+          const id = vKey.get(vSum._key(v[j])), c = vSum[id*4+3];
+          colArr[o+j*3] = vSum[id*4]/c; colArr[o+j*3+1] = vSum[id*4+1]/c; colArr[o+j*3+2] = vSum[id*4+2]/c;
+        } else {
+          colArr[o+j*3] = col[0]; colArr[o+j*3+1] = col[1]; colArr[o+j*3+2] = col[2];
+        }
+      }
+      if (state.wire) {
+        const w = i*18, e = [node.a, node.b, node.b, node.c, node.c, node.a];
+        for (let j = 0; j < 6; j++) { wireArr[w+j*3] = e[j][0]; wireArr[w+j*3+1] = e[j][1]; wireArr[w+j*3+2] = e[j][2]; }
+      }
+    }
+    geom.setDrawRange(0, n*3);
+    geom.attributes.position.needsUpdate = true; geom.attributes.color.needsUpdate = true;
+    if (state.wire) { wGeom.setDrawRange(0, n*6); wGeom.attributes.position.needsUpdate = true; }
+  }
+  state.stats = { ...st, n, sizePx, D, dCone, dVis };
+}
+
+// =====================================================================
+// TABLEAU DE BORD
+// =====================================================================
+const $ = id => document.getElementById(id);
+const fmt = (x, d = 2) => x >= 1e4 ? x.toExponential(1).replace('e+', ' × 10^') : x.toLocaleString('fr-FR', { maximumFractionDigits: d });
+function updateHud(f) {
+  const s = state.stats; if (!s) return;
+  const { N } = coneDistances(f, state.rayPx, state.Frel);
+  $('mode').textContent = state.mode;
+  $('sizePx').textContent = fmt(s.sizePx, 1) + ' px';
+  $('lvl').textContent = s.n ? s.maxLevel : '—';
+  $('cnt').textContent = s.n ? s.n.toLocaleString('fr-FR') : '0';
+  const full = 20 * Math.pow(4, s.maxLevel);
+  $('full').textContent = s.n ? fmt(full, 0) : '—';
+  $('gain').textContent = s.n ? '× ' + fmt(full / s.n, 0) : '—';
+  $('dark').textContent = s.dark.toLocaleString('fr-FR');
+  $('culled').textContent = s.culled.toLocaleString('fr-FR');
+  $('N').textContent = fmt(N, 1);
+  $('dCone').textContent = fmt(s.dCone, 1) + ' R';
+  $('dVis').textContent = fmt(s.dVis, 1) + ' R';
+  $('dNow').textContent = fmt(s.D, 4) + ' R';
+  $('altV').textContent = fmt(state.alt, state.alt < 0.01 ? 5 : 3) + ' R';
+  $('rayV').textContent = state.rayPx + ' px';
+  $('eff').textContent = s.effRay && s.effRay > state.rayPx + 0.01 ? fmt(s.effRay, 1) + ' px (ajustée pour le PC)' : state.rayPx + ' px';
+  $('lumV').textContent = '× ' + fmt(state.Frel, 2);
+}
+
+// =====================================================================
+// ÉVÉNEMENTS (souris, réglages)
+// =====================================================================
+function setAlt(a) { state.alt = clamp(a, Math.pow(10, -3.7), 1000); $('alt').value = Math.log10(state.alt); state.dirty = true; }
+let drag = null;
+canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const k = 0.005 * clamp(state.alt / (R + state.alt), 0.0005, 1) * 1.5;
+  state.theta += (e.clientX - drag.x) * k;
+  state.phi = clamp(state.phi - (e.clientY - drag.y) * k, 0.05, Math.PI - 0.05);
+  drag = { x: e.clientX, y: e.clientY }; state.dirty = true;
+});
+canvas.addEventListener('pointerup', () => { drag = null; });
+canvas.addEventListener('wheel', e => { e.preventDefault(); setAlt(state.alt * Math.pow(1.12, Math.sign(e.deltaY))); }, { passive: false });
+$('alt').addEventListener('input', e => setAlt(Math.pow(10, +e.target.value)));
+$('ray').addEventListener('input', e => { state.rayPx = +e.target.value; state.dirty = true; });
+$('lum').addEventListener('input', e => { state.Frel = +e.target.value; state.dirty = true; });
+$('fusion').addEventListener('change', e => { state.fusion = e.target.checked; state.dirty = true; });
+$('smooth').addEventListener('change', e => { state.smooth = e.target.checked; state.dirty = true; });
+$('wire').addEventListener('change', e => { state.wire = e.target.checked; state.dirty = true; });
+$('sunMove').addEventListener('change', e => { state.sunMove = e.target.checked; });
+$('toSurface').addEventListener('click', () => {
+  const d = findLandNear(sunDir());
+  state.theta = Math.atan2(d[2], d[0]); state.phi = Math.acos(clamp(d[1], -1, 1));
+  setAlt(0.003);
+});
+$('runTests').addEventListener('click', runTests);
+$('closeTests').addEventListener('click', () => $('tests').classList.remove('on'));
+
+function screenF() { return canvas.clientHeight / (2 * Math.tan(FOV * Math.PI / 360)); }
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  camera.aspect = window.innerWidth / window.innerHeight; state.dirty = true;
+}
+window.addEventListener('resize', resize);
+
+// =====================================================================
+// BOUCLE PRINCIPALE (ne recalcule que si quelque chose a bougé)
+// =====================================================================
+let last = performance.now(), hudT = 0, busy = false;
+function loop(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (state.sunMove) { state.sunAngle += dt * 0.08; state.lKey++; state.dirty = true; }
+  const f = screenF();
+  if (state.dirty && !busy) { rebuild(f); state.dirty = false; }
+  renderer.render(scene, camera);
+  hudT += dt; if (hudT > 0.2) { hudT = 0; updateHud(f); }
+  requestAnimationFrame(loop);
+}
+
+// =====================================================================
+// TESTS AUTOMATIQUES
+// =====================================================================
+const pause = () => new Promise(r => setTimeout(r, 0));
+function frustumFor(cam, aspect) {
+  const c = new THREE.PerspectiveCamera(FOV, aspect, 1e-6, 1e4);
+  c.position.set(cam[0], cam[1], cam[2]); c.up.set(0,1,0); c.lookAt(0,0,0);
+  c.updateMatrixWorld(); c.updateProjectionMatrix();
+  return new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(c.projectionMatrix, c.matrixWorldInverse));
+}
+function colorAt(p, frame) {
+  let node = BASE.find(b => b.contains(p));
+  while (node) {
+    if (node.dF === frame) return node.dC;
+    if (!node.kids) return null;
+    node = node.kids.find(k => k.contains(p));
+  }
+  return null;
+}
+function line(cls, title, text) { return `<div class="t"><b class="${cls}">${cls === 'ok' ? '✅' : cls === 'warn' ? '⚠️' : '❌'} ${title}</b><br>${text}</div>`; }
+
+async function runTests() {
+  busy = true;
+  const out = $('testOut'); $('tests').classList.add('on');
+  const f = screenF(), aspect = camera.aspect, rayPx = state.rayPx;
+  let html = `<div class="muted">Taille d'un rayon : ${rayPx} px · écran : ${canvas.clientHeight} px de haut</div>`;
+  const show = msg => { out.innerHTML = html + `<div class="t muted">${msg}</div>`; };
+  const L = norm([0.6, 0.5, 0.62]), lKey = -777;          // soleil fixe pour les tests
+
+  // ---- Test 4 : portée du cône
+  {
+    const a = coneDistances(f, rayPx, 1), b = coneDistances(f, rayPx, 4);
+    const okRatio = Math.abs(b.dVis / a.dVis - 2) < 1e-9;
+    const okCone = Math.abs(a.dCone - (f/rayPx)*2*R) < 1e-9;
+    html += line(okRatio && okCone ? 'ok' : 'bad', 'Portée selon la luminosité',
+      `Longueur du cône d = N × D = ${fmt(a.dCone,1)} R. Une source 4 fois plus lumineuse reste visible jusqu'à ${fmt(b.dVis,1)} R, soit ${fmt(b.dVis/a.dVis,2)} fois plus loin (loi en 1/distance² : attendu 2).`);
+  }
+  show('Test des calculs économisés…'); await pause();
+
+  // ---- Test 3 : calculs économisés
+  {
+    const camDir = norm([0.55, 0.45, 0.7]), rows = [];
+    let nearRatio = 1;
+    for (const alt of [100, 1, 0.01, 0.0003]) {
+      const cam = camDir.map(v => v*(R+alt));
+      lastEff = 0;
+      const st = selectAdaptive({ cam, f, rayPx, fusion: true, L, lKey, frustum: frustumFor(cam, aspect), budget: BUDGET, mark: false, out: [] });
+      const full = 20 * Math.pow(4, st.maxLevel), ratio = st.count / full;
+      if (alt === 0.0003) nearRatio = ratio;
+      rows.push(`altitude ${fmt(alt,4)} R : ${st.count.toLocaleString('fr-FR')} triangles (niveau ${st.maxLevel}${st.effRay > rayPx + 0.01 ? ', rayon ajusté à ' + fmt(st.effRay,1) + ' px' : ''}) au lieu de ${fmt(full,0)} → ${ratio < 1e-4 ? fmt(ratio*100, 6) : fmt(ratio*100, 3)} %`);
+      await pause();
+    }
+    html += line(nearRatio < 0.001 ? 'ok' : 'warn', 'Calculs économisés', rows.join('<br>'));
+  }
+  show('Test des sauts de détail (fusion activée puis désactivée)… quelques secondes'); await pause();
+
+  // ---- Test 1 : pas de saut quand on s'approche
+  {
+    const camDir = findLandNear(L);
+    const u = norm(cross(camDir, [0,1,0])), v = cross(camDir, u);
+    const pts = [];
+    for (let i = 0; i < 150; i++) {
+      const a = (Math.random()*2-1)*0.004, b = (Math.random()*2-1)*0.004;
+      pts.push(norm([camDir[0]+u[0]*a+v[0]*b, camDir[1]+u[1]*a+v[1]*b, camDir[2]+u[2]*a+v[2]*b]));
+    }
+    const res = {};
+    for (const fusion of [true, false]) {
+      let prev = null, maxJ = 0, sum = 0, cnt = 0, steps = 0;
+      for (let alt = 30; alt > 0.01; alt *= 0.95) {
+        const cam = camDir.map(x => x*(R+alt));
+        // ici on teste la règle elle-même, sans la limite du PC
+        const st = selectLOD({ cam, f, rayPx, fusion, L, lKey, frustum: frustumFor(cam, aspect), budget: 3e6, mark: true, out: [] });
+        const cols = pts.map(p => colorAt(p, st.frame));
+        if (prev) cols.forEach((c, i) => { if (c && prev[i]) { const j = Math.abs(Math.pow(lum(c), 1/2.2) - Math.pow(lum(prev[i]), 1/2.2)); maxJ = Math.max(maxJ, j); sum += j; cnt++; } });
+        prev = cols;
+        if (++steps % 8 === 0) await pause();
+      }
+      res[fusion] = { maxJ, mean: sum / Math.max(1, cnt) };
+    }
+    const on = res[true], off = res[false];
+    const better = off.maxJ / Math.max(on.maxJ, 1e-9);
+    html += line(better >= 2 ? 'ok' : 'warn', 'Pas de saut brusque en s\'approchant',
+      `Plus grand changement d'éclat d'un point entre deux pas de 5 % : <b>${fmt(on.maxJ*100,1)} %</b> avec ta fusion progressive, contre <b>${fmt(off.maxJ*100,1)} %</b> sans (moyenne ${fmt(on.mean*100,2)} % contre ${fmt(off.mean*100,2)} %). La fusion rend les apparitions de détail ${fmt(better,1)} fois plus douces.`);
+  }
+  show('Test de conservation de la lumière (niveaux 0 à 5)… quelques secondes'); await pause();
+
+  // ---- Test 2 : la lumière totale ne change pas quand on fusionne
+  {
+    const totals = [];
+    let level = BASE.slice();
+    for (let l = 0; l <= 5; l++) {
+      let tot = 0;
+      for (const n of level) tot += n.area * lum(n.energy(L, lKey));
+      totals.push(tot);
+      if (l < 5) { level = level.flatMap(n => n.split()); await pause(); }
+    }
+    const ref = totals[5];
+    const devs = totals.map(t => (t - ref) / ref);
+    const worst = Math.max(...devs.slice(0,5).map(Math.abs));
+    const rows = devs.map((d, l) => `niveau ${l} : ${d >= 0 ? '+' : ''}${fmt(d*100, 2)} %`).join(' · ');
+    html += line(worst < 0.03 ? 'ok' : 'warn', 'Lumière totale conservée pendant les fusions',
+      `Lumière totale de la planète à chaque niveau, comparée au niveau 5 (le plus détaillé testé) : ${rows}. Plus grand écart : <b>${fmt(worst*100, 2)} %</b>. ${worst < 0.03 ? 'La fusion conserve bien l\'énergie.' : 'L\'écart vient des niveaux très grossiers, qui résument une immense zone avec seulement 16 sous-rayons.'}`);
+  }
+  html += `<div class="t muted">Triangles gardés en mémoire : ${nodeCount.toLocaleString('fr-FR')}</div>`;
+  out.innerHTML = html;
+  lastEff = 0; busy = false; state.dirty = true;
+}
+
+// =====================================================================
+// DÉMARRAGE
+// =====================================================================
+resize(); setAlt(state.alt); updateHud(screenF());
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
