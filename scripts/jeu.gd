@@ -8,6 +8,8 @@ extends Node3D
 ## la planète qu'on place autour de lui. Les grandes distances restent ainsi précises.
 
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
+const Commandes = preload("res://scripts/commandes.gd")
+const EcranTouches = preload("res://scripts/ecran_touches.gd")
 
 # =====================================================================
 # CONSTANTES
@@ -21,6 +23,12 @@ const ALTITUDE_CALOTTE := 60000.0        # en dessous, on dessine une calotte d�
 const DIRECTION_SOLEIL := Vector3(0.8, 0.3, 0.5)
 const OEIL_PILOTE := Vector3(0.0, 0.55, -2.4)
 const ACCELERATIONS_TEMPS := [1, 10, 100, 1000]
+# tête du pilote (stick droit) : ne touche qu'à la caméra, jamais au vaisseau
+const TETE_VITESSE := 2.5                     # rad/s quand le stick est poussé à fond (environ 140°/s)
+const TETE_LACET_MAX := deg_to_rad(130.0)     # jusqu'où on peut tourner la tête à gauche / à droite
+const TETE_HAUT_MAX := deg_to_rad(80.0)
+const TETE_BAS_MAX := deg_to_rad(50.0)
+const TETE_RETOUR := 2.0                      # vitesse du retour doux vers l'avant, stick lâché
 
 # =====================================================================
 # ÉTAT
@@ -32,6 +40,10 @@ var en_pause := false
 var acc_temps := 1
 var aide_visible := true
 var ordres := Vector3.ZERO           # tangage, lacet, roulis demandés (-1..1)
+var commandes                        # touches du clavier et de la manette (modifiables, sauvegardées)
+var ecran_touches: Control = null    # écran de configuration, quand il est ouvert
+var image_fermeture := -1
+var tete := Vector2.ZERO             # x = tête levée / baissée, y = tête tournée à gauche / à droite (radians)
 
 # calotte détaillée
 var calotte_dir := Vector3.ZERO
@@ -50,11 +62,15 @@ var aide: Label
 var message: Label
 var marqueur_avant: Label
 var marqueur_arriere: Label
+var couche_hud: CanvasLayer
 
 # =====================================================================
 # DÉMARRAGE
 # =====================================================================
 func _ready() -> void:
+	commandes = Commandes.new()
+	commandes.charger()      # réglages de la dernière partie (sinon : disposition par défaut)
+	commandes.appliquer()
 	vaisseau = VaisseauPhysique.new()
 	vaisseau.gm = GRAVITE_SURFACE * RAYON_PLANETE * RAYON_PLANETE
 	vaisseau.rayon_planete = RAYON_PLANETE
@@ -164,6 +180,7 @@ func _label(taille: int, couleur := Color(0.75, 0.95, 0.8)) -> Label:
 
 func _creer_hud() -> void:
 	var couche := CanvasLayer.new()
+	couche_hud = couche
 	add_child(couche)
 	hud = _label(15)
 	hud.position = Vector2(16, 12)
@@ -172,13 +189,9 @@ func _creer_hud() -> void:
 	aide.anchor_top = 1.0
 	aide.anchor_bottom = 1.0
 	aide.offset_left = 16
-	aide.offset_top = -120
-	aide.text = (
-		"Z / S : plus / moins de poussée      Espace : couper la poussée\n"
-		+ "Flèches haut / bas : tangage (nez en haut / en bas)   Q / D : lacet   A / E : roulis\n"
-		+ "T : stabilisateur de rotation   1 2 3 4 : temps x1 x10 x100 x1000   P : pause\n"
-		+ "O : remettre en orbite   R : recommencer   F1 : tests de physique   H : cacher l'aide")
+	aide.offset_top = -190
 	couche.add_child(aide)
+	_ecrire_aide()
 	message = _label(28, Color(1.0, 0.45, 0.4))
 	message.anchor_left = 0.5
 	message.anchor_right = 0.5
@@ -194,52 +207,110 @@ func _creer_hud() -> void:
 	marqueur_arriere.text = "(x)"
 	couche.add_child(marqueur_arriere)
 
+func _ecrire_aide() -> void:
+	var c = commandes
+	aide.text = (
+		"%s : plus de poussée   %s : moins   %s : couper la poussée\n" % [c.resume("gaz_plus"), c.resume("gaz_moins"), c.resume("couper_gaz")]
+		+ "Tangage %s      Lacet %s\n" % [_paire("tangage_haut", "tangage_bas"), _paire("lacet_gauche", "lacet_droite")]
+		+ "Roulis %s\n" % _paire("roulis_gauche", "roulis_droite")
+		+ "%s : stabilisateur   %s : pause   Temps : %s %s %s %s, ou %s / %s\n" % [c.resume("stabilisateur"), c.resume("pause"), c.resume("temps_x1"), c.resume("temps_x10"), c.resume("temps_x100"), c.resume("temps_x1000"), c.resume("temps_moins"), c.resume("temps_plus")]
+		+ "%s : remettre en orbite   %s : recommencer   %s : tests   %s : cacher l'aide\n" % [c.resume("remettre_orbite"), c.resume("recommencer"), c.resume("tests"), c.resume("aide")]
+		+ "Tourner la tête : %s   %s : regarder droit devant\n" % [_aide_tete(), c.resume("regard_centre")]
+		+ "%s : configurer les commandes (clavier et manette)" % c.resume("ecran_touches"))
+
+## « stick droit » si les 4 directions de la tête sont sur le stick droit, sinon la liste.
+func _aide_tete() -> String:
+	var noms := ["regard_gauche", "regard_droite", "regard_haut", "regard_bas"]
+	var tout_stick_droit := true
+	for n in noms:
+		var m: String = commandes.liaisons[n]["manette"]
+		if not (m.begins_with("a:%d:" % JOY_AXIS_RIGHT_X) or m.begins_with("a:%d:" % JOY_AXIS_RIGHT_Y)):
+			tout_stick_droit = false
+	if tout_stick_droit and noms.all(func(n): return commandes.liaisons[n]["clavier"] == ""):
+		return "stick droit"
+	var morceaux := PackedStringArray()
+	for n in noms:
+		morceaux.append(commandes.resume(n))
+	return ", ".join(morceaux)
+
+
+## « Flèche haut / Flèche bas (manette : Stick gauche ↑ haut / Stick gauche ↓ bas) »
+func _paire(a: String, b: String) -> String:
+	var l: Dictionary = commandes.liaisons
+	var txt := "%s / %s" % [Commandes.nom_lisible(l[a]["clavier"]), Commandes.nom_lisible(l[b]["clavier"])]
+	if l[a]["manette"] != "" or l[b]["manette"] != "":
+		txt += " (%s / %s)" % [Commandes.nom_lisible(l[a]["manette"]), Commandes.nom_lisible(l[b]["manette"])]
+	return txt
+
 # =====================================================================
 # COMMANDES DU PILOTE
 # =====================================================================
-func _unhandled_input(e: InputEvent) -> void:
-	if not (e is InputEventKey) or not e.is_pressed() or e.is_echo():
+## Appuis simples (boutons, touches). On interroge Godot à chaque image : ça marche pareil
+## pour une touche, un bouton de manette ou même un stick si le joueur en choisit un.
+func _lire_boutons() -> void:
+	if ecran_touches != null or Engine.get_process_frames() == image_fermeture:
 		return
-	var k := e as InputEventKey
-	match k.physical_keycode:
-		KEY_1:
-			acc_temps = ACCELERATIONS_TEMPS[0]
-		KEY_2:
-			acc_temps = ACCELERATIONS_TEMPS[1]
-		KEY_3:
-			acc_temps = ACCELERATIONS_TEMPS[2]
-		KEY_4:
-			acc_temps = ACCELERATIONS_TEMPS[3]
-		KEY_F1:
-			get_tree().change_scene_to_file("res://scenes/tests.tscn")
-	match k.key_label:
-		KEY_SPACE:
-			gaz = 0.0
-		KEY_T:
-			stabilisateur = not stabilisateur
-		KEY_P:
-			en_pause = not en_pause
-		KEY_H:
-			aide_visible = not aide_visible
-			aide.visible = aide_visible
-		KEY_R, KEY_O:
-			gaz = 0.0
-			acc_temps = 1
-			vaisseau.placer_en_orbite(ALTITUDE_DEPART)
+	if Input.is_action_just_pressed("ecran_touches"):
+		_ouvrir_ecran_touches()
+		return
+	if Input.is_action_just_pressed("temps_x1"): acc_temps = ACCELERATIONS_TEMPS[0]
+	if Input.is_action_just_pressed("temps_x10"): acc_temps = ACCELERATIONS_TEMPS[1]
+	if Input.is_action_just_pressed("temps_x100"): acc_temps = ACCELERATIONS_TEMPS[2]
+	if Input.is_action_just_pressed("temps_x1000"): acc_temps = ACCELERATIONS_TEMPS[3]
+	if Input.is_action_just_pressed("temps_plus"):
+		acc_temps = ACCELERATIONS_TEMPS[mini(ACCELERATIONS_TEMPS.find(acc_temps) + 1, ACCELERATIONS_TEMPS.size() - 1)]
+	if Input.is_action_just_pressed("temps_moins"):
+		acc_temps = ACCELERATIONS_TEMPS[maxi(ACCELERATIONS_TEMPS.find(acc_temps) - 1, 0)]
+	if Input.is_action_just_pressed("couper_gaz"): gaz = 0.0
+	if Input.is_action_just_pressed("stabilisateur"): stabilisateur = not stabilisateur
+	if Input.is_action_just_pressed("pause"): en_pause = not en_pause
+	if Input.is_action_just_pressed("aide"):
+		aide_visible = not aide_visible
+		aide.visible = aide_visible
+	if Input.is_action_just_pressed("recommencer") or Input.is_action_just_pressed("remettre_orbite"):
+		gaz = 0.0
+		acc_temps = 1
+		vaisseau.placer_en_orbite(ALTITUDE_DEPART)
+	if Input.is_action_just_pressed("tests"):
+		get_tree().change_scene_to_file("res://scenes/tests.tscn")
 
 
+func _ouvrir_ecran_touches() -> void:
+	ecran_touches = EcranTouches.new()
+	ecran_touches.commandes = commandes
+	ecran_touches.ferme.connect(_fermer_ecran_touches)
+	couche_hud.add_child(ecran_touches)
+
+
+func _fermer_ecran_touches() -> void:
+	ecran_touches = null
+	image_fermeture = Engine.get_process_frames()   # pour ne pas rouvrir l'écran avec le même appui
+	_ecrire_aide()
+
+
+## Tourner la tête dans le cockpit (stick droit). Stick lâché : la tête revient doucement droit devant.
+func _bouger_tete(delta: float) -> void:
+	if ecran_touches != null:
+		return
+	if Input.is_action_just_pressed("regard_centre"):
+		tete = Vector2.ZERO
+	var dx := Input.get_axis("regard_bas", "regard_haut")
+	var dy := Input.get_axis("regard_droite", "regard_gauche")
+	if dx == 0.0 and dy == 0.0:
+		tete = tete.lerp(Vector2.ZERO, minf(1.0, TETE_RETOUR * delta))
+	else:
+		tete.x = clampf(tete.x + dx * TETE_VITESSE * delta, -TETE_BAS_MAX, TETE_HAUT_MAX)
+		tete.y = clampf(tete.y + dy * TETE_VITESSE * delta, -TETE_LACET_MAX, TETE_LACET_MAX)
+	camera.rotation = Vector3(tete.x, tete.y, 0.0)
+
+
+## Lit le clavier et la manette. Sticks et gâchettes sont analogiques : à moitié = la moitié.
 func _lire_ordres(delta: float) -> void:
-	var t := 0.0
-	var l := 0.0
-	var r := 0.0
-	if Input.is_physical_key_pressed(KEY_UP): t += 1.0
-	if Input.is_physical_key_pressed(KEY_DOWN): t -= 1.0
-	if Input.is_key_label_pressed(KEY_Q): l += 1.0
-	if Input.is_key_label_pressed(KEY_D): l -= 1.0
-	if Input.is_key_label_pressed(KEY_A): r += 1.0
-	if Input.is_key_label_pressed(KEY_E): r -= 1.0
-	if Input.is_key_label_pressed(KEY_Z): gaz += 0.5 * delta
-	if Input.is_key_label_pressed(KEY_S): gaz -= 0.5 * delta
+	var t := Input.get_axis("tangage_bas", "tangage_haut")
+	var l := Input.get_axis("lacet_droite", "lacet_gauche")
+	var r := Input.get_axis("roulis_droite", "roulis_gauche")
+	# la poussée monte ou descend d'autant plus vite qu'on appuie fort (Z / S ou gâchettes R2 / L2)
+	gaz += 0.5 * delta * (Input.get_action_strength("gaz_plus") - Input.get_action_strength("gaz_moins"))
 	gaz = clampf(gaz, 0.0, 1.0)
 	# Stabilisateur : sur chaque axe non commandé, il allume les propulseurs qui freinent la rotation.
 	# Il n'agit QUE par les propulseurs (aucune rotation imposée directement).
@@ -254,7 +325,7 @@ func _lire_ordres(delta: float) -> void:
 # SIMULATION
 # =====================================================================
 func _physics_process(delta: float) -> void:
-	if en_pause or vaisseau.ecrase:
+	if en_pause or vaisseau.ecrase or ecran_touches != null:
 		return
 	_lire_ordres(delta)
 	vaisseau.commander(gaz, ordres.x, ordres.y, ordres.z)
@@ -269,7 +340,9 @@ func _physics_process(delta: float) -> void:
 # =====================================================================
 # AFFICHAGE
 # =====================================================================
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_lire_boutons()
+	_bouger_tete(delta)
 	pilote.basis = Basis(vaisseau.orientation)
 	_placer_planete()
 	_mettre_a_jour_hud()

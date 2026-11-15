@@ -9,19 +9,30 @@ Moteur : Godot 4.7 (rendu Compatibilité). Dossier de référence du projet : `d
 3. Appuie sur **Lecture ▶** (en haut à droite) ou **F5**.
 
 ## Commandes
-| Touche | Action |
-|---|---|
-| Z / S | plus / moins de poussée |
-| Espace | couper la poussée |
-| Flèches haut / bas | tangage (nez en haut / en bas) |
-| Q / D | lacet (nez à gauche / à droite) |
-| A / E | roulis |
-| T | stabilisateur de rotation (agit seulement avec les propulseurs) |
-| 1 2 3 4 | temps ×1, ×10, ×100, ×1000 |
-| P | pause |
-| O ou R | revenir en orbite à 100 km |
-| F1 | tests de physique (Échap pour revenir) |
-| H | cacher / montrer l'aide |
+Toutes les commandes se changent dans le jeu : **F2** (ou **Options** sur la manette) ouvre l'écran
+de configuration. On clique sur une case (ou on la choisit avec la croix directionnelle puis Croix),
+puis on appuie sur la touche, le bouton ou le stick voulu. Les réglages sont sauvegardés tout de suite
+(fichier `commandes.cfg` dans le dossier de sauvegarde de Godot) et rechargés à chaque partie.
+Sticks et gâchettes sont analogiques : pousser à moitié demande la moitié.
+
+Disposition par défaut :
+
+| Action | Clavier | Manette (PS5) |
+|---|---|---|
+| plus / moins de poussée | Z / S | R2 / L2 |
+| couper la poussée | Espace | Croix |
+| tangage (nez en haut / en bas) | flèches haut / bas | stick gauche haut / bas |
+| lacet (nez à gauche / à droite) | Q / D | L1 / R1 |
+| roulis (pencher à gauche / à droite) | A / E | stick gauche gauche / droite |
+| stabilisateur de rotation | T | Triangle |
+| pause | P | Carré |
+| cacher / montrer l'aide | H | Rond |
+| recommencer / remettre en orbite | R / O | Créer |
+| temps ×1, ×10, ×100, ×1000 | 1 2 3 4 | croix directionnelle gauche / droite (moins / plus vite) |
+| tourner la tête (le vaisseau ne bouge pas) | — | stick droit (lâché : la tête revient devant) |
+| regarder droit devant | C | R3 (enfoncer le stick droit) |
+| tests de physique | F1 (Échap pour revenir) | Rond pour revenir |
+| configurer les commandes | F2 | Options |
 
 ## Ce qui est simulé
 - Vaisseau de 10 t, corps rigide à 6 degrés de liberté (masse, inertie, couples).
@@ -39,7 +50,9 @@ Moteur : Godot 4.7 (rendu Compatibilité). Dossier de référence du projet : `d
 
 ## Organisation
 - `scripts/physique/vaisseau_physique.gd` : toute la physique (indépendante de l'affichage).
-- `scripts/jeu.gd` : affichage, cockpit provisoire, instruments, commandes.
+- `scripts/jeu.gd` : affichage, cockpit provisoire, instruments.
+- `scripts/commandes.gd` : touches du clavier et de la manette (disposition par défaut, sauvegarde).
+- `scripts/ecran_touches.gd` : l'écran de configuration des commandes (F2).
 - `scripts/tests_physique.gd` : les tests automatiques (F1).
 - `shaders/` : surface de la planète et ciel étoilé.
 - `banc-essai/banc-lumiere-fractale.html` : banc d'essai du système de lumière fractale (s'ouvre dans un navigateur, sur PC). Version en ligne : https://claude.ai/artifact/7RTivTLhf6TDjpeZyELo2m

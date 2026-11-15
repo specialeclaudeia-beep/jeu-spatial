@@ -3,6 +3,7 @@ extends Control
 ## Chaque test vérifie une loi physique sur le vrai code du vaisseau.
 
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
+const Commandes = preload("res://scripts/commandes.gd")
 const R := 600000.0
 const GM := 9.81 * 600000.0 * 600000.0
 
@@ -33,7 +34,9 @@ func _ready() -> void:
 
 
 func _unhandled_input(e: InputEvent) -> void:
-	if e is InputEventKey and e.is_pressed() and (e as InputEventKey).keycode == KEY_ESCAPE:
+	var echap: bool = e is InputEventKey and e.is_pressed() and (e as InputEventKey).keycode == KEY_ESCAPE
+	var manette: bool = e is InputEventJoypadButton and e.is_pressed() and (e as InputEventJoypadButton).button_index in [JOY_BUTTON_B, JOY_BUTTON_START]
+	if echap or manette:   # Échap, ou Rond / Options sur la manette
 		get_tree().change_scene_to_file("res://scenes/jeu.tscn")
 
 
@@ -56,7 +59,7 @@ func _resultat(ok: bool, titre: String, detail: String) -> void:
 
 
 func _lancer() -> void:
-	texte.text = "[b]Tests de physique[/b]   (Échap pour revenir au jeu)\n\n"
+	texte.text = "[b]Tests de physique[/b]   (Échap, ou Rond sur la manette, pour revenir au jeu)\n\n"
 	var debut := Time.get_ticks_msec()
 
 	# 1. Inertie : dans le vide, sans moteur, la vitesse ne change pas
@@ -268,7 +271,110 @@ func _lancer() -> void:
 	_resultat(ok15, "Calcul automatique : plein gaz + virage",
 		"Lacet %.0f N·m (demandé %.0f), poussée %.0f kN sur %.0f kN possibles. Calcul : %.0f microsecondes par image (léger)." % [c15.y, v.couple_max.y, -f15.z / 1000.0, v.poussee_avant_max / 1000.0, us])
 
+	_tests_commandes()
+
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
 	texte.append_text("[b][color=%s]%d / %d tests réussis[/color][/b]  (%.1f s de calcul)\n" % [couleur, reussis, total, duree])
 	print("Tests de physique : %d / %d réussis" % [reussis, total])
+
+
+# =====================================================================
+# TESTS DES COMMANDES (clavier et manette)
+# =====================================================================
+func _mouvement(axe: int, valeur: float) -> InputEventJoypadMotion:
+	var m := InputEventJoypadMotion.new()
+	m.axis = axe as JoyAxis
+	m.axis_value = valeur
+	return m
+
+
+func _tests_commandes() -> void:
+	# 16. Disposition par défaut : chaque action a une commande, aucun bouton ne sert deux fois,
+	#     et chaque liaison se relit à l'identique
+	var c = Commandes.new()
+	var vus := {}
+	var doublons := PackedStringArray()
+	var illisibles := PackedStringArray()
+	var sans_rien := PackedStringArray()
+	var n_manette := 0
+	for nom in c.liaisons:
+		var l: Dictionary = c.liaisons[nom]
+		if l["clavier"] == "" and l["manette"] == "":
+			sans_rien.append(nom)
+		if l["manette"] != "":
+			n_manette += 1
+		for genre in ["clavier", "manette"]:
+			var code: String = l[genre]
+			if code == "":
+				continue
+			if vus.has(genre + code):
+				doublons.append(Commandes.nom_lisible(code))
+			vus[genre + code] = true
+			var e := Commandes.evenement_depuis_code(code)
+			if e == null or Commandes.code_depuis_evenement(e) != code:
+				illisibles.append(code)
+	_resultat(doublons.is_empty() and illisibles.is_empty() and sans_rien.is_empty(),
+		"Commandes : disposition par défaut",
+		"%d actions, %d avec la manette. Doublons : %s. Liaisons illisibles : %s. Actions sans commande : %s." % [
+			c.liaisons.size(), n_manette, ", ".join(doublons) if doublons.size() else "aucun",
+			", ".join(illisibles) if illisibles.size() else "aucune", ", ".join(sans_rien) if sans_rien.size() else "aucune"])
+
+	# 17. Sticks analogiques : stick à mi-course utile = la moitié de la rotation maximale,
+	#     au repos = rien, à fond = le maximum. Et la gâchette R2 à moitié = poussée qui monte 2 fois moins vite.
+	c.appliquer()
+	var z: float = Commandes.ZONE_MORTE
+	var mi := -(z + (1.0 - z) * 0.5)          # stick gauche poussé vers le haut, à mi-course utile
+	var s_mi: float = _mouvement(JOY_AXIS_LEFT_Y, mi).get_action_strength("tangage_haut")
+	var s_fond: float = _mouvement(JOY_AXIS_LEFT_Y, -1.0).get_action_strength("tangage_haut")
+	var s_repos: float = _mouvement(JOY_AXIS_LEFT_Y, -0.05).get_action_strength("tangage_haut")
+	var s_autre: float = _mouvement(JOY_AXIS_LEFT_Y, mi).get_action_strength("tangage_bas")
+	var s_r2: float = _mouvement(JOY_AXIS_TRIGGER_RIGHT, z + (1.0 - z) * 0.5).get_action_strength("gaz_plus")
+	var v = _nouveau(false)
+	v.commander(0.0, s_mi, 0.0, 0.0)
+	var c_mi: float = v.effet_propulseurs()[1].x
+	v.commander(0.0, s_fond, 0.0, 0.0)
+	var c_fond: float = v.effet_propulseurs()[1].x
+	var ok17: bool = absf(s_mi - 0.5) < 0.001 and absf(s_fond - 1.0) < 0.001 and s_repos == 0.0 and s_autre == 0.0 \
+		and absf(s_r2 - 0.5) < 0.001 and absf(c_mi - 0.5 * c_fond) < 0.02 * c_fond
+	_resultat(ok17, "Commandes : sticks analogiques",
+		"Stick à mi-course : ordre %.2f, couple de tangage %.0f N·m (à fond : %.0f N·m, soit %.0f %%). Au repos (5 %%) : %.2f. Côté opposé : %.2f. R2 à moitié : %.2f." % [
+			s_mi, c_mi, c_fond, 100.0 * c_mi / c_fond, s_repos, s_autre, s_r2])
+
+	# 18. Changer une commande, sauvegarder, recharger
+	var chemin := "user://essai_commandes.cfg"
+	c = Commandes.new()
+	var perdu: String = c.assigner("tangage_haut", "clavier", "l:%d" % KEY_Z)   # Z servait à « Plus de poussée »
+	c.assigner("lacet_gauche", "manette", "b:%d" % JOY_BUTTON_DPAD_LEFT)   # servait à « Temps moins rapide »
+	var ok_sauve: bool = c.sauvegarder(chemin)
+	var c2 = Commandes.new()
+	var ok_charge: bool = c2.charger(chemin)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(chemin))
+	var identiques: bool = JSON.stringify(c.liaisons) == JSON.stringify(c2.liaisons)
+	var ok18: bool = ok_sauve and ok_charge and identiques and perdu == "Plus de poussée" \
+		and c2.liaisons["gaz_plus"]["clavier"] == "" and c2.liaisons["temps_moins"]["manette"] == "" \
+		and c2.liaisons["lacet_gauche"]["manette"] == "b:%d" % JOY_BUTTON_DPAD_LEFT
+	_resultat(ok18, "Commandes : changement et sauvegarde",
+		"Z donné au tangage (retiré de « %s »), croix directionnelle gauche donnée au lacet. Sauvegarde %s, relecture %s, réglages identiques : %s." % [
+			perdu, "réussie" if ok_sauve else "RATÉE", "réussie" if ok_charge else "RATÉE", "oui" if identiques else "NON"])
+
+	# 19. Une sauvegarde de l'ancienne disposition (sans numéro de version) est ignorée,
+	#     pour ne pas garder le lacet sur le stick droit qui sert maintenant à tourner la tête
+	var ancien := ConfigFile.new()
+	ancien.set_value("lacet_gauche", "manette", "a:2:-1")
+	ancien.save(chemin)
+	var c3 = Commandes.new()
+	var charge_ancien: bool = c3.charger(chemin)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(chemin))
+	var ok19: bool = not charge_ancien and c3.liaisons["lacet_gauche"]["manette"] == "b:%d" % JOY_BUTTON_LEFT_SHOULDER \
+		and c3.liaisons["regard_gauche"]["manette"] == "a:%d:-1" % JOY_AXIS_RIGHT_X \
+		and c3.liaisons["roulis_gauche"]["manette"] == "a:%d:-1" % JOY_AXIS_LEFT_X
+	_resultat(ok19, "Commandes : nouvelle disposition manette",
+		"Stick gauche : tangage + roulis. L1 / R1 : lacet (%s). Stick droit : la tête (%s). Ancienne sauvegarde ignorée : %s." % [
+			Commandes.nom_lisible(c3.liaisons["lacet_gauche"]["manette"]), Commandes.nom_lisible(c3.liaisons["regard_gauche"]["manette"]),
+			"oui" if not charge_ancien else "NON"])
+
+	# on remet les commandes du joueur (celles de sa sauvegarde) pour le retour au jeu
+	c = Commandes.new()
+	c.charger()
+	c.appliquer()
