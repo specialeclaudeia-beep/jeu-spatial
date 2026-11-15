@@ -5,7 +5,9 @@ extends RefCounted
 ## appliquées à un endroit précis du vaisseau :
 ##   forces  -> changent la vitesse (translation)
 ##   couples -> changent la vitesse de rotation (couple = position × force)
-## La gravité de la planète agit en permanence. Pas de carburant (autonomie illimitée).
+## La gravité de la planète (et des autres astres) agit en permanence. Pas de carburant.
+## La gravité tire un peu plus sur la partie du vaisseau la plus proche d'un astre : cela crée
+## un petit couple (« gradient de gravité ») qui fait lentement se balancer le vaisseau.
 ##
 ## Repère du vaisseau (comme Godot) : -Z = avant (le nez), +Y = haut, +X = droite.
 ## La position et la vitesse sont gardées en double précision (px, py, pz...), car les
@@ -42,6 +44,14 @@ var vitesse_impact := 0.0
 # planète
 var gm := 0.0              # constante gravitationnelle × masse de la planète (m³/s²)
 var rayon_planete := 0.0   # m (0 = pas de sol)
+
+# autres astres (lunes, étoiles…) : chacun = { nom, gm, x, y, z } (position en m, double précision).
+# Pour l'instant ils restent immobiles : leur propre mouvement viendra plus tard.
+var autres_astres: Array = []
+
+# couple dû au gradient de gravité (true = calculé, comme dans la réalité)
+var gradient_gravite := true
+var couple_gravite_actuel := Vector3.ZERO   # N·m, repère du vaisseau (pour les tests et l'affichage)
 
 # propulseurs : chacun = { nom, position, direction, poussee_max, consigne (0..1), actuel (0..1) }
 var moteurs: Array = []
@@ -112,16 +122,59 @@ func commander(gaz: float, tangage: float, lacet: float, roulis: float) -> void:
 		var o: float = ordres[t["axe"]] * t["signe"]
 		t["actuel"] = clampf(o, 0.0, 1.0)
 
+func ajouter_astre(nom: String, gm_astre: float, x: float, y: float, z: float) -> void:
+	autres_astres.append({"nom": nom, "gm": gm_astre, "x": x, "y": y, "z": z})
+
 # =====================================================================
 # SIMULATION
 # =====================================================================
+## Accélération due à la gravité au point (x, y, z) : somme des attractions de tous les astres
+## (loi de Newton : a = G·M / r², dirigée vers l'astre).
 func gravite(x: float, y: float, z: float) -> Array:
-	if gm == 0.0:
-		return [0.0, 0.0, 0.0]
-	var r2 := x * x + y * y + z * z
-	var r := sqrt(r2)
-	var k := -gm / (r2 * r)
-	return [k * x, k * y, k * z]
+	var ax := 0.0
+	var ay := 0.0
+	var az := 0.0
+	if gm != 0.0:
+		var r2 := x * x + y * y + z * z
+		var k := -gm / (r2 * sqrt(r2))
+		ax += k * x
+		ay += k * y
+		az += k * z
+	for a in autres_astres:
+		var dx: float = x - float(a["x"])
+		var dy: float = y - float(a["y"])
+		var dz: float = z - float(a["z"])
+		var d2 := dx * dx + dy * dy + dz * dz
+		var k2 := -float(a["gm"]) / (d2 * sqrt(d2))
+		ax += k2 * dx
+		ay += k2 * dy
+		az += k2 * dz
+	return [ax, ay, az]
+
+
+## Couple du gradient de gravité (repère du vaisseau), pour un astre situé à (dx, dy, dz) du
+## vaisseau. Formule classique (Orbiter, Basilisk) : couple = 3·GM/r³ · (n × (I·n)),
+## n = direction de l'astre vue depuis le vaisseau. Il est nul quand un axe principal pointe
+## vers l'astre, et il tend à tourner l'axe le plus long du vaisseau (nez-queue) vers l'astre.
+func _couple_un_astre(gm_astre: float, dx: float, dy: float, dz: float, vers_corps: Basis) -> Vector3:
+	var r := sqrt(dx * dx + dy * dy + dz * dz)
+	if r <= 0.0:
+		return Vector3.ZERO
+	var n: Vector3 = vers_corps * Vector3(dx / r, dy / r, dz / r)
+	var i_n := Vector3(inertie.x * n.x, inertie.y * n.y, inertie.z * n.z)
+	return n.cross(i_n) * (3.0 * gm_astre / (r * r * r))
+
+
+func couple_gravite() -> Vector3:
+	if not gradient_gravite:
+		return Vector3.ZERO
+	var vers_corps := Basis(orientation).inverse()
+	var c := Vector3.ZERO
+	if gm != 0.0:
+		c += _couple_un_astre(gm, -px, -py, -pz, vers_corps)
+	for a in autres_astres:
+		c += _couple_un_astre(float(a["gm"]), float(a["x"]) - px, float(a["y"]) - py, float(a["z"]) - pz, vers_corps)
+	return c
 
 
 ## Avance la simulation de dt secondes.
@@ -143,6 +196,9 @@ func pas(dt: float) -> void:
 			var f2: Vector3 = t["direction"] * (float(t["poussee_max"]) * float(t["actuel"]))
 			f_corps += f2
 			couple += (t["position"] as Vector3).cross(f2)
+	# le gradient de gravité ajoute son propre petit couple
+	couple_gravite_actuel = couple_gravite()
+	couple += couple_gravite_actuel
 	var base := Basis(orientation)
 	var a_p: Vector3 = (base * f_corps) / masse   # accélération due à la poussée (repère monde)
 

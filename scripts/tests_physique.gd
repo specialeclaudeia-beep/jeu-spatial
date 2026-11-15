@@ -52,6 +52,7 @@ func _resultat(ok: bool, titre: String, detail: String) -> void:
 		reussis += 1
 	var etiquette := "[color=#5fe08a][OK][/color]" if ok else "[color=#ff6b6b][ÉCHEC][/color]"
 	texte.append_text("%s [b]%s[/b]\n      %s\n\n" % [etiquette, titre, detail])
+	print("%s %s : %s" % ["[OK]" if ok else "[ÉCHEC]", titre, detail])   # aussi dans la console
 
 
 func _lancer() -> void:
@@ -162,6 +163,63 @@ func _lancer() -> void:
 	var o: Dictionary = v.orbite()
 	_resultat(absf(o["peri"] - 100000.0) < 1.0 and absf(o["apo"] - 100000.0) < 1.0, "Calcul de l'orbite",
 		"Orbite circulaire à 100 km : périapside %.1f m, apoapside %.1f m." % [o["peri"], o["apo"]])
+
+	# 10. Plusieurs astres : la gravité est la somme exacte des attractions
+	v = _nouveau(true)
+	var gm_lune := GM * 0.0123
+	var xl := 3.0e6
+	v.ajouter_astre("lune", gm_lune, xl, 0.0, 0.0)
+	var xs := R + 500000.0
+	var g10: Array = v.gravite(xs, 0.0, 0.0)
+	var att10 := -GM / (xs * xs) + gm_lune / ((xl - xs) * (xl - xs))
+	var ok10a: bool = absf(float(g10[0]) - att10) < 1e-12 * absf(att10) and absf(float(g10[1])) < 1e-15 and absf(float(g10[2])) < 1e-15
+	# entre deux astres identiques, au milieu, les attractions s'annulent : le vaisseau ne bouge pas
+	var v10 = _nouveau(false)
+	v10.gradient_gravite = false
+	v10.ajouter_astre("A", GM, -2.0e6, 0.0, 0.0)
+	v10.ajouter_astre("B", GM, 2.0e6, 0.0, 0.0)
+	for i in 12000:
+		v10.pas(1.0 / 120.0)
+	var ok10b: bool = v10.vitesse() < 1e-9 and v10.distance_centre() < 1e-6
+	_resultat(ok10a and ok10b, "Gravité de plusieurs astres",
+		"Planète + lune : %.6f m/s² (attendu %.6f). Au milieu de deux astres identiques pendant 100 s : vitesse %.9f m/s (attendu 0)." % [float(g10[0]), att10, v10.vitesse()])
+
+	# 11. Gradient de gravité : couple nul nez vers la planète, valeur exacte à 45°
+	v = _nouveau(true)
+	var r11 := R + 100000.0
+	v.px = r11
+	# nez (-Z) vers la planète (-X monde), axe de tangage (X du vaisseau) = Y monde
+	var base_nadir := Basis(Vector3(0, 1, 0), Vector3(0, 0, 1), Vector3(1, 0, 0))
+	v.orientation = Quaternion(base_nadir)
+	var c_aligne: Vector3 = v.couple_gravite()
+	v.orientation = Quaternion(base_nadir) * Quaternion(Vector3.RIGHT, PI / 4.0)
+	var c45: Vector3 = v.couple_gravite()
+	var att11: float = 3.0 * GM / (r11 * r11 * r11) * (v.inertie.y - v.inertie.z) * 0.5
+	var ok11: bool = c_aligne.length() < 1e-6 * att11 and absf(absf(c45.x) - att11) < 1e-4 * att11 and absf(c45.y) < 1e-4 * att11 and absf(c45.z) < 1e-4 * att11
+	_resultat(ok11, "Gradient de gravité (valeur du couple)",
+		"Nez vers la planète : %.9f N·m (attendu 0). Penché de 45° : %.4f N·m (attendu %.4f), soit environ 8 000 fois moins que les propulseurs de tangage." % [c_aligne.length(), absf(c45.x), att11])
+
+	# 12. Balancement en orbite : penché de 5°, le vaisseau oscille autour de la direction de la planète
+	v = _nouveau(true)
+	v.placer_en_orbite(100000.0)
+	var n12 := sqrt(GM / (r11 * r11 * r11))              # vitesse de rotation de l'orbite (rad/s)
+	var theta0 := deg_to_rad(5.0)
+	v.orientation = Quaternion(base_nadir) * Quaternion(Vector3.RIGHT, theta0)
+	v.omega = Vector3(n12, 0, 0)                           # il tourne avec l'orbite, comme un satellite
+	var w_lib: float = n12 * sqrt(3.0 * (v.inertie.y - v.inertie.z) / v.inertie.x)
+	var t_lib: float = TAU / w_lib                               # durée d'un aller-retour prévue
+	var angle_min := INF
+	var n12_pas: int = int(round(t_lib / 0.1))
+	for i in n12_pas:
+		v.pas(0.1)
+		var nez: Vector3 = Basis(v.orientation) * Vector3(0, 0, -1)
+		var vers_planete := Vector3(-v.px, -v.py, -v.pz).normalized()
+		angle_min = minf(angle_min, acos(clampf(nez.dot(vers_planete), -1.0, 1.0)))
+	var nez_f: Vector3 = Basis(v.orientation) * Vector3(0, 0, -1)
+	var angle_f: float = acos(clampf(nez_f.dot(Vector3(-v.px, -v.py, -v.pz).normalized()), -1.0, 1.0))
+	var ok12: bool = angle_min < 0.1 * theta0 and absf(angle_f - theta0) < 0.15 * theta0
+	_resultat(ok12, "Balancement dû à la gravité",
+		"Penché de 5° en orbite, sans moteur : passe à %.2f° de la planète puis revient à %.2f° après %.0f s (aller-retour prévu : %.0f s, soit %.0f min)." % [rad_to_deg(angle_min), rad_to_deg(angle_f), n12_pas * 0.1, t_lib, t_lib / 60.0])
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
