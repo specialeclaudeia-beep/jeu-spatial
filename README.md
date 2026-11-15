@@ -26,7 +26,7 @@ Disposition par défaut :
 | roulis (pencher à gauche / à droite) | A / E | stick gauche gauche / droite |
 | stabilisateur de rotation | T | Triangle |
 | pilote auto : garder le cap | K | — |
-| pilote auto : s'arrêter | B | L3 (enfoncer le stick gauche) |
+| pilote auto : s'arrêter | N | — |
 | ouvrir / replier les ailes | X | croix directionnelle haut |
 | sortir / rentrer le train d'atterrissage | G | croix directionnelle bas |
 | vue cockpit / vue extérieure | V | pavé tactile |
@@ -44,7 +44,7 @@ Il pilote avec les mêmes moteurs et propulseurs que le joueur : il calcule seul
 (gaz, tangage, lacet, roulis, et une petite force de côté). Toucher une commande de pilotage,
 ou couper la poussée, le désactive.
 - **Garder le cap (K)** : garde le nez dans la direction qu'il avait à l'activation, même lancé en rotation.
-- **S'arrêter (B)** : annule la vitesse par rapport à la planète, sans dépasser 3 g. Près de la
+- **S'arrêter (N)** : annule la vitesse par rapport à la planète, sans dépasser 3 g. Près de la
   planète, il compense aussi la gravité : le vaisseau finit immobile, nez vers le haut, sur ses moteurs.
 
 ## Ce qui est simulé
