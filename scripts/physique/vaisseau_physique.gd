@@ -230,10 +230,13 @@ func _preparer_repartition() -> void:
 		_niveaux[i] = 0.0
 
 
-func commander(gaz: float, tangage: float, lacet: float, roulis: float) -> void:
+## force_cote : force voulue en plus (newtons, repère du vaisseau) pour pousser de côté (x),
+## vers le haut ou le bas (y). Les petits propulseurs la donnent, sans faire tourner le vaisseau.
+## Sert au pilote automatique. Si elle dépasse ce que les propulseurs peuvent, on fait au mieux.
+func commander(gaz: float, tangage: float, lacet: float, roulis: float, force_cote := Vector3.ZERO) -> void:
 	gaz = clampf(gaz, 0.0, 1.0)
 	# objectif, dans la même échelle que les colonnes
-	var but := PackedFloat64Array([0.0, 0.0, -gaz * poussee_avant_max / _echelle_force,
+	var but := PackedFloat64Array([force_cote.x / _echelle_force, force_cote.y / _echelle_force, -gaz * poussee_avant_max / _echelle_force,
 		POIDS_ROTATION * clampf(tangage, -1.0, 1.0),
 		POIDS_ROTATION * clampf(lacet, -1.0, 1.0),
 		POIDS_ROTATION * clampf(roulis, -1.0, 1.0)])

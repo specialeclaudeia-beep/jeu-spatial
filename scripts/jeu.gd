@@ -10,6 +10,7 @@ extends Node3D
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
 const Commandes = preload("res://scripts/commandes.gd")
 const EcranTouches = preload("res://scripts/ecran_touches.gd")
+const PiloteAuto = preload("res://scripts/physique/pilote_auto.gd")
 
 # =====================================================================
 # CONSTANTES
@@ -42,6 +43,8 @@ const TETE_RETOUR := 2.0                      # vitesse du retour doux vers l'av
 var vaisseau
 var gaz := 0.0
 var stabilisateur := false
+var ordinateur = PiloteAuto.new()        # ordinateur de bord (pilote automatique)
+var force_cote := Vector3.ZERO       # force de côté demandée par le pilote auto (N)
 var en_pause := false
 var acc_temps := 1
 var aide_visible := true
@@ -261,6 +264,7 @@ func _ecrire_aide() -> void:
 		+ "Tangage %s      Lacet %s\n" % [_paire("tangage_haut", "tangage_bas"), _paire("lacet_gauche", "lacet_droite")]
 		+ "Roulis %s\n" % _paire("roulis_gauche", "roulis_droite")
 		+ "%s : stabilisateur   %s : pause   Temps : %s %s %s %s, ou %s / %s\n" % [c.resume("stabilisateur"), c.resume("pause"), c.resume("temps_x1"), c.resume("temps_x10"), c.resume("temps_x100"), c.resume("temps_x1000"), c.resume("temps_moins"), c.resume("temps_plus")]
+		+ "Pilote auto : %s garder le cap   %s s'arrêter (une touche de pilotage le coupe)\n" % [c.resume("pilote_cap"), c.resume("pilote_arret")]
 		+ "%s : remettre en orbite   %s : recommencer   %s : tests   %s : cacher l'aide\n" % [c.resume("remettre_orbite"), c.resume("recommencer"), c.resume("tests"), c.resume("aide")]
 		+ "%s : ailes   %s : train d'atterrissage   %s : vue cockpit / extérieure\n" % [c.resume("ailes"), c.resume("train"), c.resume("vue")]
 		+ "Tourner la tête (ou la caméra) : %s   %s : regarder droit devant\n" % [_aide_tete(), c.resume("regard_centre")]
@@ -309,8 +313,14 @@ func _lire_boutons() -> void:
 		acc_temps = ACCELERATIONS_TEMPS[mini(ACCELERATIONS_TEMPS.find(acc_temps) + 1, ACCELERATIONS_TEMPS.size() - 1)]
 	if Input.is_action_just_pressed("temps_moins"):
 		acc_temps = ACCELERATIONS_TEMPS[maxi(ACCELERATIONS_TEMPS.find(acc_temps) - 1, 0)]
-	if Input.is_action_just_pressed("couper_gaz"): gaz = 0.0
+	if Input.is_action_just_pressed("couper_gaz"):
+		gaz = 0.0
+		ordinateur.activer(PiloteAuto.AUCUN, vaisseau)
 	if Input.is_action_just_pressed("stabilisateur"): stabilisateur = not stabilisateur
+	if Input.is_action_just_pressed("pilote_cap"):
+		ordinateur.activer(PiloteAuto.AUCUN if ordinateur.mode == PiloteAuto.CAP else PiloteAuto.CAP, vaisseau)
+	if Input.is_action_just_pressed("pilote_arret"):
+		ordinateur.activer(PiloteAuto.AUCUN if ordinateur.mode == PiloteAuto.ARRET else PiloteAuto.ARRET, vaisseau)
 	if Input.is_action_just_pressed("ailes"): vaisseau.ouvrir_ailes(vaisseau.ailes_consigne < 0.5)
 	if Input.is_action_just_pressed("train"): vaisseau.sortir_train(vaisseau.train_consigne < 0.5)
 	if Input.is_action_just_pressed("vue"):
@@ -321,6 +331,7 @@ func _lire_boutons() -> void:
 		aide_visible = not aide_visible
 		aide.visible = aide_visible
 	if Input.is_action_just_pressed("recommencer") or Input.is_action_just_pressed("remettre_orbite"):
+		ordinateur.activer(PiloteAuto.AUCUN, vaisseau)
 		gaz = 0.0
 		acc_temps = 1
 		vaisseau.placer_en_orbite(ALTITUDE_DEPART)
@@ -375,6 +386,17 @@ func _lire_ordres(delta: float) -> void:
 	# la poussée monte ou descend d'autant plus vite qu'on appuie fort (Z / S ou gâchettes R2 / L2)
 	gaz += 0.5 * delta * (Input.get_action_strength("gaz_plus") - Input.get_action_strength("gaz_moins"))
 	gaz = clampf(gaz, 0.0, 1.0)
+	force_cote = Vector3.ZERO
+	# Pilote automatique : dès que le joueur touche aux commandes, il reprend la main.
+	if ordinateur.mode != PiloteAuto.AUCUN:
+		if t != 0.0 or l != 0.0 or r != 0.0 or Input.is_action_pressed("gaz_plus") or Input.is_action_pressed("gaz_moins"):
+			ordinateur.activer(PiloteAuto.AUCUN, vaisseau)
+		else:
+			ordinateur.calculer(vaisseau, PAS * acc_temps)
+			gaz = ordinateur.gaz
+			force_cote = ordinateur.force_cote
+			ordres = ordinateur.ordres
+			return
 	# Stabilisateur : sur chaque axe non commandé, il allume les propulseurs qui freinent la rotation.
 	# Il n'agit QUE par les propulseurs (aucune rotation imposée directement).
 	# En temps accéléré, l'ordre dure plus longtemps (PAS × acc_temps) : le stabilisateur en tient compte.
@@ -392,7 +414,7 @@ func _physics_process(delta: float) -> void:
 	if en_pause or vaisseau.ecrase or ecran_touches != null:
 		return
 	_lire_ordres(delta)
-	vaisseau.commander(gaz, ordres.x, ordres.y, ordres.z)
+	vaisseau.commander(gaz, ordres.x, ordres.y, ordres.z, force_cote)
 	if acc_temps == 1:
 		vaisseau.pas(PAS)
 	else:
@@ -521,6 +543,7 @@ func _mettre_a_jour_hud() -> void:
 	lignes.append("ROTATION      tangage %+.1f°/s   lacet %+.1f°/s   roulis %+.1f°/s" % [w.x, w.y, w.z])
 	lignes.append("AILES         %s      TRAIN %s      VUE %s" % [_etat(vaisseau.ailes, vaisseau.ailes_consigne, "ouvertes", "repliées"),
 		_etat(vaisseau.train, vaisseau.train_consigne, "sorti", "rentré"), "cockpit" if vue_interieure else "extérieure"])
+	lignes.append("PILOTE AUTO   %s" % ordinateur.nom_mode())
 	lignes.append("STABILISATEUR %s      TEMPS x%d%s" % ["activé" if stabilisateur else "désactivé", acc_temps, "   (PAUSE)" if en_pause else ""])
 	hud.text = "\n".join(lignes)
 	if vaisseau.ecrase:
