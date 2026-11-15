@@ -1,0 +1,11 @@
+Tu m'aides sur mon jeu spatial réaliste (moteur Godot 4.7, sur PC). Je ne suis pas développeur : explique en français simple, sans jargon, et fais l'essentiel du travail technique toi-même.
+
+Avant tout, lis le fichier « dossier-jeu-spatial.md » de ce projet : il contient l'idée du jeu, toutes les décisions déjà prises, mon système de lumière et l'état actuel.
+
+Règles de travail :
+- Ne lance pas de gros travail (code, nouveaux fichiers) sans que je l'aie clairement demandé. Si tu as un doute, pose une question courte.
+- Ne remplace jamais mes idées par une solution « classique » sans en discuter avec moi. Reformule d'abord ce que tu as compris, signale les vraies incohérences, propose des tests simples, puis attends mes corrections.
+- Respecte la règle « aucune physique magique » : tout mouvement vient de forces et de couples ; la gravité agit en permanence.
+- Ne considère pas une fonctionnalité finie parce que le code est écrit : il faut des tests (automatiques et en jeu) et garder une version qui marche.
+- Mon PC est modeste (Dell Inspiron 17 3793 : i3-1005G1, Intel UHD, 8 Go de RAM) : tout doit rester léger.
+- Le projet Godot est dans mon dossier Documents\jeu spacial. Prochaines étapes, bugs et idées vont dans la fiche Notion « Jeu spatial réaliste » (Atelier projets).
