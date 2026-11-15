@@ -271,12 +271,90 @@ func _lancer() -> void:
 	_resultat(ok15, "Calcul automatique : plein gaz + virage",
 		"Lacet %.0f N·m (demandé %.0f), poussée %.0f kN sur %.0f kN possibles. Calcul : %.0f microsecondes par image (léger)." % [c15.y, v.couple_max.y, -f15.z / 1000.0, v.poussee_avant_max / 1000.0, us])
 
+	_tests_position_valide()
 	_tests_commandes()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
 	texte.append_text("[b][color=%s]%d / %d tests réussis[/color][/b]  (%.1f s de calcul)\n" % [couleur, reussis, total, duree])
 	print("Tests de physique : %d / %d réussis" % [reussis, total])
+
+
+# =====================================================================
+# TESTS : LA POSITION RESTE VALIDE (bug « is_finite »)
+# =====================================================================
+## Avant la correction, la rotation s'emballait en tournant vite ou en temps accéléré : les nombres
+## devenaient infinis, puis la position du vaisseau devenait invalide (erreurs « is_finite »).
+func _valide(v) -> bool:
+	return is_finite(v.px) and is_finite(v.py) and is_finite(v.pz) and is_finite(v.vx) \
+		and is_finite(v.omega.length()) and is_finite(v.orientation.length())
+
+
+## Une image du jeu, comme dans jeu.gd : un ordre, puis plusieurs pas en temps accéléré.
+func _image(v, acc: int, ordre: Vector3, stabilisateur: bool) -> void:
+	var o := ordre
+	if stabilisateur:
+		var s: Vector3 = v.ordres_stabilisateur(acc / 120.0)
+		if o.x == 0.0: o.x = s.x
+		if o.y == 0.0: o.y = s.y
+		if o.z == 0.0: o.z = s.z
+	v.commander(0.0, o.x, o.y, o.z)
+	var n: int = mini(acc, 25)
+	for i in n:
+		v.pas(acc / 120.0 / n)
+
+
+func _tests_position_valide() -> void:
+	# 16. Rotation libre en temps ×1000 : le moment cinétique et l'énergie de rotation se conservent
+	var v = _nouveau(false)
+	v.omega = Vector3(0.02, 1.0, 0.02)   # rotation autour de l'axe « instable » (celui du milieu)
+	var l0: float = v.moment_cinetique_monde().length()
+	var e0: float = _energie_rotation(v)
+	var valide := true
+	for i in 6000:   # 2 000 s par pas de 1/3 s
+		v.pas(1.0 / 3.0)
+		if not _valide(v):
+			valide = false
+			break
+	var l1: float = v.moment_cinetique_monde().length()
+	var e1: float = _energie_rotation(v)
+	_resultat(valide and absf(l1 - l0) < 1e-3 * l0 and absf(e1 - e0) < 0.02 * e0,
+		"Rotation libre en temps ×1000",
+		"Après 2 000 s sans moteur : moment cinétique %.0f (au départ %.0f), énergie de rotation %.0f J (au départ %.0f J). Avant la correction : nombres infinis." % [l1, l0, e1, e0])
+
+	# 17. Roulis + tangage tenus en temps ×10 : on tourne très vite, mais tout reste valide
+	v = _nouveau(true)
+	v.placer_en_orbite(100000.0)
+	var en0: float = v.energie_specifique()
+	valide = true
+	for i in 1200:   # 10 s réelles = 100 s de jeu
+		_image(v, 10, Vector3(1, 0, 1), false)
+		if not _valide(v):
+			valide = false
+			break
+	var en1: float = v.energie_specifique()
+	_resultat(valide and absf(en1 - en0) < 1e-4 * absf(en0),
+		"Tourner sans s'arrêter, temps ×10",
+		"Roulis et tangage tenus 100 s : rotation %.0f rad/s (rien ne la freine, c'est normal), position valide, orbite presque inchangée (énergie %.1f J/kg, au départ %.1f). Avant la correction : position invalide après 1 s." % [v.omega.length(), en1, en0])
+
+	# 18. Stabilisateur en temps ×1000 : il arrête la rotation au lieu de l'emballer
+	v = _nouveau(true)
+	v.placer_en_orbite(100000.0)
+	v.omega = Vector3(0.1, -0.2, 0.3)
+	valide = true
+	for i in 600:
+		_image(v, 1000, Vector3.ZERO, true)
+		if not _valide(v):
+			valide = false
+			break
+	_resultat(valide and v.omega.length() < 1e-3,
+		"Stabilisateur en temps ×1000",
+		"Rotation de départ 0,37 rad/s ; après 5 s réelles : %.6f rad/s (attendu ≈ 0), position valide." % v.omega.length())
+
+
+func _energie_rotation(v) -> float:
+	var w: Vector3 = v.omega
+	return 0.5 * (v.inertie.x * w.x * w.x + v.inertie.y * w.y * w.y + v.inertie.z * w.z * w.z)
 
 
 # =====================================================================

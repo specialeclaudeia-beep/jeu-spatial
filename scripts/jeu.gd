@@ -314,11 +314,12 @@ func _lire_ordres(delta: float) -> void:
 	gaz = clampf(gaz, 0.0, 1.0)
 	# Stabilisateur : sur chaque axe non commandé, il allume les propulseurs qui freinent la rotation.
 	# Il n'agit QUE par les propulseurs (aucune rotation imposée directement).
+	# En temps accéléré, l'ordre dure plus longtemps (PAS × acc_temps) : le stabilisateur en tient compte.
 	if stabilisateur:
-		var w: Vector3 = vaisseau.omega
-		if t == 0.0: t = clampf(-w.x * 6.0, -1.0, 1.0)
-		if l == 0.0: l = clampf(-w.y * 6.0, -1.0, 1.0)
-		if r == 0.0: r = clampf(-w.z * 6.0, -1.0, 1.0)
+		var s: Vector3 = vaisseau.ordres_stabilisateur(PAS * acc_temps)
+		if t == 0.0: t = s.x
+		if l == 0.0: l = s.y
+		if r == 0.0: r = s.z
 	ordres = Vector3(t, l, r)
 
 # =====================================================================

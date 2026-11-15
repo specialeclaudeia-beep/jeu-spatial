@@ -312,13 +312,62 @@ func pas(dt: float) -> void:
 	if rayon_planete > 0.0:
 		_contact_sol(dt, g)
 
-	# 5. Rotation : équations d'Euler du corps rigide  I·dω/dt = couple − ω × (I·ω)
-	var iw := Vector3(inertie.x * omega.x, inertie.y * omega.y, inertie.z * omega.z)
-	var dw := (couple - omega.cross(iw)) / inertie
-	omega += dw * dt
-	var angle := omega.length() * dt
-	if angle > 0.0:
-		orientation = (orientation * Quaternion(omega.normalized(), angle)).normalized()
+	# 5. Rotation du corps rigide
+	_tourner(couple, dt)
+
+
+## Rotation : on suit le moment cinétique L (repère monde). Seul un couple le change :
+## L += couple × dt (loi exacte). La vitesse de rotation s'en déduit : ω = I⁻¹·L (repère du vaisseau).
+## L'ancienne méthode (on ajoutait directement dω à ω) prenait un peu d'énergie à chaque pas :
+## en tournant vite ou en temps accéléré, la rotation s'emballait jusqu'à des nombres infinis,
+## et la position du vaisseau devenait invalide. Ici, L ne peut grandir que si un couple agit vraiment.
+## Quand le vaisseau tourne vite, le pas est découpé en petits morceaux (au plus ANGLE_SOUS_PAS
+## radian chacun) pour que l'effet gyroscopique (ω × I·ω) reste précis.
+const ANGLE_SOUS_PAS := 0.05     # rad parcourus au plus par sous-pas de rotation
+const SOUS_PAS_MAX := 16         # limite pour rester léger, même en tournant très vite
+
+
+func _tourner(couple_corps: Vector3, dt: float) -> void:
+	var l_monde: Vector3 = Basis(orientation) * (inertie * omega)
+	# vitesse de rotation la plus grande atteinte pendant ce pas (pour choisir le découpage)
+	var w_max := omega.length() + (couple_corps / inertie).length() * dt
+	var n := clampi(int(ceil(w_max * dt / ANGLE_SOUS_PAS)), 1, SOUS_PAS_MAX)
+	var h := dt / n
+	for i in n:
+		# le couple est attaché au vaisseau : il tourne avec lui
+		l_monde += Basis(orientation) * (couple_corps * h)
+		# méthode du point milieu : rotation calculée avec la vitesse du milieu du sous-pas
+		var w1: Vector3 = (Basis(orientation.inverse()) * l_monde) / inertie
+		var q_milieu := _tourner_quaternion(orientation, w1, h * 0.5)
+		var w2: Vector3 = (Basis(q_milieu.inverse()) * l_monde) / inertie
+		orientation = _tourner_quaternion(orientation, w2, h)
+	omega = (Basis(orientation.inverse()) * l_monde) / inertie
+
+
+static func _tourner_quaternion(q: Quaternion, w: Vector3, t: float) -> Quaternion:
+	var vitesse_rot := w.length()
+	var angle := vitesse_rot * t
+	if angle < 1e-12:
+		return q
+	return (q * Quaternion(w / vitesse_rot, angle)).normalized()
+
+
+## Ordres du stabilisateur de rotation (de -1 à 1 sur chaque axe) pour freiner la rotation.
+## Il n'agit que par les propulseurs. Son ordre reste le même pendant duree_s secondes (une image) :
+## en temps accéléré, une image dure jusqu'à 8 s, et un ordre trop fort ferait tourner le vaisseau
+## dans l'autre sens, de plus en plus fort. On limite donc l'ordre pour, au plus, réduire la
+## rotation de moitié en une image.
+const GAIN_STABILISATEUR := 6.0
+
+
+func ordres_stabilisateur(duree_s: float) -> Vector3:
+	var o := Vector3.ZERO
+	for k in 3:
+		var gain := GAIN_STABILISATEUR
+		if couple_max[k] > 0.0 and duree_s > 0.0:
+			gain = minf(gain, 0.5 * inertie[k] / (couple_max[k] * duree_s))
+		o[k] = clampf(-omega[k] * gain, -1.0, 1.0)
+	return o
 
 
 func _contact_sol(dt: float, g: Array) -> void:
