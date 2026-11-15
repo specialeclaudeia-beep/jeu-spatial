@@ -62,45 +62,112 @@ var rcs: Array = []        # petits propulseurs d'orientation : en plus { axe (0
 # =====================================================================
 # CRÉATION
 # =====================================================================
+## Les 4 ailes, comme dans le modèle 3D (modele3d/v12, nœuds Charniere_*). Chaque aile tourne autour
+## d'une charnière parallèle à l'axe avant-arrière, placée à 0,6 m du centre. L'angle (en degrés,
+## autour de l'axe Z du vaisseau) va de « replie » (ailes à plat, l'une sur l'autre) à « ouvert » (en X).
+## Les propulseurs posés sur une aile tournent avec elle : leur position est recalculée.
+const AILES := {
+	"haut_gauche": {"charniere": Vector3(-0.6, 0, 0), "ouvert": -22.249, "replie": 0.0},
+	"haut_droit": {"charniere": Vector3(0.6, 0, 0), "ouvert": 22.249, "replie": 0.0},
+	"bas_gauche": {"charniere": Vector3(-0.6, 0, 0), "ouvert": -157.751, "replie": -180.0},
+	"bas_droit": {"charniere": Vector3(0.6, 0, 0), "ouvert": 157.751, "replie": 180.0},
+}
+const DUREE_AILES := 2.5     # s pour ouvrir ou replier complètement les ailes (vérins)
+const DUREE_TRAIN := 3.0     # s pour sortir ou rentrer complètement le train
+const HAUTEUR_TRAIN := 1.6   # m entre le centre du vaisseau et le sol, train sorti (modèle 3D)
+const HAUTEUR_VENTRE := 1.0  # m entre le centre et le dessous de la coque, train rentré
+
+var ailes := 1.0             # ouverture des ailes : 0 = repliées, 1 = ouvertes
+var ailes_consigne := 1.0
+var train := 0.0             # train d'atterrissage : 0 = rentré, 1 = sorti
+var train_consigne := 0.0
+
+
 func _init() -> void:
 	# 5 moteurs arrière : 4 sur les ailes + 1 central. Ils poussent tous vers l'avant (-Z).
+	# Positions prises sur le modèle 3D (points Point_moteur_*), mesurées dans le repère de la charnière.
 	var avant := Vector3(0, 0, -1)
-	_ajouter_moteur("haut gauche", Vector3(-2.8, 0.9, 4.0), avant, POUSSEE_MOTEUR)
-	_ajouter_moteur("haut droit", Vector3(2.8, 0.9, 4.0), avant, POUSSEE_MOTEUR)
-	_ajouter_moteur("bas gauche", Vector3(-2.8, -0.9, 4.0), avant, POUSSEE_MOTEUR)
-	_ajouter_moteur("bas droit", Vector3(2.8, -0.9, 4.0), avant, POUSSEE_MOTEUR)
-	_ajouter_moteur("central", Vector3(0.0, 0.0, 4.4), avant, POUSSEE_MOTEUR)
+	_ajouter_moteur("haut gauche", Vector3(-1.12, 0, 4.0), avant, POUSSEE_MOTEUR, "haut_gauche")
+	_ajouter_moteur("haut droit", Vector3(1.12, 0, 4.0), avant, POUSSEE_MOTEUR, "haut_droit")
+	_ajouter_moteur("bas gauche", Vector3(1.12, 0, 4.0), avant, POUSSEE_MOTEUR, "bas_gauche")
+	_ajouter_moteur("bas droit", Vector3(-1.12, 0, 4.0), avant, POUSSEE_MOTEUR, "bas_droit")
+	_ajouter_moteur("central", Vector3(0.0, 0.0, 4.4), avant, POUSSEE_MOTEUR, "")
 
-	# Propulseurs d'orientation, par paires opposées : ils font tourner sans faire avancer.
-	var nez := Vector3(0, 0, -6.0)
-	var queue := Vector3(0, 0, 5.0)
-	var aile_g := Vector3(-5.5, 0, 0)
-	var aile_d := Vector3(5.5, 0, 0)
+	# Propulseurs d'orientation (points Point_rcs_* du modèle), par paires opposées : ils font tourner
+	# sans faire avancer. Un propulseur placé en haut du nez souffle vers le haut, donc il pousse
+	# le nez vers le BAS (action-réaction).
 	var p := POUSSEE_RCS
+	var nez_haut := Vector3(0, 0.2, -5.2)
+	var nez_bas := Vector3(0, -0.26, -5.2)
+	var nez_gauche := Vector3(-0.29, 0, -5.2)
+	var nez_droit := Vector3(0.29, 0, -5.2)
+	var queue_haut := Vector3(0, 1.01, 4.0)
+	var queue_bas := Vector3(0, -1.01, 4.0)
+	var queue_gauche := Vector3(-0.91, 0, 4.0)
+	var queue_droit := Vector3(0.91, 0, 4.0)
 	# tangage + = nez vers le haut
-	_ajouter_rcs(nez, Vector3.UP, p, 0, 1)
-	_ajouter_rcs(queue, Vector3.DOWN, p, 0, 1)
-	_ajouter_rcs(nez, Vector3.DOWN, p, 0, -1)
-	_ajouter_rcs(queue, Vector3.UP, p, 0, -1)
+	_ajouter_rcs("nez bas", nez_bas, Vector3.UP, p, 0, 1)
+	_ajouter_rcs("queue haut", queue_haut, Vector3.DOWN, p, 0, 1)
+	_ajouter_rcs("nez haut", nez_haut, Vector3.DOWN, p, 0, -1)
+	_ajouter_rcs("queue bas", queue_bas, Vector3.UP, p, 0, -1)
 	# lacet + = nez vers la gauche
-	_ajouter_rcs(nez, Vector3.LEFT, p, 1, 1)
-	_ajouter_rcs(queue, Vector3.RIGHT, p, 1, 1)
-	_ajouter_rcs(nez, Vector3.RIGHT, p, 1, -1)
-	_ajouter_rcs(queue, Vector3.LEFT, p, 1, -1)
-	# roulis + = vers la gauche
-	_ajouter_rcs(aile_g, Vector3.DOWN, p, 2, 1)
-	_ajouter_rcs(aile_d, Vector3.UP, p, 2, 1)
-	_ajouter_rcs(aile_g, Vector3.UP, p, 2, -1)
-	_ajouter_rcs(aile_d, Vector3.DOWN, p, 2, -1)
+	_ajouter_rcs("nez droit", nez_droit, Vector3.LEFT, p, 1, 1)
+	_ajouter_rcs("queue gauche", queue_gauche, Vector3.RIGHT, p, 1, 1)
+	_ajouter_rcs("nez gauche", nez_gauche, Vector3.RIGHT, p, 1, -1)
+	_ajouter_rcs("queue droit", queue_droit, Vector3.LEFT, p, 1, -1)
+	# roulis + = vers la gauche : un propulseur au bout de chaque aile, qui pousse perpendiculairement
+	# à l'aile. Les deux ailes opposées (haut droit + bas gauche) forment une paire.
+	var bout := Vector3(5.35, 0.24, 1.475)
+	var bout_m := Vector3(-5.35, 0.24, 1.475)
+	_ajouter_rcs("bout aile haut droit", bout, Vector3.UP, p, 2, 1, "haut_droit")
+	_ajouter_rcs("bout aile bas gauche", bout, Vector3.UP, p, 2, 1, "bas_gauche")
+	_ajouter_rcs("bout aile haut gauche", bout_m, Vector3.UP, p, 2, -1, "haut_gauche")
+	_ajouter_rcs("bout aile bas droit", bout_m, Vector3.UP, p, 2, -1, "bas_droit")
+	_placer_propulseurs_ailes()
 	_preparer_repartition()
 
 
-func _ajouter_moteur(nom: String, pos: Vector3, dir: Vector3, poussee: float) -> void:
-	moteurs.append({"nom": nom, "position": pos, "direction": dir, "poussee_max": poussee, "consigne": 0.0, "actuel": 0.0})
+## Pour un propulseur posé sur une aile, pos et dir sont donnés dans le repère de la charnière.
+func _ajouter_moteur(nom: String, pos: Vector3, dir: Vector3, poussee: float, aile: String) -> void:
+	moteurs.append({"nom": nom, "position": pos, "direction": dir, "poussee_max": poussee, "consigne": 0.0, "actuel": 0.0,
+		"aile": aile, "pos_aile": pos, "dir_aile": dir})
 
 
-func _ajouter_rcs(pos: Vector3, dir: Vector3, poussee: float, axe: int, signe: int) -> void:
-	rcs.append({"position": pos, "direction": dir, "poussee_max": poussee, "axe": axe, "signe": signe, "actuel": 0.0})
+func _ajouter_rcs(nom: String, pos: Vector3, dir: Vector3, poussee: float, axe: int, signe: int, aile := "") -> void:
+	rcs.append({"nom": nom, "position": pos, "direction": dir, "poussee_max": poussee, "axe": axe, "signe": signe, "actuel": 0.0,
+		"aile": aile, "pos_aile": pos, "dir_aile": dir})
+
+
+## Angle de la charnière d'une aile (degrés, autour de l'axe Z du vaisseau) pour l'ouverture actuelle.
+## Sert aussi à l'affichage : le modèle 3D et la physique tournent exactement pareil.
+func angle_aile(nom: String) -> float:
+	var a: Dictionary = AILES[nom]
+	return lerpf(float(a["replie"]), float(a["ouvert"]), ailes)
+
+
+## Recalcule la position et la direction des propulseurs posés sur les ailes.
+func _placer_propulseurs_ailes() -> void:
+	for t in moteurs + rcs:
+		var nom: String = t["aile"]
+		if nom == "":
+			continue
+		var rot := Basis(Vector3.BACK, deg_to_rad(angle_aile(nom)))
+		t["position"] = (AILES[nom]["charniere"] as Vector3) + rot * (t["pos_aile"] as Vector3)
+		t["direction"] = rot * (t["dir_aile"] as Vector3)
+
+
+func ouvrir_ailes(ouvrir: bool) -> void:
+	ailes_consigne = 1.0 if ouvrir else 0.0
+
+
+func sortir_train(sortir: bool) -> void:
+	train_consigne = 1.0 if sortir else 0.0
+
+
+## Distance entre le centre du vaisseau et ce qui touche le sol : les roues si le train est
+## complètement sorti, sinon le ventre de la coque.
+func hauteur_contact() -> float:
+	return HAUTEUR_TRAIN if train >= 1.0 else HAUTEUR_VENTRE
 
 # =====================================================================
 # COMMANDES
@@ -129,14 +196,17 @@ func _preparer_repartition() -> void:
 	poussee_avant_max = 0.0
 	for m in moteurs:
 		poussee_avant_max += float(m["poussee_max"]) * maxf(0.0, -(m["direction"] as Vector3).z)
-	# rotation maximale sur chaque axe : ce que les propulseurs d'orientation peuvent donner dans les deux sens
+	# rotation maximale sur chaque axe : ce que donnent les paires de propulseurs prévues pour cet axe,
+	# dans les deux sens. Chaque paire tourne sans pousser de côté : cette rotation est toujours possible.
 	var plus := Vector3.ZERO
 	var moins := Vector3.ZERO
 	for t in rcs:
-		var c: Vector3 = (t["position"] as Vector3).cross(t["direction"]) * float(t["poussee_max"])
-		for k in 3:
-			plus[k] += maxf(0.0, c[k])
-			moins[k] += maxf(0.0, -c[k])
+		var k: int = t["axe"]
+		var c: float = (t["position"] as Vector3).cross(t["direction"])[k] * float(t["poussee_max"])
+		if int(t["signe"]) > 0:
+			plus[k] += maxf(0.0, c)
+		else:
+			moins[k] += maxf(0.0, -c)
 	couple_max = Vector3(minf(plus.x, moins.x), minf(plus.y, moins.y), minf(plus.z, moins.z))
 	# échelle des forces : la plus petite poussée qui peut pousser de côté. Ainsi une erreur de force
 	# de quelques kN compte autant qu'une erreur de rotation : pas de déplacement parasite.
@@ -281,6 +351,16 @@ func pas(dt: float) -> void:
 	for m in moteurs:
 		m["actuel"] = float(m["actuel"]) + (float(m["consigne"]) - float(m["actuel"])) * k
 
+	# 1 bis. Les ailes et le train bougent à vitesse constante vers leur consigne. Les propulseurs
+	# des ailes tournent avec elles : le calcul des poussées est refait avec leurs nouvelles positions.
+	if ailes != ailes_consigne:
+		ailes = move_toward(ailes, ailes_consigne, dt / DUREE_AILES)
+		_placer_propulseurs_ailes()
+		_preparer_repartition()
+	# posé sur le ventre, le train ne peut pas sortir : le sol bloque les jambes (il peut rentrer)
+	if train != train_consigne and not (au_sol and train_consigne > train):
+		train = move_toward(train, train_consigne, dt / DUREE_TRAIN)
+
 	# 2. Somme des forces et des couples, dans le repère du vaisseau
 	var effet := effet_propulseurs()
 	var f_corps: Vector3 = effet[0]
@@ -372,15 +452,17 @@ func ordres_stabilisateur(duree_s: float) -> Vector3:
 
 func _contact_sol(dt: float, g: Array) -> void:
 	var r := sqrt(px * px + py * py + pz * pz)
-	if r >= rayon_planete:
+	# le centre du vaisseau reste au-dessus du sol de la hauteur des roues (ou du ventre, train rentré)
+	var r_sol := rayon_planete + hauteur_contact()
+	if r >= r_sol:
 		return
 	au_sol = true
 	var nx := px / r
 	var ny := py / r
 	var nz := pz / r
-	px = nx * rayon_planete
-	py = ny * rayon_planete
-	pz = nz * rayon_planete
+	px = nx * r_sol
+	py = ny * r_sol
+	pz = nz * r_sol
 	var vr := vx * nx + vy * ny + vz * nz
 	if vr < 0.0:
 		vitesse_impact = -vr
@@ -467,3 +549,10 @@ func placer_en_orbite(altitude_m: float) -> void:
 	for m in moteurs:
 		m["consigne"] = 0.0
 		m["actuel"] = 0.0
+	# ailes ouvertes, train rentré
+	ailes = 1.0
+	ailes_consigne = 1.0
+	train = 0.0
+	train_consigne = 0.0
+	_placer_propulseurs_ailes()
+	_preparer_repartition()
