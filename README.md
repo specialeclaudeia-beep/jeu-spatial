@@ -29,6 +29,8 @@ Moteur : Godot 4.7 (rendu Compatibilité). Dossier de référence du projet : `d
   certains poussent plus que d'autres. 12 petits propulseurs d'orientation (1,5 kN) pour tourner
   moteurs coupés (le roulis n'est possible qu'avec eux).
 - Gravité de Newton calculée en permanence (planète de test : 600 km de rayon, 9,81 m/s² au sol).
+- Gravité de plusieurs astres possible (somme des attractions) et petit couple dû au gradient de gravité :
+  laissé seul en orbite, le vaisseau se balance lentement autour de la direction de la planète.
 - Pas de carburant. Pas encore d'atmosphère (phase 4 de la feuille de route).
 - Marqueurs : (o) = direction où l'on va, (x) = direction d'où l'on vient.
 
