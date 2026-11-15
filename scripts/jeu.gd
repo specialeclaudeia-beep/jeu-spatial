@@ -23,6 +23,12 @@ const ALTITUDE_CALOTTE := 60000.0        # en dessous, on dessine une calotte d�
 const DIRECTION_SOLEIL := Vector3(0.8, 0.3, 0.5)
 const OEIL_PILOTE := Vector3(0.0, 0.55, -2.4)
 const ACCELERATIONS_TEMPS := [1, 10, 100, 1000]
+# tête du pilote (stick droit) : ne touche qu'à la caméra, jamais au vaisseau
+const TETE_VITESSE := 2.5                     # rad/s quand le stick est poussé à fond (environ 140°/s)
+const TETE_LACET_MAX := deg_to_rad(130.0)     # jusqu'où on peut tourner la tête à gauche / à droite
+const TETE_HAUT_MAX := deg_to_rad(80.0)
+const TETE_BAS_MAX := deg_to_rad(50.0)
+const TETE_RETOUR := 2.0                      # vitesse du retour doux vers l'avant, stick lâché
 
 # =====================================================================
 # ÉTAT
@@ -37,6 +43,7 @@ var ordres := Vector3.ZERO           # tangage, lacet, roulis demandés (-1..1)
 var commandes                        # touches du clavier et de la manette (modifiables, sauvegardées)
 var ecran_touches: Control = null    # écran de configuration, quand il est ouvert
 var image_fermeture := -1
+var tete := Vector2.ZERO             # x = tête levée / baissée, y = tête tournée à gauche / à droite (radians)
 
 # calotte détaillée
 var calotte_dir := Vector3.ZERO
@@ -182,7 +189,7 @@ func _creer_hud() -> void:
 	aide.anchor_top = 1.0
 	aide.anchor_bottom = 1.0
 	aide.offset_left = 16
-	aide.offset_top = -170
+	aide.offset_top = -190
 	couche.add_child(aide)
 	_ecrire_aide()
 	message = _label(28, Color(1.0, 0.45, 0.4))
@@ -208,7 +215,24 @@ func _ecrire_aide() -> void:
 		+ "Roulis %s\n" % _paire("roulis_gauche", "roulis_droite")
 		+ "%s : stabilisateur   %s : pause   Temps : %s %s %s %s, ou %s / %s\n" % [c.resume("stabilisateur"), c.resume("pause"), c.resume("temps_x1"), c.resume("temps_x10"), c.resume("temps_x100"), c.resume("temps_x1000"), c.resume("temps_moins"), c.resume("temps_plus")]
 		+ "%s : remettre en orbite   %s : recommencer   %s : tests   %s : cacher l'aide\n" % [c.resume("remettre_orbite"), c.resume("recommencer"), c.resume("tests"), c.resume("aide")]
+		+ "Tourner la tête : %s   %s : regarder droit devant\n" % [_aide_tete(), c.resume("regard_centre")]
 		+ "%s : configurer les commandes (clavier et manette)" % c.resume("ecran_touches"))
+
+## « stick droit » si les 4 directions de la tête sont sur le stick droit, sinon la liste.
+func _aide_tete() -> String:
+	var noms := ["regard_gauche", "regard_droite", "regard_haut", "regard_bas"]
+	var tout_stick_droit := true
+	for n in noms:
+		var m: String = commandes.liaisons[n]["manette"]
+		if not (m.begins_with("a:%d:" % JOY_AXIS_RIGHT_X) or m.begins_with("a:%d:" % JOY_AXIS_RIGHT_Y)):
+			tout_stick_droit = false
+	if tout_stick_droit and noms.all(func(n): return commandes.liaisons[n]["clavier"] == ""):
+		return "stick droit"
+	var morceaux := PackedStringArray()
+	for n in noms:
+		morceaux.append(commandes.resume(n))
+	return ", ".join(morceaux)
+
 
 ## « Flèche haut / Flèche bas (manette : Stick gauche ↑ haut / Stick gauche ↓ bas) »
 func _paire(a: String, b: String) -> String:
@@ -264,6 +288,22 @@ func _fermer_ecran_touches() -> void:
 	_ecrire_aide()
 
 
+## Tourner la tête dans le cockpit (stick droit). Stick lâché : la tête revient doucement droit devant.
+func _bouger_tete(delta: float) -> void:
+	if ecran_touches != null:
+		return
+	if Input.is_action_just_pressed("regard_centre"):
+		tete = Vector2.ZERO
+	var dx := Input.get_axis("regard_bas", "regard_haut")
+	var dy := Input.get_axis("regard_droite", "regard_gauche")
+	if dx == 0.0 and dy == 0.0:
+		tete = tete.lerp(Vector2.ZERO, minf(1.0, TETE_RETOUR * delta))
+	else:
+		tete.x = clampf(tete.x + dx * TETE_VITESSE * delta, -TETE_BAS_MAX, TETE_HAUT_MAX)
+		tete.y = clampf(tete.y + dy * TETE_VITESSE * delta, -TETE_LACET_MAX, TETE_LACET_MAX)
+	camera.rotation = Vector3(tete.x, tete.y, 0.0)
+
+
 ## Lit le clavier et la manette. Sticks et gâchettes sont analogiques : à moitié = la moitié.
 func _lire_ordres(delta: float) -> void:
 	var t := Input.get_axis("tangage_bas", "tangage_haut")
@@ -300,8 +340,9 @@ func _physics_process(delta: float) -> void:
 # =====================================================================
 # AFFICHAGE
 # =====================================================================
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	_lire_boutons()
+	_bouger_tete(delta)
 	pilote.basis = Basis(vaisseau.orientation)
 	_placer_planete()
 	_mettre_a_jour_hud()

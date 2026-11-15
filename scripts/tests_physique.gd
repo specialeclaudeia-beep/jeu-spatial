@@ -345,7 +345,7 @@ func _tests_commandes() -> void:
 	var chemin := "user://essai_commandes.cfg"
 	c = Commandes.new()
 	var perdu: String = c.assigner("tangage_haut", "clavier", "l:%d" % KEY_Z)   # Z servait à « Plus de poussée »
-	c.assigner("lacet_gauche", "manette", "b:%d" % JOY_BUTTON_LEFT_SHOULDER)   # L1 servait à « Temps moins rapide »
+	c.assigner("lacet_gauche", "manette", "b:%d" % JOY_BUTTON_DPAD_LEFT)   # servait à « Temps moins rapide »
 	var ok_sauve: bool = c.sauvegarder(chemin)
 	var c2 = Commandes.new()
 	var ok_charge: bool = c2.charger(chemin)
@@ -353,10 +353,26 @@ func _tests_commandes() -> void:
 	var identiques: bool = JSON.stringify(c.liaisons) == JSON.stringify(c2.liaisons)
 	var ok18: bool = ok_sauve and ok_charge and identiques and perdu == "Plus de poussée" \
 		and c2.liaisons["gaz_plus"]["clavier"] == "" and c2.liaisons["temps_moins"]["manette"] == "" \
-		and c2.liaisons["lacet_gauche"]["manette"] == "b:%d" % JOY_BUTTON_LEFT_SHOULDER
+		and c2.liaisons["lacet_gauche"]["manette"] == "b:%d" % JOY_BUTTON_DPAD_LEFT
 	_resultat(ok18, "Commandes : changement et sauvegarde",
-		"Z donné au tangage (retiré de « %s »), L1 donné au lacet. Sauvegarde %s, relecture %s, réglages identiques : %s." % [
+		"Z donné au tangage (retiré de « %s »), croix directionnelle gauche donnée au lacet. Sauvegarde %s, relecture %s, réglages identiques : %s." % [
 			perdu, "réussie" if ok_sauve else "RATÉE", "réussie" if ok_charge else "RATÉE", "oui" if identiques else "NON"])
+
+	# 19. Une sauvegarde de l'ancienne disposition (sans numéro de version) est ignorée,
+	#     pour ne pas garder le lacet sur le stick droit qui sert maintenant à tourner la tête
+	var ancien := ConfigFile.new()
+	ancien.set_value("lacet_gauche", "manette", "a:2:-1")
+	ancien.save(chemin)
+	var c3 = Commandes.new()
+	var charge_ancien: bool = c3.charger(chemin)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(chemin))
+	var ok19: bool = not charge_ancien and c3.liaisons["lacet_gauche"]["manette"] == "b:%d" % JOY_BUTTON_LEFT_SHOULDER \
+		and c3.liaisons["regard_gauche"]["manette"] == "a:%d:-1" % JOY_AXIS_RIGHT_X \
+		and c3.liaisons["roulis_gauche"]["manette"] == "a:%d:-1" % JOY_AXIS_LEFT_X
+	_resultat(ok19, "Commandes : nouvelle disposition manette",
+		"Stick gauche : tangage + roulis. L1 / R1 : lacet (%s). Stick droit : la tête (%s). Ancienne sauvegarde ignorée : %s." % [
+			Commandes.nom_lisible(c3.liaisons["lacet_gauche"]["manette"]), Commandes.nom_lisible(c3.liaisons["regard_gauche"]["manette"]),
+			"oui" if not charge_ancien else "NON"])
 
 	# on remet les commandes du joueur (celles de sa sauvegarde) pour le retour au jeu
 	c = Commandes.new()

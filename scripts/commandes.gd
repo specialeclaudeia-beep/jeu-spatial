@@ -16,6 +16,9 @@ extends RefCounted
 ##   ""         rien
 
 const FICHIER := "user://commandes.cfg"
+## Numéro de la disposition par défaut. Quand il change (nouvelle disposition proposée),
+## une sauvegarde plus ancienne est ignorée, pour ne pas mélanger l'ancienne et la nouvelle.
+const VERSION_DISPOSITION := 2
 const ZONE_MORTE := 0.1        # au repos, un stick n'est jamais pile au centre : en dessous de 10 %, on ignore
 const SEUIL_CAPTURE := 0.6     # pour choisir un stick dans l'écran, il faut le pousser franchement
 
@@ -27,8 +30,8 @@ const ACTIONS := [
 	["couper_gaz", "Couper la poussée", "l:32", "b:0"],               # Espace, Croix
 	["tangage_haut", "Tangage : nez en haut", "p:4194320", "a:1:-1"], # flèche haut, stick gauche haut
 	["tangage_bas", "Tangage : nez en bas", "p:4194322", "a:1:1"],    # flèche bas, stick gauche bas
-	["lacet_gauche", "Lacet : tourner à gauche", "l:81", "a:2:-1"],   # Q, stick droit gauche
-	["lacet_droite", "Lacet : tourner à droite", "l:68", "a:2:1"],    # D, stick droit droite
+	["lacet_gauche", "Lacet : tourner à gauche", "l:81", "b:9"],      # Q, L1
+	["lacet_droite", "Lacet : tourner à droite", "l:68", "b:10"],     # D, R1
 	["roulis_gauche", "Roulis : pencher à gauche", "l:65", "a:0:-1"], # A, stick gauche gauche
 	["roulis_droite", "Roulis : pencher à droite", "l:69", "a:0:1"],  # E, stick gauche droite
 	["stabilisateur", "Stabilisateur de rotation", "l:84", "b:3"],   # T, Triangle
@@ -40,21 +43,27 @@ const ACTIONS := [
 	["temps_x10", "Temps x10", "p:50", ""],                           # 2
 	["temps_x100", "Temps x100", "p:51", ""],                         # 3
 	["temps_x1000", "Temps x1000", "p:52", ""],                       # 4
-	["temps_moins", "Temps moins rapide", "", "b:9"],                 # L1
-	["temps_plus", "Temps plus rapide", "", "b:10"],                  # R1
+	["temps_moins", "Temps moins rapide", "", "b:13"],                # croix directionnelle gauche
+	["temps_plus", "Temps plus rapide", "", "b:14"],                  # croix directionnelle droite
+	["regard_gauche", "Tourner la tête à gauche", "", "a:2:-1"],      # stick droit gauche
+	["regard_droite", "Tourner la tête à droite", "", "a:2:1"],       # stick droit droite
+	["regard_haut", "Lever la tête", "", "a:3:-1"],                   # stick droit haut
+	["regard_bas", "Baisser la tête", "", "a:3:1"],                   # stick droit bas
+	["regard_centre", "Regarder droit devant", "l:67", "b:8"],        # C, R3
 	["tests", "Tests de physique", "p:4194332", ""],                  # F1
 	["ecran_touches", "Configurer les commandes", "p:4194333", "b:6"], # F2, Options
 ]
 
 ## Actions qui varient en douceur (sticks, gâchettes) : les autres sont de simples appuis.
 const ANALOGIQUES := ["gaz_plus", "gaz_moins", "tangage_haut", "tangage_bas",
-	"lacet_gauche", "lacet_droite", "roulis_gauche", "roulis_droite"]
+	"lacet_gauche", "lacet_droite", "roulis_gauche", "roulis_droite",
+	"regard_gauche", "regard_droite", "regard_haut", "regard_bas"]
 
 const NOMS_BOUTONS := {
 	0: "Croix", 1: "Rond", 2: "Carré", 3: "Triangle", 4: "Créer", 5: "PS", 6: "Options",
-	7: "L3 (stick gauche enfoncé)", 8: "R3 (stick droit enfoncé)", 9: "L1", 10: "R1",
-	11: "Croix directionnelle haut", 12: "Croix directionnelle bas",
-	13: "Croix directionnelle gauche", 14: "Croix directionnelle droite",
+	7: "L3", 8: "R3", 9: "L1", 10: "R1",
+	11: "Croix dir. ↑", 12: "Croix dir. ↓",
+	13: "Croix dir. ←", 14: "Croix dir. →",
 	15: "Micro", 20: "Pavé tactile",
 }
 
@@ -219,6 +228,7 @@ func appliquer() -> void:
 
 func sauvegarder(chemin := FICHIER) -> bool:
 	var f := ConfigFile.new()
+	f.set_value("general", "version", VERSION_DISPOSITION)
 	for nom in liaisons:
 		f.set_value(nom, "clavier", liaisons[nom]["clavier"])
 		f.set_value(nom, "manette", liaisons[nom]["manette"])
@@ -232,6 +242,8 @@ func charger(chemin := FICHIER) -> bool:
 	var f := ConfigFile.new()
 	if f.load(chemin) != OK:
 		return false
+	if f.get_value("general", "version", 1) != VERSION_DISPOSITION:
+		return false   # sauvegarde d'une ancienne disposition : on repart de la nouvelle
 	for nom in liaisons:
 		for genre in ["clavier", "manette"]:
 			var code = f.get_value(nom, genre, liaisons[nom][genre])

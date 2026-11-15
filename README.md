@@ -22,13 +22,15 @@ Disposition par défaut :
 | plus / moins de poussée | Z / S | R2 / L2 |
 | couper la poussée | Espace | Croix |
 | tangage (nez en haut / en bas) | flèches haut / bas | stick gauche haut / bas |
-| lacet (nez à gauche / à droite) | Q / D | stick droit gauche / droite |
+| lacet (nez à gauche / à droite) | Q / D | L1 / R1 |
 | roulis (pencher à gauche / à droite) | A / E | stick gauche gauche / droite |
 | stabilisateur de rotation | T | Triangle |
 | pause | P | Carré |
 | cacher / montrer l'aide | H | Rond |
 | recommencer / remettre en orbite | R / O | Créer |
-| temps ×1, ×10, ×100, ×1000 | 1 2 3 4 | L1 / R1 (moins / plus vite) |
+| temps ×1, ×10, ×100, ×1000 | 1 2 3 4 | croix directionnelle gauche / droite (moins / plus vite) |
+| tourner la tête (le vaisseau ne bouge pas) | — | stick droit (lâché : la tête revient devant) |
+| regarder droit devant | C | R3 (enfoncer le stick droit) |
 | tests de physique | F1 (Échap pour revenir) | Rond pour revenir |
 | configurer les commandes | F2 | Options |
 
