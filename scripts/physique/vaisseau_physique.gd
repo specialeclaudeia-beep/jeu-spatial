@@ -24,6 +24,8 @@ const G0 := 9.80665  # pour exprimer les accélérations en « g »
 var masse := 10000.0                                   # kg
 var inertie := Vector3(133000.0, 160000.0, 33000.0)    # kg·m² : tangage (X), lacet (Y), roulis (Z)
 var reactivite_moteurs := 0.3                          # secondes pour que la poussée suive la consigne
+const POUSSEE_MOTEUR := 200000.0   # N, chacun des 5 moteurs arrière (seul, il pousse 2 fois le poids de 10 t)
+const POUSSEE_RCS := 6000.0        # N, chacun des 12 propulseurs d'orientation
 
 # =====================================================================
 # ÉTAT
@@ -63,18 +65,18 @@ var rcs: Array = []        # petits propulseurs d'orientation : en plus { axe (0
 func _init() -> void:
 	# 5 moteurs arrière : 4 sur les ailes + 1 central. Ils poussent tous vers l'avant (-Z).
 	var avant := Vector3(0, 0, -1)
-	_ajouter_moteur("haut gauche", Vector3(-2.8, 0.9, 4.0), avant, 40000.0)
-	_ajouter_moteur("haut droit", Vector3(2.8, 0.9, 4.0), avant, 40000.0)
-	_ajouter_moteur("bas gauche", Vector3(-2.8, -0.9, 4.0), avant, 40000.0)
-	_ajouter_moteur("bas droit", Vector3(2.8, -0.9, 4.0), avant, 40000.0)
-	_ajouter_moteur("central", Vector3(0.0, 0.0, 4.4), avant, 40000.0)
+	_ajouter_moteur("haut gauche", Vector3(-2.8, 0.9, 4.0), avant, POUSSEE_MOTEUR)
+	_ajouter_moteur("haut droit", Vector3(2.8, 0.9, 4.0), avant, POUSSEE_MOTEUR)
+	_ajouter_moteur("bas gauche", Vector3(-2.8, -0.9, 4.0), avant, POUSSEE_MOTEUR)
+	_ajouter_moteur("bas droit", Vector3(2.8, -0.9, 4.0), avant, POUSSEE_MOTEUR)
+	_ajouter_moteur("central", Vector3(0.0, 0.0, 4.4), avant, POUSSEE_MOTEUR)
 
 	# Propulseurs d'orientation, par paires opposées : ils font tourner sans faire avancer.
 	var nez := Vector3(0, 0, -6.0)
 	var queue := Vector3(0, 0, 5.0)
 	var aile_g := Vector3(-5.5, 0, 0)
 	var aile_d := Vector3(5.5, 0, 0)
-	var p := 1500.0
+	var p := POUSSEE_RCS
 	# tangage + = nez vers le haut
 	_ajouter_rcs(nez, Vector3.UP, p, 0, 1)
 	_ajouter_rcs(queue, Vector3.DOWN, p, 0, 1)
@@ -90,6 +92,7 @@ func _init() -> void:
 	_ajouter_rcs(aile_d, Vector3.UP, p, 2, 1)
 	_ajouter_rcs(aile_g, Vector3.UP, p, 2, -1)
 	_ajouter_rcs(aile_d, Vector3.DOWN, p, 2, -1)
+	_preparer_repartition()
 
 
 func _ajouter_moteur(nom: String, pos: Vector3, dir: Vector3, poussee: float) -> void:
@@ -102,25 +105,106 @@ func _ajouter_rcs(pos: Vector3, dir: Vector3, poussee: float, axe: int, signe: i
 # =====================================================================
 # COMMANDES
 # =====================================================================
-## Règle la consigne des 5 moteurs à partir de la manette des gaz et des ordres de rotation.
-## Pour tourner, on augmente ou diminue la poussée de certains moteurs (le vrai couple vient
-## de leur position). Sans gaz, seuls les propulseurs d'orientation peuvent tourner le vaisseau.
+## Calcul automatique des poussées (idée reprise du module thrForceMapping de Basilisk, licence ISC,
+## réécrite et simplifiée). On donne ce qu'on veut obtenir :
+##   - une poussée vers l'avant (gaz, de 0 à 1),
+##   - une rotation sur chaque axe (tangage, lacet, roulis, de -1 à 1),
+## et le calcul cherche combien chaque propulseur (moteurs + propulseurs d'orientation) doit pousser
+## pour s'en approcher le plus possible, à partir de sa VRAIE position et de sa direction.
+## Chaque propulseur ne peut que pousser (jamais tirer) et jamais plus que sa puissance maximale.
+## Le vaisseau n'est jamais tourné directement : la rotation vient ensuite des forces (couple = position × force).
+var _tous: Array = []            # tous les propulseurs (moteurs puis propulseurs d'orientation)
+var _colonnes: Array = []        # effet de chacun à pleine puissance : [Fx, Fy, Fz, Cx, Cy, Cz], mis à l'échelle
+var _niveaux: PackedFloat64Array = PackedFloat64Array()   # niveaux calculés (0..1)
+var poussee_avant_max := 0.0     # N, somme des moteurs vers l'avant
+var couple_max := Vector3.ZERO   # N·m, rotation maximale demandée pour un ordre de 1 sur chaque axe
+var _echelle_force := 1.0
+const POIDS_ROTATION := 2.0      # la rotation compte plus que la poussée quand les deux ne sont pas possibles
+const SOBRIETE := 0.001          # à résultat égal : moteurs proches des gaz, petits propulseurs coupés
+const TOURS_CALCUL := 10         # nombre de passes du calcul (léger : environ 2 000 opérations)
+
+
+func _preparer_repartition() -> void:
+	_tous = moteurs + rcs
+	poussee_avant_max = 0.0
+	for m in moteurs:
+		poussee_avant_max += float(m["poussee_max"]) * maxf(0.0, -(m["direction"] as Vector3).z)
+	# rotation maximale sur chaque axe : ce que les propulseurs d'orientation peuvent donner dans les deux sens
+	var plus := Vector3.ZERO
+	var moins := Vector3.ZERO
+	for t in rcs:
+		var c: Vector3 = (t["position"] as Vector3).cross(t["direction"]) * float(t["poussee_max"])
+		for k in 3:
+			plus[k] += maxf(0.0, c[k])
+			moins[k] += maxf(0.0, -c[k])
+	couple_max = Vector3(minf(plus.x, moins.x), minf(plus.y, moins.y), minf(plus.z, moins.z))
+	# échelle des forces : la plus petite poussée qui peut pousser de côté. Ainsi une erreur de force
+	# de quelques kN compte autant qu'une erreur de rotation : pas de déplacement parasite.
+	var f_cote := INF
+	for t in _tous:
+		var d0: Vector3 = t["direction"]
+		if absf(d0.x) > 1e-6 or absf(d0.y) > 1e-6:
+			f_cote = minf(f_cote, float(t["poussee_max"]))
+	if f_cote == INF:
+		f_cote = poussee_avant_max
+	_echelle_force = f_cote
+	_colonnes.clear()
+	_niveaux.resize(_tous.size())
+	for i in _tous.size():
+		var t = _tous[i]
+		var f: Vector3 = (t["direction"] as Vector3) * float(t["poussee_max"])
+		var c2: Vector3 = (t["position"] as Vector3).cross(f)
+		_colonnes.append(PackedFloat64Array([
+			f.x / f_cote, f.y / f_cote, f.z / f_cote,
+			POIDS_ROTATION * c2.x / couple_max.x, POIDS_ROTATION * c2.y / couple_max.y, POIDS_ROTATION * c2.z / couple_max.z]))
+		_niveaux[i] = 0.0
+
+
 func commander(gaz: float, tangage: float, lacet: float, roulis: float) -> void:
 	gaz = clampf(gaz, 0.0, 1.0)
-	for m in moteurs:
-		var pos: Vector3 = m["position"]
-		var d := 0.0
-		# tangage + (nez en haut) : les moteurs du BAS poussent plus (couple = position × force)
-		if absf(pos.y) > 0.01:
-			d += tangage * -signf(pos.y)
-		# lacet + (nez à gauche) : les moteurs de DROITE poussent plus
-		if absf(pos.x) > 0.01:
-			d += lacet * signf(pos.x)
-		m["consigne"] = clampf(gaz * (1.0 + 0.6 * d), 0.0, 1.0)
-	var ordres := [tangage, lacet, roulis]
-	for t in rcs:
-		var o: float = ordres[t["axe"]] * t["signe"]
-		t["actuel"] = clampf(o, 0.0, 1.0)
+	# objectif, dans la même échelle que les colonnes
+	var but := PackedFloat64Array([0.0, 0.0, -gaz * poussee_avant_max / _echelle_force,
+		POIDS_ROTATION * clampf(tangage, -1.0, 1.0),
+		POIDS_ROTATION * clampf(lacet, -1.0, 1.0),
+		POIDS_ROTATION * clampf(roulis, -1.0, 1.0)])
+	# point de départ (et solution préférée) : moteurs au niveau des gaz, petits propulseurs coupés
+	var n := _tous.size()
+	var prefere := PackedFloat64Array()
+	prefere.resize(n)
+	for i in n:
+		prefere[i] = gaz if i < moteurs.size() else 0.0
+		_niveaux[i] = prefere[i]
+	# écart actuel = effet des niveaux actuels − objectif
+	var ecart := PackedFloat64Array([-but[0], -but[1], -but[2], -but[3], -but[4], -but[5]])
+	for i in n:
+		var col: PackedFloat64Array = _colonnes[i]
+		for k in 6:
+			ecart[k] += col[k] * _niveaux[i]
+	# on ajuste chaque propulseur à tour de rôle (« descente par coordonnées »), dans les limites 0..1
+	for passe in TOURS_CALCUL:
+		for i in n:
+			var col: PackedFloat64Array = _colonnes[i]
+			var h := SOBRIETE
+			var g := SOBRIETE * (_niveaux[i] - prefere[i])
+			for k in 6:
+				h += col[k] * col[k]
+				g += col[k] * ecart[k]
+			var nouveau := clampf(_niveaux[i] - g / h, 0.0, 1.0)
+			var d := nouveau - _niveaux[i]
+			if d != 0.0:
+				for k in 6:
+					ecart[k] += col[k] * d
+				_niveaux[i] = nouveau
+	# les moteurs reçoivent une consigne (ils mettent un peu de temps à la suivre),
+	# les propulseurs d'orientation réagissent tout de suite
+	for i in n:
+		var niveau := _niveaux[i]
+		if niveau < 1e-6:
+			niveau = 0.0
+		if i < moteurs.size():
+			_tous[i]["consigne"] = niveau
+		else:
+			_tous[i]["actuel"] = niveau
 
 func ajouter_astre(nom: String, gm_astre: float, x: float, y: float, z: float) -> void:
 	autres_astres.append({"nom": nom, "gm": gm_astre, "x": x, "y": y, "z": z})
@@ -177,6 +261,19 @@ func couple_gravite() -> Vector3:
 	return c
 
 
+## Force totale et couple total donnés par les propulseurs (repère du vaisseau) : [force, couple].
+func effet_propulseurs() -> Array:
+	var f_corps := Vector3.ZERO
+	var couple := Vector3.ZERO
+	for t in _tous:
+		var niveau := float(t["actuel"])
+		if niveau > 0.0:
+			var f: Vector3 = t["direction"] * (float(t["poussee_max"]) * niveau)
+			f_corps += f
+			couple += (t["position"] as Vector3).cross(f)
+	return [f_corps, couple]
+
+
 ## Avance la simulation de dt secondes.
 func pas(dt: float) -> void:
 	# 1. Les moteurs suivent leur consigne avec un petit temps de réponse
@@ -185,17 +282,9 @@ func pas(dt: float) -> void:
 		m["actuel"] = float(m["actuel"]) + (float(m["consigne"]) - float(m["actuel"])) * k
 
 	# 2. Somme des forces et des couples, dans le repère du vaisseau
-	var f_corps := Vector3.ZERO
-	var couple := Vector3.ZERO
-	for m in moteurs:
-		var f: Vector3 = m["direction"] * (float(m["poussee_max"]) * float(m["actuel"]))
-		f_corps += f
-		couple += (m["position"] as Vector3).cross(f)
-	for t in rcs:
-		if float(t["actuel"]) > 0.0:
-			var f2: Vector3 = t["direction"] * (float(t["poussee_max"]) * float(t["actuel"]))
-			f_corps += f2
-			couple += (t["position"] as Vector3).cross(f2)
+	var effet := effet_propulseurs()
+	var f_corps: Vector3 = effet[0]
+	var couple: Vector3 = effet[1]
 	# le gradient de gravité ajoute son propre petit couple
 	couple_gravite_actuel = couple_gravite()
 	couple += couple_gravite_actuel
