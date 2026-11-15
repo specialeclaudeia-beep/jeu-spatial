@@ -88,10 +88,11 @@ func _lancer() -> void:
 	v.moteurs[1]["consigne"] = 1.0
 	for i in 24:
 		v.pas(1.0 / 120.0)
-	# couple = position × force : bras de levier 0,9 m en hauteur et 2,8 m en largeur, pendant 0,2 s
+	# couple = position × force : bras de levier = hauteur et largeur du moteur, pendant 0,2 s
 	var f3: float = v.moteurs[1]["poussee_max"]
-	var attendu_x: float = -0.9 * f3 * 0.2 / v.inertie.x
-	var attendu_y: float = 2.8 * f3 * 0.2 / v.inertie.y
+	var pos3: Vector3 = v.moteurs[1]["position"]
+	var attendu_x: float = -pos3.y * f3 * 0.2 / v.inertie.x
+	var attendu_y: float = pos3.x * f3 * 0.2 / v.inertie.y
 	var att3v: float = f3 / v.masse * 0.2
 	var w: Vector3 = v.omega
 	var ok3: bool = absf(w.x - attendu_x) < 0.05 * absf(attendu_x) and absf(w.y - attendu_y) < 0.05 * attendu_y and absf(v.vitesse() - att3v) < 0.05 * att3v
@@ -151,8 +152,8 @@ func _lancer() -> void:
 	for i in 240:
 		v.pas(1.0 / 120.0)
 	var att7: float = v.couple_max.z * 2.0 / v.inertie.z
-	_resultat(absf(v.omega.z - att7) < 0.03 * att7 and v.vitesse() < 1e-6, "Propulseurs d'orientation (roulis)",
-		"2 s de roulis : %.3f rad/s (attendu %.3f), vitesse %.9f m/s (attendu 0 : les forces s'annulent)." % [v.omega.z, att7, v.vitesse()])
+	_resultat(absf(v.omega.z - att7) < 0.03 * att7 and v.vitesse() < 1e-3, "Propulseurs d'orientation (roulis)",
+		"2 s de roulis : %.3f rad/s (attendu %.3f), vitesse %.6f m/s (attendu ≈ 0 : les forces s'annulent, à moins de 6 N près)." % [v.omega.z, att7, v.vitesse()])
 
 	# 8. Chute libre près du sol
 	v = _nouveau(true)
@@ -273,6 +274,7 @@ func _lancer() -> void:
 
 	_tests_position_valide()
 	_tests_commandes()
+	_tests_modele_v12()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
@@ -350,6 +352,87 @@ func _tests_position_valide() -> void:
 	_resultat(valide and v.omega.length() < 1e-3,
 		"Stabilisateur en temps ×1000",
 		"Rotation de départ 0,37 rad/s ; après 5 s réelles : %.6f rad/s (attendu ≈ 0), position valide." % v.omega.length())
+
+
+# =====================================================================
+# TESTS DU MODÈLE 3D : PROPULSEURS, AILES, TRAIN
+# =====================================================================
+func _tests_modele_v12() -> void:
+	# 23. Les propulseurs de la physique sont exactement là où le modèle 3D les dessine
+	#     (fichier positions_tuyeres_godot.json exporté de Blender, ailes ouvertes)
+	var v = _nouveau(false)
+	var f := FileAccess.open("res://modeles/vaisseau/positions_tuyeres_godot.json", FileAccess.READ)
+	var modele = JSON.parse_string(f.get_as_text()) if f != null else null
+	var ecart_max := INF
+	var manquants := PackedStringArray()
+	if modele is Dictionary:
+		ecart_max = 0.0
+		for t in v.moteurs + v.rcs:
+			var cle: String = ("moteur " if v.moteurs.has(t) else "rcs ") + String(t["nom"])
+			if not modele.has(cle):
+				manquants.append(cle)
+				continue
+			var p: Array = modele[cle]
+			ecart_max = maxf(ecart_max, ((t["position"] as Vector3) - Vector3(p[0], p[1], p[2])).length())
+	_resultat(ecart_max < 0.005 and manquants.is_empty(), "Propulseurs alignés sur le modèle 3D",
+		"17 propulseurs comparés au modèle : plus grand écart %.4f m (attendu < 5 mm). Absents du modèle : %s." % [ecart_max, ", ".join(manquants) if manquants.size() else "aucun"])
+
+	# 24. Les ailes se replient à vitesse constante, et les propulseurs des ailes suivent
+	v = _nouveau(false)
+	v.ouvrir_ailes(false)
+	for i in 120:
+		v.pas(1.0 / 120.0)
+	var a1: float = v.ailes
+	for i in 240:
+		v.pas(1.0 / 120.0)
+	var hauteur_moteurs := 0.0
+	for k in 4:
+		hauteur_moteurs = maxf(hauteur_moteurs, absf((v.moteurs[k]["position"] as Vector3).y))
+	var bout: Vector3 = v.rcs[8]["position"]
+	var att24: float = 1.0 - 1.0 / v.DUREE_AILES
+	var ok24: bool = absf(a1 - att24) < 0.01 and v.ailes == 0.0 and hauteur_moteurs < 1e-6 and absf(bout.x - 5.95) < 0.005 and absf(bout.y - 0.24) < 0.005
+	_resultat(ok24, "Ailes qui se replient",
+		"Ouverture après 1 s : %.2f (attendu %.2f), après 3 s : %.2f (attendu 0). Ailes repliées : moteurs d'aile à %.6f m de hauteur (attendu 0), bout d'aile en (%.2f ; %.2f)." % [a1, att24, v.ailes, hauteur_moteurs, bout.x, bout.y])
+
+	# 25. Ailes repliées : plein gaz tout droit sans tourner, et le roulis marche encore (sans déplacement)
+	v.commander(1.0, 0.0, 0.0, 0.0)
+	for m in v.moteurs:
+		m["actuel"] = m["consigne"]
+	var e25: Array = v.effet_propulseurs()
+	var c_gaz: Vector3 = e25[1]
+	var f_gaz: Vector3 = e25[0]
+	v.commander(0.0, 0.0, 0.0, 1.0)
+	for m in v.moteurs:
+		m["actuel"] = m["consigne"]
+	var e25b: Array = v.effet_propulseurs()
+	var c_roulis: Vector3 = e25b[1]
+	var f_roulis: Vector3 = e25b[0]
+	var ok25: bool = c_gaz.length() < 1.0 and -f_gaz.z > 0.99 * v.poussee_avant_max \
+		and absf(c_roulis.z - v.couple_max.z) < 0.01 * v.couple_max.z and f_roulis.length() < 1.0 and v.couple_max.z > 60000.0
+	_resultat(ok25, "Ailes repliées : poussée et roulis",
+		"Plein gaz : %.0f kN, couple parasite %.3f N·m (attendu 0). Roulis : %.0f N·m (ailes ouvertes : environ 70 800), force restante %.3f N (attendu 0)." % [-f_gaz.z / 1000.0, c_gaz.length(), c_roulis.z, f_roulis.length()])
+
+	# 26. Train d'atterrissage : posé sur les roues (1,6 m sous le centre), sinon sur le ventre
+	v = _nouveau(true)
+	v.sortir_train(true)
+	v.train = 1.0       # train déjà sorti avant de toucher le sol
+	v.px = R + 3.0
+	for i in 600:
+		v.pas(1.0 / 120.0)
+	var h_train: float = v.distance_centre() - R
+	var v2 = _nouveau(true)
+	v2.px = R + 3.0
+	for i in 600:
+		v2.pas(1.0 / 120.0)
+	var h_ventre: float = v2.distance_centre() - R
+	# posé sur le ventre, on demande le train : le sol l'empêche de sortir
+	v2.sortir_train(true)
+	for i in 480:
+		v2.pas(1.0 / 120.0)
+	var ok26: bool = v.train == 1.0 and v.au_sol and not v.ecrase and absf(h_train - v.HAUTEUR_TRAIN) < 1e-6 \
+		and v2.au_sol and absf(h_ventre - v2.HAUTEUR_VENTRE) < 1e-6 and v2.train == 0.0
+	_resultat(ok26, "Train d'atterrissage",
+		"Lâché à 3 m : train sorti, le centre reste à %.3f m du sol (roues, attendu 1,6) ; train rentré, %.3f m (ventre, attendu 1,0). Écrasé : %s. Posé sur le ventre, le train reste bloqué : %s." % [h_train, h_ventre, "oui" if v.ecrase else "non", "oui" if v2.train == 0.0 else "NON"])
 
 
 func _energie_rotation(v) -> float:

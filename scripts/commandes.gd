@@ -35,6 +35,9 @@ const ACTIONS := [
 	["roulis_gauche", "Roulis : pencher à gauche", "l:65", "a:0:-1"], # A, stick gauche gauche
 	["roulis_droite", "Roulis : pencher à droite", "l:69", "a:0:1"],  # E, stick gauche droite
 	["stabilisateur", "Stabilisateur de rotation", "l:84", "b:3"],   # T, Triangle
+	["ailes", "Ouvrir / replier les ailes", "l:88", "b:11"],         # X, croix directionnelle haut
+	["train", "Sortir / rentrer le train", "l:71", "b:12"],          # G, croix directionnelle bas
+	["vue", "Vue cockpit / extérieure", "l:86", "b:20"],             # V, pavé tactile
 	["pause", "Pause", "l:80", "b:2"],                                # P, Carré
 	["aide", "Cacher / montrer l'aide", "l:72", "b:1"],               # H, Rond
 	["recommencer", "Recommencer", "l:82", "b:4"],                    # R, Créer
