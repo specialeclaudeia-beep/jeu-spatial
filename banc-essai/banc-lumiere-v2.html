@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banc lumière v2</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #000; color: #dfe6f0; font: 13px/1.45 system-ui, "Segoe UI", sans-serif; overflow: hidden; }
+  #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+  #c:active { cursor: grabbing; }
+  .box { position: fixed; background: rgba(10,14,22,.86); border: 1px solid #243042; border-radius: 10px; padding: 10px 13px; }
+  #panel { top: 10px; left: 10px; width: 290px; max-height: calc(100% - 20px); overflow: auto; }
+  #hud { top: 10px; right: 10px; width: 310px; max-height: calc(100% - 20px); overflow: auto; }
+  h1 { font-size: 15px; margin: 0 0 4px; color: #fff; }
+  h2 { font-size: 12px; margin: 10px 0 4px; color: #8fb3ff; text-transform: uppercase; letter-spacing: .06em; }
+  label { display: block; margin: 4px 0; }
+  input[type=range] { width: 100%; }
+  select { width: 100%; background: #1c2535; color: #fff; border: 1px solid #334; border-radius: 6px; padding: 4px; font: inherit; }
+  .row { display: flex; justify-content: space-between; gap: 8px; }
+  .v { color: #fff; font-variant-numeric: tabular-nums; text-align: right; }
+  .muted { color: #8a96a8; font-size: 12px; }
+  button { background: #2b5cff; color: #fff; border: 0; border-radius: 8px; padding: 7px 10px; font: inherit; font-weight: 600; cursor: pointer; width: 100%; margin-top: 6px; }
+  button:hover { background: #3d6bff; }
+  button.sec { background: #263247; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 0 6px; }
+  #tests { left: 50%; top: 50%; transform: translate(-50%,-50%); width: min(720px, 94vw); max-height: 88vh; overflow: auto; display: none; z-index: 5; }
+  #tests.on { display: block; }
+  .t { border-top: 1px solid #243042; padding: 7px 0; }
+  .ok { color: #5fe08a; } .warn { color: #ffcc55; } .bad { color: #ff6b6b; }
+  .tag { position: fixed; bottom: 14px; padding: 4px 10px; border-radius: 6px; background: rgba(10,14,22,.8); border: 1px solid #243042; font-weight: 700; pointer-events: none; }
+  #tagA { left: calc(25% - 60px); } #tagB { left: calc(75% - 60px); }
+  #split { position: fixed; top: 0; bottom: 0; left: 50%; width: 1px; background: rgba(255,255,255,.35); pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="split"></div>
+<div id="tagA" class="tag">A : Soleil par rayon</div>
+<div id="tagB" class="tag">B : Soleil par pixel</div>
+
+<div id="panel" class="box">
+  <h1>Banc d'essai lumière — v2</h1>
+  <div class="muted">Glisser = tourner autour · Molette = monter / descendre</div>
+
+  <h2>Question 43 : comparer</h2>
+  <select id="view">
+    <option value="AB" selected>Côte à côte : A à gauche, B à droite</option>
+    <option value="A">A seul (lumière du Soleil calculée par rayon)</option>
+    <option value="B">B seul (lumière du Soleil calculée par pixel)</option>
+  </select>
+
+  <h2>Où on est</h2>
+  <label><div class="row"><span>Altitude</span><span class="v" id="altV"></span></div>
+    <input id="alt" type="range" min="-8.5" max="3" step="0.01" value="0.3"></label>
+  <label><div class="row"><span>Regard (bas → horizon)</span><span class="v" id="pitchV"></span></div>
+    <input id="pitch" type="range" min="0" max="85" step="1" value="0"></label>
+  <div class="two">
+    <button id="toSurface" class="sec">Près du sol</button>
+    <button id="toMm" class="sec">Au millimètre</button>
+    <button id="toEclipse" class="sec">Voir l'éclipse</button>
+    <button id="toSun" class="sec">Voir le Soleil</button>
+  </div>
+
+  <h2>Ta règle</h2>
+  <label><div class="row"><span>Taille d'un rayon (pixels)</span><span class="v" id="rayV"></span></div>
+    <input id="ray" type="range" min="2" max="30" step="1" value="8"></label>
+  <label><div class="row"><span>Luminosité F / F référence</span><span class="v" id="lumV"></span></div>
+    <input id="lum" type="range" min="0.25" max="16" step="0.25" value="4"></label>
+  <label><div class="row"><span>Fusion par ressemblance (seuil)</span><span class="v" id="simV"></span></div>
+    <input id="sim" type="range" min="0" max="8" step="0.5" value="2"></label>
+  <label><input id="fusion" type="checkbox" checked> Fusion progressive (graduation 0 → 1)</label>
+
+  <h2>Couleurs stables</h2>
+  <label><input id="smooth" type="checkbox" checked> Couleurs posées sur les coins</label>
+  <label><input id="marge" type="checkbox" checked> Marge : couper à 8 px, fusionner à 6 px</label>
+  <label><input id="glide" type="checkbox" checked> Un nouveau coin part de la couleur affichée</label>
+  <label><input id="dither" type="checkbox" checked> Tramage (contre les bandes)</label>
+  <label><input id="wire" type="checkbox"> Afficher les triangles</label>
+
+  <h2>Soleil et lune d'essai</h2>
+  <label><input id="sunMove" type="checkbox"> Le Soleil tourne</label>
+  <label><div class="row"><span>Position de la lune</span><span class="v" id="moonV"></span></div>
+    <input id="moon" type="range" min="0" max="360" step="0.1" value="120"></label>
+  <label><input id="moonMove" type="checkbox"> La lune tourne</label>
+
+  <button id="runTests">Lancer les tests</button>
+</div>
+
+<div id="hud" class="box">
+  <div class="row"><span>Mode</span><span class="v" id="mode"></span></div>
+  <div class="row"><span>Altitude</span><span class="v" id="altKm"></span></div>
+  <div class="row"><span>Taille de la planète à l'écran</span><span class="v" id="sizePx"></span></div>
+  <h2>Rayons (A | B)</h2>
+  <div class="row"><span>Triangles affichés</span><span class="v" id="cnt"></span></div>
+  <div class="row"><span>Niveau max (29 ≈ 1 mm)</span><span class="v" id="lvl"></span></div>
+  <div class="row"><span>Gardés entiers (ressemblance)</span><span class="v" id="simN"></span></div>
+  <div class="row"><span>Coupes / fusions à cette image</span><span class="v" id="chg"></span></div>
+  <div class="row"><span>Coins qui glissent</span><span class="v" id="gl"></span></div>
+  <div class="row"><span>Taille de rayon utilisée</span><span class="v" id="eff"></span></div>
+  <div class="row"><span>Rayons éteints (nuit)</span><span class="v" id="dark"></span></div>
+  <div class="row"><span>Temps de calcul</span><span class="v" id="ms"></span></div>
+  <div class="row"><span>Triangles en mémoire</span><span class="v" id="mem"></span></div>
+  <h2>Le cône</h2>
+  <div class="row"><span>d = N × D</span><span class="v" id="dCone"></span></div>
+  <div class="row"><span>d visible = d × √(F/Fréf)</span><span class="v" id="dVis"></span></div>
+  <div class="row"><span>Distance au centre</span><span class="v" id="dNow"></span></div>
+  <h2>Lumière</h2>
+  <div class="row"><span>Soleil dans le champ</span><span class="v" id="sunIn"></span></div>
+  <div class="row"><span>Éclat des étoiles</span><span class="v" id="starG"></span></div>
+  <div class="row"><span>Soleil caché par la lune (sous toi)</span><span class="v" id="ecl"></span></div>
+  <div class="muted">Planète de 600 km de rayon (R). D = 2R. Lune d'essai : 90 km de rayon, à 12 000 km.</div>
+</div>
+
+<div id="tests" class="box">
+  <h1>Résultats des tests</h1>
+  <div id="testOut" class="muted">…</div>
+  <button id="closeTests" class="sec">Fermer</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+// =====================================================================
+// CONSTANTES
+// =====================================================================
+const R = 1;                  // rayon de la planète (unité de calcul)
+const R_KM = 600;             // planète de test : 600 km
+const MAX_LEVEL = 29;         // niveau 29 ≈ 1 mm
+const BUDGET = 40000;         // triangles max par image et par version (PC modeste)
+const NEW_MAX = 2500;         // triangles neufs calculés au plus par image (pas de gel : le détail arrive en quelques images)
+const SAMPLE_DEPTH = 2;       // chaque rayon = fusion de 4^2 = 16 sous-rayons
+const SIM_MAX = 3;            // un triangle gardé entier par ressemblance ne dépasse pas 3 rayons
+const FOV = 60;
+const SUN_ANG = 0.00465;      // rayon apparent du vrai Soleil vu de la Terre (radians)
+const MOON_DIST = 20, MOON_R = 0.15;   // lune d'essai
+const RELIEF = 0.008;         // hauteur du relief (≈ 5 km), sert seulement à incliner le sol
+const GLIDE_T = 0.12;         // temps de glissement d'un nouveau coin (secondes)
+const BLACK = [0, 0, 0];
+
+// =====================================================================
+// PETITS OUTILS DE CALCUL (en 64 bits, nombres JavaScript)
+// =====================================================================
+const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const sub = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+const len = a => Math.hypot(a[0], a[1], a[2]);
+const norm = a => { const l = len(a); return [a[0]/l, a[1]/l, a[2]/l]; };
+const dist = (a, b) => Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
+const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
+const lerpN = (a, b, t) => a.map((v, i) => v + (b[i]-v)*t);
+const angle = (a, b) => Math.atan2(len(cross(a, b)), dot(a, b));   // précis même pour de tout petits angles
+const mid = (a, b) => norm([(a[0]+b[0])/2, (a[1]+b[1])/2, (a[2]+b[2])/2]);
+const lum = c => 0.2126*c[0] + 0.7152*c[1] + 0.0722*c[2];
+const toS = v => v <= 0.0031308 ? 12.92*v : 1.055*Math.pow(v, 1/2.4) - 0.055;   // linéaire → écran
+function triArea(a, b, c) {
+  // grand triangle : aire sur la sphère (Van Oosterom) ; petit triangle : aire plane (sinon la formule perd sa précision)
+  if (dist(a, b) < 1e-3) return 0.5 * len(cross(sub(b, a), sub(c, a)));
+  const num = Math.abs(dot(a, cross(b, c)));
+  const den = 1 + dot(a, b) + dot(b, c) + dot(c, a);
+  return 2 * Math.atan2(num, den);
+}
+
+// =====================================================================
+// RELIEF ET COULEURS PROCÉDURAUX (plus on descend, plus il y a de détails)
+// Le bruit donne aussi sa pente exacte : le sol a un vrai relief éclairé.
+// =====================================================================
+function hash3(x, y, z) {
+  let h = Math.imul(x|0, 0x8da6b343) ^ Math.imul(y|0, 0xd8163841) ^ Math.imul(z|0, 0xcb1ab31f);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
+  h ^= h >>> 15;
+  return (h >>> 0) / 4294967296;
+}
+const _g = [0, 0, 0, 0];
+function noise3g(x, y, z) {     // valeur + pente, dans _g
+  const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+  const fx = x-ix, fy = y-iy, fz = z-iz;
+  const ux = fx*fx*(3-2*fx), uy = fy*fy*(3-2*fy), uz = fz*fz*(3-2*fz);
+  const dx = 6*fx*(1-fx), dy = 6*fy*(1-fy), dz = 6*fz*(1-fz);
+  const a = hash3(ix,iy,iz), b = hash3(ix+1,iy,iz), c = hash3(ix,iy+1,iz), d = hash3(ix+1,iy+1,iz);
+  const e = hash3(ix,iy,iz+1), f = hash3(ix+1,iy,iz+1), g = hash3(ix,iy+1,iz+1), h = hash3(ix+1,iy+1,iz+1);
+  const k1 = b-a, k2 = c-a, k3 = e-a, k4 = a-b-c+d, k5 = a-c-e+g, k6 = a-b-e+f, k7 = -a+b+c-d+e-f-g+h;
+  _g[0] = (a + k1*ux + k2*uy + k3*uz + k4*ux*uy + k5*uy*uz + k6*uz*ux + k7*ux*uy*uz)*2 - 1;
+  _g[1] = 2*dx*(k1 + k4*uy + k6*uz + k7*uy*uz);
+  _g[2] = 2*dy*(k2 + k5*uz + k4*ux + k7*uz*ux);
+  _g[3] = 2*dz*(k3 + k6*ux + k5*uy + k7*ux*uy);
+}
+function fbm(x, y, z, oct, out) {   // somme d'octaves ; out = [valeur, pente x, y, z, grain]
+  let s = 0, gx = 0, gy = 0, gz = 0, a = 0.5, f = 1, t = 0;
+  for (let i = 0; i < oct; i++) {
+    noise3g(x*f, y*f, z*f);
+    s += a*_g[0]; gx += a*f*_g[1]; gy += a*f*_g[2]; gz += a*f*_g[3];
+    if (i >= 5) t += _g[0];              // « grain » : les petites octaves comptent toutes autant, à toutes les échelles
+    a *= 0.5; f *= 2.03;
+  }
+  out[0] = s; out[1] = gx; out[2] = gy; out[3] = gz; out[4] = oct > 5 ? t / Math.sqrt(oct - 5) : 0;
+}
+const octavesFor = level => Math.min(34, 3 + level);   // les détails plus fins qu'un sous-rayon sont filtrés
+const lin = c => c.map(v => Math.pow(v, 2.2));          // couleurs en lumière « linéaire » : moyennes justes
+const PAL = {
+  deep: lin([0.02,0.07,0.22]), shallow: lin([0.10,0.38,0.58]), sand: lin([0.78,0.72,0.52]),
+  grass: lin([0.27,0.50,0.18]), forest: lin([0.12,0.32,0.12]), desert: lin([0.82,0.64,0.40]),
+  rock: lin([0.46,0.40,0.33]), snow: lin([0.93,0.94,0.97]), ice: lin([0.86,0.91,0.96])
+};
+const _h = [0,0,0,0,0], _m = [0,0,0,0,0];
+// point de la surface → couleur (albédo) et direction du sol (normale)
+function surfaceAt(p, oct) {
+  const x = p[0], y = p[1], z = p[2];
+  fbm(x*1.6+11.3, y*1.6+2.7, z*1.6-5.1, oct, _h);
+  fbm(x*2.2-31.7, y*2.2+8.1, z*2.2+19.9, Math.min(oct, 6), _m);
+  const h = _h[0], m = _m[0], lat = Math.abs(y);
+  let al;
+  if (lat > 0.86 - h*0.25) al = PAL.ice;
+  else if (h < 0) al = lerpN(PAL.shallow, PAL.deep, Math.min(1, -h*4));
+  else if (h < 0.025) al = PAL.sand;
+  else if (h > 0.32) al = PAL.snow;
+  else if (h > 0.2) al = lerpN(PAL.rock, PAL.snow, (h-0.2)/0.12*0.3);
+  else if (m < -0.12 && lat < 0.55) al = PAL.desert;
+  else al = lerpN(PAL.grass, PAL.forest, clamp((m+0.1)*3, 0, 1));
+  if (_h[4] && h >= 0) { const k = 1 + 0.22 * clamp(_h[4], -1.5, 1.5); al = al.map(x => x * k); }   // grains, cailloux, rides
+  let n = p;
+  if (h > 0) {   // terre : le relief incline le sol (la mer reste plate)
+    const g = [_h[1]*1.6, _h[2]*1.6, _h[3]*1.6], gp = dot(g, p);
+    n = norm([x - RELIEF*(g[0]-gp*x), y - RELIEF*(g[1]-gp*y), z - RELIEF*(g[2]-gp*z)]);
+  }
+  return { al, n };
+}
+
+// =====================================================================
+// ÉCLIPSE AVEC PÉNOMBRE : part du disque du Soleil cachée par la lune
+// =====================================================================
+function diskOverlap(r1, r2, d) {         // aire commune de deux disques (rayons r1, r2, centres à d)
+  if (d >= r1 + r2) return 0;
+  if (d <= Math.abs(r1 - r2)) return Math.PI * Math.min(r1, r2) ** 2;
+  const a = r1*r1*Math.acos(clamp((d*d + r1*r1 - r2*r2) / (2*d*r1), -1, 1));
+  const b = r2*r2*Math.acos(clamp((d*d + r2*r2 - r1*r1) / (2*d*r2), -1, 1));
+  const c = 0.5*Math.sqrt(Math.max(0, (-d+r1+r2)*(d+r1-r2)*(d-r1+r2)*(d+r1+r2)));
+  return a + b - c;
+}
+function sunVis(p, L, M) {                // 1 = Soleil entier visible, 0 = entièrement caché
+  const m = sub(M, p), dm = len(m);
+  if (dot(m, L) <= 0) return 1;
+  const sep = angle(m, L), rm = Math.asin(Math.min(1, MOON_R / dm));
+  if (sep >= SUN_ANG + rm) return 1;
+  return 1 - diskOverlap(SUN_ANG, rm, sep) / (Math.PI * SUN_ANG * SUN_ANG);
+}
+
+// =====================================================================
+// LES COINS PARTAGÉS (un coin = un sommet commun à plusieurs triangles)
+// La couleur est posée sur les coins : deux triangles voisins ont exactement la même couleur au bord.
+// =====================================================================
+const VERTS = new Map();
+let vertexIds = 0;
+function vertex(p, from) {
+  const key = p[0] + ',' + p[1] + ',' + p[2];       // le milieu d'un bord est calculé pareil des deux côtés : même clé
+  let v = VERTS.get(key);
+  if (!v) {
+    v = { p, key, id: ++vertexIds, from, seen: 0,
+          A: { s: null, t: [0,0,0], n: 0, f: -1, last: -9 },
+          B: { s: null, t: [0,0,0,0,0,0], n: 0, f: -1, last: -9 } };
+    VERTS.set(key, v);
+  }
+  return v;
+}
+
+// =====================================================================
+// LA FRACTALE DE TRIANGLES (chaque triangle = un rayon, coupé en 4 enfants)
+// =====================================================================
+let nodeCount = 0, newSamples = 0;
+function subdivPts(a, b, c, depth, out) {
+  if (depth === 0) { out.push(norm([a[0]+b[0]+c[0], a[1]+b[1]+c[1], a[2]+b[2]+c[2]])); return; }
+  const ab = mid(a,b), bc = mid(b,c), ca = mid(c,a);
+  subdivPts(a, ab, ca, depth-1, out); subdivPts(ab, b, bc, depth-1, out);
+  subdivPts(ca, bc, c, depth-1, out); subdivPts(ab, bc, ca, depth-1, out);
+}
+// 16 couleurs sRGB : écart max entre la plus claire et la plus sombre, en niveaux d'écran (0-255)
+function range255(vals) {
+  let w = 0;
+  for (let ch = 0; ch < 3; ch++) {
+    let lo = 1e9, hi = -1e9;
+    for (const c of vals) { const s = toS(Math.max(0, c[ch])); if (s < lo) lo = s; if (s > hi) hi = s; }
+    w = Math.max(w, (hi - lo) * 255);
+  }
+  return w;
+}
+class Node {
+  constructor(va, vb, vc, level) {
+    this.va = va; this.vb = vb; this.vc = vc; this.level = level;
+    const a = va.p, b = vb.p, c = vc.p;
+    this.kids = null; this.samp = null; this.seen = 0;
+    this.cen = [(a[0]+b[0]+c[0])/3, (a[1]+b[1]+c[1])/3, (a[2]+b[2]+c[2])/3];
+    this.n = norm(this.cen);
+    this.r = Math.max(dist(this.cen,a), dist(this.cen,b), dist(this.cen,c));
+    this.edge = (dist(a,b) + dist(b,c) + dist(c,a)) / 3;
+    this.ang = Math.max(angle(this.n,a), angle(this.n,b), angle(this.n,c));
+    this.sag = 1 - Math.cos(this.ang);        // écart entre la sphère et le triangle plat
+    this.area = triArea(a, b, c);
+    this.eKey = -1; this.E = [0,0,0]; this.rA = 0;  // version A : lumière du Soleil déjà comprise
+    this.alb = null; this.nm = null; this.rB = 0;   // version B : couleur du sol + direction moyenne du sol
+    this.oA = false; this.oB = false;               // coupé à l'image précédente ? (pour la marge 8/6)
+    this.dF = -1; this.dC = null;
+    nodeCount++;
+  }
+  split() {
+    if (!this.kids) {
+      const A = this.va, B = this.vb, C = this.vc, L = this.level + 1;
+      const ab = vertex(mid(A.p, B.p), [A, B]), bc = vertex(mid(B.p, C.p), [B, C]), ca = vertex(mid(C.p, A.p), [C, A]);
+      this.kids = [new Node(A, ab, ca, L), new Node(ab, B, bc, L), new Node(ca, bc, C, L), new Node(ab, bc, ca, L)];
+    }
+    return this.kids;
+  }
+  // les 16 sous-rayons : position, couleur et direction du sol (ne dépendent pas du Soleil : gardés en mémoire)
+  samples() {
+    if (!this.samp) {
+      const pts = []; subdivPts(this.va.p, this.vb.p, this.vc.p, SAMPLE_DEPTH, pts);
+      const oct = octavesFor(this.level + SAMPLE_DEPTH);
+      this.samp = pts.map(p => { const s = surfaceAt(p, oct); return { p, al: s.al, n: s.n }; });
+      newSamples++;
+      // version B : moyenne des couleurs et moyenne (non ramenée à 1) des directions du sol.
+      // Une direction moyenne plus courte que 1 = un sol plus « rugueux » (l'étalement).
+      const k = this.samp.length; let al = [0,0,0], nm = [0,0,0];
+      for (const s of this.samp) for (let i = 0; i < 3; i++) { al[i] += s.al[i]/k; nm[i] += s.n[i]/k; }
+      this.alb = al; this.nm = nm;
+      let spread = 0; for (const s of this.samp) spread = Math.max(spread, dist(s.n, norm(nm)));
+      this.rB = Math.max(range255(this.samp.map(s => s.al)), spread * 255 * toS(lum(al)));   // écart de lumière que ferait la pente
+    }
+    return this.samp;
+  }
+  sampled() { return !!this.samp; }
+  // FUSION (version A) : énergie du rayon = moyenne des énergies de ses sous-rayons (couleur × Soleil × éclipse)
+  energy(L, M, key) {
+    if (this.eKey === key) return this.E;
+    const s = this.samples(), n = s.length; let r = 0, g = 0, b = 0; const vals = [];
+    for (const q of s) {
+      const k = Math.max(0, dot(q.n, L)) * sunVis(q.p, L, M);
+      const e = [q.al[0]*k, q.al[1]*k, q.al[2]*k]; vals.push(e);
+      r += e[0]; g += e[1]; b += e[2];
+    }
+    this.E = [r/n, g/n, b/n]; this.rA = range255(vals); this.eKey = key;
+    return this.E;
+  }
+  contains(p) {
+    const a = this.va.p, b = this.vb.p, c = this.vc.p, e = -1e-12;
+    return dot(cross(a,b), p) >= e && dot(cross(b,c), p) >= e && dot(cross(c,a), p) >= e;
+  }
+}
+// icosaèdre de départ : 20 triangles
+const BASE = (() => {
+  const t = (1 + Math.sqrt(5)) / 2;
+  const V = [[-1,t,0],[1,t,0],[-1,-t,0],[1,-t,0],[0,-1,t],[0,1,t],[0,-1,-t],[0,1,-t],[t,0,-1],[t,0,1],[-t,0,-1],[-t,0,1]].map(p => vertex(norm(p), null));
+  const F = [[0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],[1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+             [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],[4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]];
+  return F.map(([i,j,k]) => {
+    let a = V[i], b = V[j], c = V[k];
+    const nrm = cross(sub(b.p, a.p), sub(c.p, a.p));
+    if (dot(nrm, [a.p[0]+b.p[0]+c.p[0], a.p[1]+b.p[1]+c.p[1], a.p[2]+b.p[2]+c.p[2]]) < 0) [b, c] = [c, b];
+    return new Node(a, b, c, 0);
+  });
+})();
+// ménage : on oublie les triangles plus vus depuis longtemps (ils se recalculent depuis la graine)
+function prune(frame) {
+  const old = frame - 300;
+  const drop = n => { if (n.kids) for (const k of n.kids) drop(k); nodeCount--; };
+  const walk = n => {
+    if (!n.kids) return;
+    if (n.seen < old) { for (const k of n.kids) drop(k); n.kids = null; return; }
+    for (const k of n.kids) walk(k);
+  };
+  BASE.forEach(walk);
+  for (const [k, v] of VERTS) if (v.seen < old && v.from) VERTS.delete(k);
+}
+
+// =====================================================================
+// LA RÈGLE DU CÔNE : jusqu'où descendre dans la fractale
+// mode 'A' : le rayon porte la lumière du Soleil · mode 'B' : le rayon porte la couleur et la direction du sol,
+// la carte graphique ajoute le Soleil à chaque pixel.
+// =====================================================================
+let frameId = 0;
+const _sphere = new THREE.Sphere();
+function selectLOD(p) {
+  // p : { mode, cam, f, rayPx, fusion, marge, simThr, L, M, lKey, frustum, budget, newMax, mark, out }
+  const st = { count: 0, dark: 0, culled: 0, sim: 0, changes: 0, maxLevel: 0, frame: ++frameId, incomplete: false, over: false };
+  const out = p.out; out.length = 0;
+  const camLen = len(p.cam), camDir = p.cam.map(v => v/camLen);
+  const horizon = Math.acos(clamp(R/camLen, -1, 1));
+  const A = p.mode === 'A', oKey = A ? 'oA' : 'oB';
+  const startSamples = newSamples;
+
+  // ressemblance vérifiée sur deux étages : les 16 sous-rayons du triangle, puis ceux de ses 4 enfants
+  // (on voit ainsi un îlot ou un rocher plus petit qu'un sous-rayon avant de décider de garder le triangle entier)
+  function similar(node) {
+    if ((A ? node.rA : node.rB) >= p.simThr) return false;
+    const kids = node.split(), vals = [];
+    for (const k of kids) {
+      if (A) { vals.push(k.energy(p.L, p.M, p.lKey)); if (k.rA >= p.simThr) return false; }
+      else { k.samples(); vals.push(k.alb); if (k.rB >= p.simThr) return false; }
+    }
+    return range255(vals) < p.simThr;
+  }
+  function value(node) { return A ? node.energy(p.L, p.M, p.lKey) : (node.samples(), node.alb.concat(node.nm)); }
+  function emit(node, val, dark) {
+    out.push(node, val, dark); st.count++;
+    if (node.level > st.maxLevel) st.maxLevel = node.level;
+    if (p.mark) { node.dF = st.frame; node.dC = val; }
+  }
+  function visit(node, parentV, t) {
+    if (st.over) return;
+    node.seen = st.frame;
+    if (angle(node.n, camDir) - node.ang > horizon + 1e-12) { st.culled++; return; }   // derrière l'horizon
+    if (p.frustum) {                                                                 // hors du champ
+      _sphere.center.set(node.cen[0]-p.cam[0], node.cen[1]-p.cam[1], node.cen[2]-p.cam[2]); _sphere.radius = node.r;
+      if (!p.frustum.intersectsSphere(_sphere)) { st.culled++; return; }
+    }
+    // côté nuit (avec une marge pour les pentes) : aucun rayon activé, pas de détail
+    if (angle(node.n, p.L) - node.ang > Math.PI/2 + 0.2) { st.dark++; node[oKey] = false; emit(node, A ? BLACK : [0,0,0,0,0,0], true); return; }
+
+    const V = value(node);
+    const d = Math.max(1e-15, dist(p.cam, node.cen) - node.r);
+    const size = node.edge * p.f / d;                            // taille du rayon à l'écran, en pixels
+    if (st.count >= p.budget) { st.over = true; return; }
+    const limit = (p.marge && node[oKey]) ? p.rayPx * 0.75 : p.rayPx;   // marge : coupé à 8 px, refusionné sous 6 px
+    let cut = size > limit && node.level < MAX_LEVEL;
+    // FUSION PAR RESSEMBLANCE : si les 16 sous-rayons se ressemblent, le triangle reste entier
+    // (jusqu'à 4 rayons de large, et seulement si le triangle plat colle à la sphère à moins d'un demi-pixel)
+    if (cut && p.simThr > 0 && node.level >= 3 && size < p.rayPx * SIM_MAX && node.sag * p.f / d < 0.5
+        && similar(node)) { cut = false; st.sim++; }
+    // pas de gel : au-delà de newMax triangles neufs par image, la suite attend l'image d'après
+    if (cut && !node.split().every(k => k.sampled()) && newSamples - startSamples > p.newMax) { cut = false; st.incomplete = true; }
+    const shown = (p.fusion && parentV && t < 1) ? lerpN(parentV, V, t) : V;
+    if (cut) {
+      if (!node[oKey]) { node[oKey] = true; st.changes++; }
+      const ct = p.fusion ? clamp(size/p.rayPx - 1, 0, 1) : 1;  // graduation : les enfants partent de la couleur du parent
+      for (const k of node.kids) visit(k, shown, ct);
+      // COULEURS STABLES : le parent vaut exactement la moyenne de ses enfants (pondérée par la surface)
+      if (A && node.kids.every(k => k.eKey === p.lKey)) {
+        let w = 0; const e = [0,0,0];
+        for (const k of node.kids) { w += k.area; for (let i = 0; i < 3; i++) e[i] += k.E[i]*k.area; }
+        node.E = e.map(x => x/w);
+      } else if (!A && node.kids.every(k => k.sampled())) {
+        let w = 0; const al = [0,0,0], nm = [0,0,0];
+        for (const k of node.kids) { w += k.area; for (let i = 0; i < 3; i++) { al[i] += k.alb[i]*k.area; nm[i] += k.nm[i]*k.area; } }
+        node.alb = al.map(x => x/w); node.nm = nm.map(x => x/w);
+      }
+    } else {
+      if (node[oKey]) { node[oKey] = false; st.changes++; }
+      emit(node, shown, false);
+    }
+  }
+  for (const b of BASE) visit(b, null, 1);
+  st.newSamples = newSamples - startSamples;
+  return st;
+}
+// si l'écran demande trop de triangles pour le PC, on grossit un peu la taille d'un rayon partout (petits pas de 8 %)
+const lastEff = { A: 0, B: 0 };
+function selectAdaptive(p) {
+  let rp = Math.max(p.rayPx, lastEff[p.mode] / 1.08), st;
+  for (let i = 0; i < 40; i++) {
+    st = selectLOD({ ...p, rayPx: rp });
+    if (!st.over) break;
+    rp *= 1.08;
+  }
+  lastEff[p.mode] = rp; st.effRay = rp;
+  return st;
+}
+
+// =====================================================================
+// COULEURS DES COINS : moyenne des rayons qui touchent le coin, puis glissement doux
+// =====================================================================
+function cornerPass(mode, emitted, dt, frame, glide) {
+  const A = mode === 'A', w = A ? 3 : 6, touched = [];
+  for (let i = 0; i < emitted.length; i += 3) {
+    const node = emitted[i], val = emitted[i+1], dark = emitted[i+2];
+    for (const v of [node.va, node.vb, node.vc]) {
+      const s = v[mode];
+      if (s.f !== frame) { s.f = frame; s.n = 0; s.t.fill(0); touched.push(v); }
+      v.seen = frame;
+      if (!A && dark) continue;                 // version B : la nuit ne compte pas dans la couleur du sol
+      // mélange pondéré par la surface : un grand triangle uni garde sa couleur jusqu'à ses coins
+      const wt = node.area;
+      for (let j = 0; j < w; j++) s.t[j] += val[j] * wt;
+      s.n += wt;
+    }
+  }
+  const a = glide ? 1 - Math.exp(-dt / GLIDE_T) : 1;
+  let moving = 0, maxJump = 0;
+  for (const v of touched) {
+    const s = v[mode];
+    if (s.n > 0) for (let j = 0; j < w; j++) s.t[j] /= s.n;
+    const fresh = !s.s || s.last < frame - 2;   // coin neuf, ou pas affiché depuis un moment
+    if (fresh) {
+      // un nouveau coin part de la couleur déjà affichée à cet endroit (le milieu du bord du parent)
+      const start = glide ? shownFrom(v, mode, frame) : null;
+      s.s = (start || s.t).slice();
+      if (start) maxJump = Math.max(maxJump, Math.abs(lum(start) - lum(s.t)));
+    }
+    let dmax = 0;
+    for (let j = 0; j < w; j++) { const dd = (s.t[j] - s.s[j]) * a; s.s[j] += dd; dmax = Math.max(dmax, Math.abs(s.t[j] - s.s[j])); }
+    if (dmax > 1e-4) moving++;
+    s.last = frame;
+  }
+  return { moving, touched: touched.length, maxJump };
+}
+function shownFrom(v, mode, frame, depth = 0) {
+  if (!v.from || depth > 40) return null;
+  const [p, q] = v.from;
+  const sp = (p[mode].s && p[mode].last >= frame - 2) ? p[mode].s : shownFrom(p, mode, frame, depth+1);
+  const sq = (q[mode].s && q[mode].last >= frame - 2) ? q[mode].s : shownFrom(q, mode, frame, depth+1);
+  if (!sp || !sq) return null;
+  return sp.map((x, i) => (x + sq[i]) / 2);
+}
+
+// =====================================================================
+// AUTRES OUTILS
+// =====================================================================
+function findLandNear(L) {      // un endroit côté jour avec du relief et des contrastes
+  const u = norm(cross(L, [0,1,0])), v = cross(L, u);
+  let best = L, bestScore = -1;
+  for (let i = 0; i < 300; i++) {
+    const a = (hash3(i, 7, 3)*2-1)*0.6, b = (hash3(i, 9, 1)*2-1)*0.6;
+    const d = norm([L[0]+u[0]*a+v[0]*b, L[1]+u[1]*a+v[1]*b, L[2]+u[2]*a+v[2]*b]);
+    const vals = [];
+    for (let j = 0; j < 9; j++) {
+      const e = 0.004, x = ((j%3)-1)*e, y = (Math.floor(j/3)-1)*e;
+      const q = norm([d[0]+u[0]*x+v[0]*y, d[1]+u[1]*x+v[1]*y, d[2]+u[2]*x+v[2]*y]);
+      const s = surfaceAt(q, 12); vals.push(Math.pow(lum(s.al) * Math.max(0, dot(s.n, L)), 1/2.2));
+    }
+    const m = vals.reduce((s, x) => s + x, 0) / 9;
+    const score = vals.reduce((s, x) => s + (x-m)*(x-m), 0);
+    if (score > bestScore) { bestScore = score; best = d; }
+  }
+  return best;
+}
+function fusedColor(camDir, L, M, lKey) {   // couleur d'ensemble de la planète vue de loin
+  let r = 0, g = 0, b = 0, w = 0;
+  for (const n of BASE) {
+    const k = Math.max(0, dot(n.n, camDir)) * n.area, E = n.energy(L, M, lKey);
+    r += E[0]*k; g += E[1]*k; b += E[2]*k; w += k;
+  }
+  return w > 0 ? [r/w, g/w, b/w] : BLACK;
+}
+function coneDistances(f, rayPx, Frel) {
+  const N = f / rayPx, dCone = N * 2*R;
+  return { N, dCone, dVis: dCone * Math.sqrt(Frel) };
+}
+// orientation de la caméra : « regard » 0° = vers le centre de la planète, 85° = presque l'horizon
+function orient(cam, pitchDeg) {
+  const u = norm(cam), Y = [0, 1, 0];
+  let t = sub(Y, u.map(x => x*dot(Y, u))); t = len(t) < 1e-9 ? norm(cross(u, [1,0,0])) : norm(t);
+  const P = pitchDeg * Math.PI / 180, c = Math.cos(P), s = Math.sin(P);
+  return { fwd: [-u[0]*c + t[0]*s, -u[1]*c + t[1]*s, -u[2]*c + t[2]*s], up: [u[0]*s + t[0]*c, u[1]*s + t[1]*c, u[2]*s + t[2]*c] };
+}
+function fmtDist(r) {              // distance en R → texte en km / m / cm / mm
+  const km = r * R_KM;
+  if (km >= 1) return fmt(km, km < 10 ? 2 : 0) + ' km';
+  const m = km * 1000;
+  if (m >= 1) return fmt(m, m < 10 ? 2 : 0) + ' m';
+  if (m >= 0.01) return fmt(m*100, 1) + ' cm';
+  return fmt(m*1000, 2) + ' mm';
+}
+
+// =====================================================================
+// ÉTAT
+// =====================================================================
+const state = {
+  theta: 0.6, phi: 1.2, alt: Math.pow(10, 0.3), pitch: 0,
+  sunAngle: 0.9, moonAngle: 120 * Math.PI / 180, lKey: 1,
+  rayPx: 8, Frel: 4, simThr: 2, fusion: true, smooth: true, marge: true, glide: true, dither: true, wire: false,
+  sunMove: false, moonMove: false, view: 'AB', dirty: true, stats: null, mode: ''
+};
+const orbitDir = a => norm([Math.cos(a), 0.35, Math.sin(a)]);   // le Soleil et la lune suivent le même chemin
+const sunDir = () => orbitDir(state.sunAngle);
+const moonPos = () => orbitDir(state.moonAngle).map(x => x * MOON_DIST);
+const camPos = () => {
+  const d = R + state.alt;
+  return [d*Math.sin(state.phi)*Math.cos(state.theta), d*Math.cos(state.phi), d*Math.sin(state.phi)*Math.sin(state.theta)];
+};
+
+// =====================================================================
+// AFFICHAGE (three.js). La caméra est à l'origine : tout est placé par rapport à elle,
+// calculé en 64 bits puis envoyé en 32 bits (sinon tout tremble au millimètre).
+// =====================================================================
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.outputEncoding = THREE.LinearEncoding;   // nos programmes font eux-mêmes la conversion pour l'écran
+renderer.autoClear = false;
+const camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 10);
+
+const GLSL_COMMON = `
+  uniform float uDither;
+  vec3 toScreen(vec3 c) {
+    c = clamp(c, 0.0, 1.0);
+    vec3 s = mix(12.92 * c, 1.055 * pow(c, vec3(1.0/2.4)) - 0.055, step(0.0031308, c));
+    // tramage : un bruit d'un demi-niveau d'écran efface les bandes de couleur
+    float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+    return s + uDither * n / 255.0;
+  }`;
+const GLSL_ECLIPSE = `
+  uniform vec3 uL; uniform vec3 uM; uniform float uMoonR; uniform float uSunAng;
+  float overlap(float r1, float r2, float d) {
+    if (d >= r1 + r2) return 0.0;
+    if (d <= abs(r1 - r2)) return 3.14159265 * min(r1, r2) * min(r1, r2);
+    float a = r1*r1*acos(clamp((d*d + r1*r1 - r2*r2) / (2.0*d*r1), -1.0, 1.0));
+    float b = r2*r2*acos(clamp((d*d + r2*r2 - r1*r1) / (2.0*d*r2), -1.0, 1.0));
+    float c = 0.5*sqrt(max(0.0, (-d+r1+r2)*(d+r1-r2)*(d-r1+r2)*(d+r1+r2)));
+    return a + b - c;
+  }
+  float sunVis(vec3 p) {
+    vec3 m = uM - p; float dm = length(m);
+    if (dot(m, uL) <= 0.0) return 1.0;
+    float sep = atan(length(cross(m, uL)), dot(m, uL));
+    float rm = asin(min(1.0, uMoonR / dm));
+    if (sep >= uSunAng + rm) return 1.0;
+    return 1.0 - overlap(uSunAng, rm, sep) / (3.14159265 * uSunAng * uSunAng);
+  }`;
+const commonUniforms = () => ({ uDither: { value: 1 }, uL: { value: new THREE.Vector3() }, uM: { value: new THREE.Vector3() },
+  uMoonR: { value: MOON_R }, uSunAng: { value: SUN_ANG } });
+
+// Version A : la couleur du coin contient déjà la lumière du Soleil
+const matA = new THREE.ShaderMaterial({
+  uniforms: commonUniforms(),
+  vertexShader: `attribute vec3 acol; varying vec3 vCol;
+    void main() { vCol = acol; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: GLSL_COMMON + `varying vec3 vCol;
+    void main() { gl_FragColor = vec4(toScreen(vCol), 1.0); }`
+});
+// Version B : le coin donne la couleur et la direction du sol ; le Soleil et l'éclipse sont calculés à chaque pixel
+const matB = new THREE.ShaderMaterial({
+  uniforms: commonUniforms(),
+  vertexShader: `attribute vec3 acol; attribute vec3 anrm; attribute vec3 apos; varying vec3 vCol; varying vec3 vN; varying vec3 vP;
+    void main() { vCol = acol; vN = anrm; vP = apos; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: GLSL_COMMON + GLSL_ECLIPSE + `varying vec3 vCol; varying vec3 vN; varying vec3 vP;
+    void main() {
+      // direction moyenne non ramenée à 1 : un sol rugueux renvoie un peu moins de lumière directe
+      float k = max(0.0, dot(vN, uL)) * sunVis(vP);
+      gl_FragColor = vec4(toScreen(vCol * k), 1.0);
+    }`
+});
+const wireMat = new THREE.LineBasicMaterial({ color: 0x6fa0ff, transparent: true, opacity: 0.28 });
+const CAP = BUDGET * 2;        // place pour les triangles en éventail
+function makeMeshes(mode) {
+  const geom = new THREE.BufferGeometry();
+  const attr = (name, n) => { const a = new THREE.BufferAttribute(new Float32Array(CAP*9), 3).setUsage(THREE.DynamicDrawUsage); geom.setAttribute(name, a); return a; };
+  const o = { mode, geom, pos: attr('position'), col: attr('acol'), emitted: [], st: null, gl: { moving: 0 } };
+  if (mode === 'B') { o.nrm = attr('anrm'); o.wp = attr('apos'); }
+  geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e9);
+  o.mesh = new THREE.Mesh(geom, mode === 'A' ? matA : matB); o.mesh.frustumCulled = false;
+  o.wGeom = new THREE.BufferGeometry();
+  o.wPos = new THREE.BufferAttribute(new Float32Array(CAP*18), 3).setUsage(THREE.DynamicDrawUsage);
+  o.wGeom.setAttribute('position', o.wPos);
+  o.wire = new THREE.LineSegments(o.wGeom, wireMat); o.wire.frustumCulled = false;
+  o.scene = new THREE.Scene(); o.scene.add(o.mesh, o.wire);
+  return o;
+}
+const MESH = { A: makeMeshes('A'), B: makeMeshes('B') };
+// planète réduite à un point (de loin)
+const ptMat = new THREE.PointsMaterial({ size: 6, sizeAttenuation: false, color: 0xffffff, transparent: true });
+const ptGeom = new THREE.BufferGeometry(); ptGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+const point = new THREE.Points(ptGeom, ptMat); point.frustumCulled = false;
+const pointScene = new THREE.Scene(); pointScene.add(point);
+
+// le ciel : le Soleil (vraie taille, petit halo) et des étoiles, très loin (dessinés à 900 unités)
+const skyScene = new THREE.Scene();
+const SKY = 900;
+const sunTex = (() => {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const g = cv.getContext('2d'), img = g.createImageData(256, 256);
+  const core = (SUN_ANG / 0.06) * 128;        // la texture couvre 0,06 rad (3,4°) de rayon
+  for (let y = 0; y < 256; y++) for (let x = 0; x < 256; x++) {
+    const r = Math.hypot(x - 127.5, y - 127.5);
+    let v = r <= core ? 1 : 0.5 * Math.exp(-(((r - core) / 28) ** 2)) + 0.25 * Math.pow(core / r, 1.5) * (1 - r/128);
+    v = clamp(v, 0, 1); const i = (y*256 + x) * 4;
+    img.data[i] = 255 * v; img.data[i+1] = 248 * v; img.data[i+2] = 232 * v; img.data[i+3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(cv); return t;
+})();
+const sun = new THREE.Sprite(new THREE.SpriteMaterial({ map: sunTex, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
+sun.scale.set(2*SKY*0.06, 2*SKY*0.06, 1);
+skyScene.add(sun);
+const starMat = new THREE.ShaderMaterial({
+  uniforms: { uGain: { value: 1 } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  vertexShader: `attribute float amag; uniform float uGain; varying float vB;
+    void main() { vB = uGain * pow(2.512, -(amag - 1.0)); gl_PointSize = 1.5 + 2.0 * clamp(vB, 0.0, 1.0);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `varying float vB; void main() { float r = length(gl_PointCoord - 0.5) * 2.0;
+      float a = clamp(vB, 0.0, 1.0) * (1.0 - smoothstep(0.5, 1.0, r)); gl_FragColor = vec4(vec3(a), 1.0); }`
+});
+{
+  const n = 2500, pos = new Float32Array(n*3), mag = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const z = hash3(i, 1, 2)*2-1, a = hash3(i, 3, 4)*Math.PI*2, s = Math.sqrt(1 - z*z);
+    pos.set([s*Math.cos(a)*SKY, z*SKY, s*Math.sin(a)*SKY], i*3);
+    mag[i] = 1 + 5 * Math.pow(hash3(i, 5, 6), 0.35);          // beaucoup d'étoiles faibles, peu de brillantes
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('amag', new THREE.BufferAttribute(mag, 1));
+  const stars = new THREE.Points(g, starMat); stars.frustumCulled = false; skyScene.add(stars);
+}
+// la lune d'essai (grise, éclairée par le Soleil)
+const moonMat = new THREE.ShaderMaterial({
+  uniforms: { uL: { value: new THREE.Vector3() }, uDither: { value: 1 } },
+  vertexShader: `varying vec3 vN; void main() { vN = normal; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: GLSL_COMMON.replace('uniform float uDither;', 'uniform float uDither; uniform vec3 uL;') +
+    `varying vec3 vN; void main() { gl_FragColor = vec4(toScreen(vec3(0.25) * max(0.0, dot(normalize(vN), uL))), 1.0); }`
+});
+const moon = new THREE.Mesh(new THREE.SphereGeometry(MOON_R, 48, 24), moonMat); moon.frustumCulled = false;
+const moonScene = new THREE.Scene(); moonScene.add(moon);
+
+// --- reconstruction des triangles (seulement quand quelque chose a bougé)
+function viewports() {
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if (state.view === 'AB') return [{ mode: 'A', x: 0, w: W/2 }, { mode: 'B', x: W/2, w: W/2 }];
+  return [{ mode: state.view, x: 0, w: W }];
+}
+function setCam(cam, vp, near, far) {
+  const W = canvas.clientWidth, H = canvas.clientHeight, o = orient(cam, state.pitch);
+  camera.position.set(0, 0, 0); camera.up.set(o.up[0], o.up[1], o.up[2]);
+  camera.lookAt(o.fwd[0], o.fwd[1], o.fwd[2]);
+  camera.aspect = W / H; camera.near = near; camera.far = far;
+  if (vp.w < W) camera.setViewOffset(W, H, vp.x, 0, vp.w, H); else camera.clearViewOffset();
+  camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+}
+function planetNearFar(D) {
+  return [Math.max(1e-12, (D - R) * 0.3), Math.sqrt(Math.max(0, D*D - R*R)) * 1.02 + (D - R) * 0.5 + 1e-12];
+}
+function frustumNow() {
+  return new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+}
+
+let lastNew = 0;
+function rebuild(f) {
+  const t0 = performance.now();
+  const cam = camPos(), L = sunDir(), M = moonPos(), D = len(cam);
+  const { dCone, dVis } = coneDistances(f, state.rayPx, state.Frel);
+  const sizePx = 2*R*f/D;
+  const stats = { sizePx, D, dCone, dVis, A: null, B: null, newMax: 0 };
+  let incomplete = false;
+  if (D > dVis) state.mode = 'invisible (hors du cône)';
+  else if (sizePx < state.rayPx) {
+    state.mode = '1 seul rayon (un point)';
+    const col = fusedColor(cam.map(v => v/D), L, M, state.lKey), boost = Math.sqrt(state.Frel);
+    ptMat.color.setRGB(Math.min(1, col[0]*boost), Math.min(1, col[1]*boost), Math.min(1, col[2]*boost)); ptMat.color.convertLinearToSRGB();
+    ptMat.size = state.rayPx; ptMat.opacity = clamp((dVis - D) / (dVis*0.1), 0, 1);
+    const p = ptGeom.attributes.position; p.setXYZ(0, -cam[0], -cam[1], -cam[2]); p.needsUpdate = true;
+  } else {
+    state.mode = 'détails';
+    const [near, far] = planetNearFar(D);
+    for (const vp of viewports()) {
+      const o = MESH[vp.mode];
+      setCam(cam, vp, near, far);
+      o.st = selectAdaptive({ mode: vp.mode, cam, f, rayPx: state.rayPx, fusion: state.fusion, marge: state.marge, simThr: state.simThr,
+        L, M, lKey: state.lKey, frustum: frustumNow(), budget: BUDGET, newMax: NEW_MAX, mark: false, out: o.emitted });
+      incomplete = incomplete || o.st.incomplete;
+      o.emitted = o.emitted.slice();
+      writeGeometry(o, cam);
+      stats[vp.mode] = o.st;
+    }
+  }
+  if (frameId % 60 === 0) prune(frameId);
+  stats.ms = performance.now() - t0; stats.incomplete = incomplete;
+  state.stats = stats;
+  return incomplete;
+}
+// BORDS QUI GLISSENT : là où un petit triangle touche un grand (« T »), le coin du petit est posé
+// exactement sur le bord droit du grand, avec la couleur du bord du grand. Pas de fente, pas de couture.
+const ek = (p, q) => p.id < q.id ? p.id * 67108864 + q.id : q.id * 67108864 + p.id;   // un bord = un nombre
+function findJunctions(em) {
+  const edges = new Set();
+  for (let i = 0; i < em.length; i += 3) { const n = em[i]; edges.add(ek(n.va, n.vb)); edges.add(ek(n.vb, n.vc)); edges.add(ek(n.vc, n.va)); }
+  const coarse = (p, q, depth) => {             // le bord affiché qui contient le segment p-q
+    if (depth > 0 && edges.has(ek(p, q))) return [p, q];
+    if (depth > 40) return null;
+    if (p.from && (p.from[0] === q || p.from[1] === q)) return coarse(p.from[0], p.from[1], depth + 1);
+    if (q.from && (q.from[0] === p || q.from[1] === p)) return coarse(q.from[0], q.from[1], depth + 1);
+    return null;
+  };
+  const tj = new Map();
+  for (let i = 0; i < em.length; i += 3) for (const v of [em[i].va, em[i].vb, em[i].vc]) {
+    if (!v.from || tj.has(v)) continue;
+    const e = coarse(v.from[0], v.from[1], 0) || (edges.has(ek(v.from[0], v.from[1])) ? v.from : null);
+    if (!e) { tj.set(v, null); continue; }
+    const [a, b] = e, ab = sub(b.p, a.p), t = clamp(dot(sub(v.p, a.p), ab) / dot(ab, ab), 0, 1);
+    tj.set(v, { a, b, t });
+  }
+  return tj;
+}
+// position et couleur affichées d'un coin (un coin en « T » est posé sur le bord du grand triangle)
+function dispPos(o, v) {
+  const J = o.tj.get(v); if (!J) return v.p;
+  const a = dispPos(o, J.a), b = dispPos(o, J.b);
+  return [a[0] + (b[0]-a[0])*J.t, a[1] + (b[1]-a[1])*J.t, a[2] + (b[2]-a[2])*J.t];
+}
+function dispCol(o, v) {
+  const J = o.tj.get(v), s = v[o.mode].s;
+  if (!J) return s;
+  const a = dispCol(o, J.a), b = dispCol(o, J.b);
+  return a && b ? lerpN(a, b, J.t) : s;
+}
+// Liste des triangles à dessiner. Un grand triangle qui a des coins en « T » sur ses bords est dessiné
+// en éventail autour de son centre, en passant par ces coins : les bords se touchent exactement, sans fente.
+function buildTris(o) {
+  const em = o.emitted;
+  const onEdge = new Map();
+  for (const [v, J] of o.tj) if (J) { const k = ek(J.a, J.b); if (!onEdge.has(k)) onEdge.set(k, []); onEdge.get(k).push(v); }
+  const tris = [];                 // [coin, coin, coin, indice du rayon] ; un coin = un sommet, ou { c: triangle } pour un centre
+  for (let i = 0; i < em.length; i += 3) {
+    const node = em[i], c = [node.va, node.vb, node.vc], poly = [];
+    let fan = false;
+    for (let j = 0; j < 3; j++) {
+      const a = c[j], b = c[(j+1)%3]; poly.push(a);
+      const list = onEdge.get(ek(a, b));
+      if (list) {
+        fan = true;
+        const ts = list.map(v => { const J = o.tj.get(v); return [J.a === a ? J.t : 1 - J.t, v]; }).sort((x, y) => x[0] - y[0]);
+        for (const [, v] of ts) poly.push(v);
+      }
+    }
+    if (!fan) { tris.push(c[0], c[1], c[2], i); continue; }
+    const cen = { c: node };
+    for (let k = 0; k < poly.length; k++) tris.push(cen, poly[k], poly[(k+1) % poly.length], i);
+  }
+  return tris;
+}
+function writeGeometry(o, cam) {
+  o.tj = findJunctions(o.emitted);
+  o.tris = buildTris(o);
+  const T = o.tris, n = Math.min(T.length / 4, CAP), P = o.pos.array, Wp = o.wPos.array;
+  const pos = d => d.c ? [d.c.va, d.c.vb, d.c.vc].map(v => dispPos(o, v)).reduce((s, q) => s.map((x, m) => x + q[m]/3), [0,0,0]) : dispPos(o, d);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < 3; j++) {
+      const q = pos(T[4*i+j]), k = i*9 + j*3;
+      P[k] = q[0]-cam[0]; P[k+1] = q[1]-cam[1]; P[k+2] = q[2]-cam[2];
+      if (o.wp) { o.wp.array[k] = q[0]; o.wp.array[k+1] = q[1]; o.wp.array[k+2] = q[2]; }
+    }
+    if (state.wire) {
+      const w = i*18, e = [0,1,1,2,2,0];
+      for (let j = 0; j < 6; j++) { const k = i*9 + e[j]*3; Wp[w+j*3] = P[k]; Wp[w+j*3+1] = P[k+1]; Wp[w+j*3+2] = P[k+2]; }
+    }
+  }
+  o.n = n;
+  o.geom.setDrawRange(0, n*3); o.pos.needsUpdate = true; if (o.wp) o.wp.needsUpdate = true;
+  o.wGeom.setDrawRange(0, state.wire ? n*6 : 0); o.wPos.needsUpdate = true;
+  writeColors(o, 0);
+}
+function writeColors(o, dt) {
+  const em = o.emitted, T = o.tris, n = o.n, A = o.mode === 'A', C = o.col.array;
+  o.cf = (o.cf || 0) + 1;
+  o.gl = cornerPass(o.mode, em, dt, o.cf, state.glide);
+  const col = d => {
+    if (!d.c) return dispCol(o, d);
+    const cs = [d.c.va, d.c.vb, d.c.vc].map(v => dispCol(o, v));
+    return cs[0].map((x, m) => (x + cs[1][m] + cs[2][m]) / 3);
+  };
+  for (let i = 0; i < n; i++) {
+    const val = em[T[4*i+3] + 1];
+    for (let j = 0; j < 3; j++) {
+      const c = state.smooth ? col(T[4*i+j]) : val, k = i*9 + j*3;
+      C[k] = c[0]; C[k+1] = c[1]; C[k+2] = c[2];
+      if (!A) { o.nrm.array[k] = c[3]; o.nrm.array[k+1] = c[4]; o.nrm.array[k+2] = c[5]; }
+    }
+  }
+  o.col.needsUpdate = true; if (!A) o.nrm.needsUpdate = true;
+}
+
+// --- dessin d'une image
+function sunInView(cam) {
+  const o = orient(cam, state.pitch), L = sunDir();
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  const halfDiag = Math.atan(Math.tan(FOV*Math.PI/360) * Math.hypot(W, H) / H);
+  if (angle(o.fwd, L) > halfDiag) return false;
+  const b = dot(cam, L), c = dot(cam, cam) - R*R;             // le Soleil est-il derrière la planète ?
+  return !(b < 0 && b*b - c > 0);
+}
+function render() {
+  const W = canvas.clientWidth, H = canvas.clientHeight, cam = camPos(), D = len(cam);
+  const L = sunDir(), M = moonPos(), s = state.stats;
+  for (const m of [matA, matB, moonMat]) { m.uniforms.uL.value.set(L[0], L[1], L[2]); m.uniforms.uDither.value = state.dither ? 1 : 0; }
+  for (const m of [matA, matB]) m.uniforms.uM.value.set(M[0], M[1], M[2]);
+  // étoiles masquées quand le Soleil est dans le champ, ou atténuées si une grande planète éclairée remplit l'écran
+  let lit = 0; for (const k of ['A', 'B']) { const o = MESH[k]; if (o.st && s && s[k]) lit = Math.max(lit, (o.st.count - o.st.dark) * state.rayPx * state.rayPx * 0.5 / (W*H)); }
+  const sIn = sunInView(cam);
+  state.starGain = sIn ? 0 : clamp(1 - lit * 2.5, 0, 1);
+  starMat.uniforms.uGain.value = state.starGain; state.sunIn = sIn;
+  sun.position.set(L[0]*SKY, L[1]*SKY, L[2]*SKY);
+  const mr = sub(M, cam); moon.position.set(mr[0], mr[1], mr[2]);
+  renderer.setScissorTest(true); renderer.setViewport(0, 0, W, H); renderer.setScissor(0, 0, W, H); renderer.clear();
+  for (const vp of viewports()) {
+    renderer.setViewport(vp.x, 0, vp.w, H); renderer.setScissor(vp.x, 0, vp.w, H);
+    setCam(cam, vp, 1, SKY * 2); renderer.render(skyScene, camera);
+    const dm = len(mr); setCam(cam, vp, Math.max(1e-6, (dm - MOON_R) * 0.5), dm + MOON_R * 2); renderer.render(moonScene, camera);
+    renderer.clearDepth();
+    if (state.mode === 'détails') { const [n, f] = planetNearFar(D); setCam(cam, vp, n, f); renderer.render(MESH[vp.mode].scene, camera); }
+    else if (state.mode.startsWith('1')) { setCam(cam, vp, D*0.5, D*2); renderer.render(pointScene, camera); }
+  }
+  renderer.setScissorTest(false);
+  const ab = state.view === 'AB';
+  $('split').style.display = ab ? 'block' : 'none';
+  $('tagA').style.display = state.view !== 'B' ? 'block' : 'none'; $('tagB').style.display = state.view !== 'A' ? 'block' : 'none';
+  $('tagA').style.left = ab ? 'calc(25% - 70px)' : 'calc(50% - 70px)'; $('tagB').style.left = ab ? 'calc(75% - 70px)' : 'calc(50% - 70px)';
+}
+
+// =====================================================================
+// TABLEAU DE BORD
+// =====================================================================
+const $ = id => document.getElementById(id);
+const fmt = (x, d = 2) => Math.abs(x) >= 1e5 ? x.toExponential(1).replace('e+', ' × 10^') : x.toLocaleString('fr-FR', { maximumFractionDigits: d });
+const both = fn => ['A', 'B'].map(k => MESH[k].st && state.stats && state.stats[k] ? fn(MESH[k]) : '—').join(' | ');
+function updateHud() {
+  const s = state.stats; if (!s) return;
+  const cam = camPos(), L = sunDir(), M = moonPos();
+  $('mode').textContent = state.mode + (s.incomplete ? ' (détail en route…)' : '');
+  $('altKm').textContent = fmtDist(state.alt);
+  $('sizePx').textContent = fmt(s.sizePx, 1) + ' px';
+  $('cnt').textContent = both(o => o.st.count.toLocaleString('fr-FR'));
+  $('lvl').textContent = both(o => o.st.maxLevel);
+  $('simN').textContent = both(o => o.st.sim.toLocaleString('fr-FR'));
+  $('chg').textContent = both(o => o.st.changes);
+  $('gl').textContent = both(o => o.gl.moving);
+  $('eff').textContent = both(o => fmt(o.st.effRay, 1) + ' px');
+  $('dark').textContent = both(o => o.st.dark);
+  $('ms').textContent = fmt(s.ms, 1) + ' ms';
+  $('mem').textContent = nodeCount.toLocaleString('fr-FR');
+  $('dCone').textContent = fmtDist(s.dCone); $('dVis').textContent = fmtDist(s.dVis); $('dNow').textContent = fmtDist(s.D);
+  $('sunIn').textContent = state.sunIn ? 'oui' : 'non';
+  $('starG').textContent = Math.round((state.starGain || 0) * 100) + ' %';
+  $('ecl').textContent = Math.round((1 - sunVis(norm(cam), L, M)) * 100) + ' %';
+  $('altV').textContent = fmtDist(state.alt);
+  $('pitchV').textContent = state.pitch + '°';
+  $('rayV').textContent = state.rayPx + ' px';
+  $('lumV').textContent = '× ' + fmt(state.Frel, 2);
+  $('simV').textContent = state.simThr ? fmt(state.simThr, 1) + ' niveaux' : 'coupée';
+  $('moonV').textContent = Math.round(((state.moonAngle * 180 / Math.PI) % 360 + 360) % 360) + '°';
+}
+
+// =====================================================================
+// ÉVÉNEMENTS
+// =====================================================================
+function setAlt(a) { state.alt = clamp(a, Math.pow(10, -8.5), 1000); $('alt').value = Math.log10(state.alt); state.dirty = true; }
+let drag = null;
+canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const k = 0.004 * clamp(state.alt / (R + state.alt), 1e-12, 1);
+  state.theta += (e.clientX - drag.x) * k;
+  state.phi = clamp(state.phi - (e.clientY - drag.y) * k, 0.05, Math.PI - 0.05);
+  drag = { x: e.clientX, y: e.clientY }; state.dirty = true;
+});
+canvas.addEventListener('pointerup', () => { drag = null; });
+canvas.addEventListener('wheel', e => { e.preventDefault(); setAlt(state.alt * Math.pow(1.12, Math.sign(e.deltaY))); }, { passive: false });
+const on = (id, ev, fn) => $(id).addEventListener(ev, e => { fn(e.target); state.dirty = true; });
+on('alt', 'input', t => setAlt(Math.pow(10, +t.value)));
+on('pitch', 'input', t => state.pitch = +t.value);
+on('ray', 'input', t => state.rayPx = +t.value);
+on('lum', 'input', t => state.Frel = +t.value);
+on('sim', 'input', t => state.simThr = +t.value);
+on('view', 'change', t => state.view = t.value);
+for (const k of ['fusion', 'smooth', 'marge', 'glide', 'dither', 'wire', 'sunMove', 'moonMove']) on(k, 'change', t => state[k] = t.checked);
+on('moon', 'input', t => { state.moonAngle = +t.value * Math.PI / 180; state.lKey++; });
+function lookAt(dir, alt, pitch) {
+  state.theta = Math.atan2(dir[2], dir[0]); state.phi = Math.acos(clamp(dir[1], -1, 1));
+  state.pitch = pitch; $('pitch').value = pitch; setAlt(alt);
+}
+on('toSurface', 'click', () => lookAt(findLandNear(sunDir()), 0.003, 0));
+on('toMm', 'click', () => lookAt(findLandNear(sunDir()), 1.7e-7, 0));   // 10 cm au-dessus du sol : les triangles font 1 mm
+on('toEclipse', 'click', () => {
+  state.moonAngle = state.sunAngle + 0.004; $('moon').value = (state.moonAngle * 180 / Math.PI) % 360; state.lKey++;
+  lookAt(sunDir(), 0.6, 0);
+});
+on('toSun', 'click', () => {          // côté nuit, le Soleil juste à côté du bord de la planète
+  const L = sunDir(), u = norm(cross(L, [0,1,0])), a = 6 * Math.PI/180;
+  lookAt(norm([-L[0]*Math.cos(a) + u[0]*Math.sin(a), -L[1]*Math.cos(a) + u[1]*Math.sin(a), -L[2]*Math.cos(a) + u[2]*Math.sin(a)]), 20, 0);
+});
+$('runTests').addEventListener('click', runTests);
+$('closeTests').addEventListener('click', () => $('tests').classList.remove('on'));
+function screenF() { return canvas.clientHeight / (2 * Math.tan(FOV * Math.PI / 360)); }
+function resize() { renderer.setSize(window.innerWidth, window.innerHeight, false); state.dirty = true; }
+window.addEventListener('resize', resize);
+
+// =====================================================================
+// BOUCLE PRINCIPALE
+// =====================================================================
+let last = performance.now(), hudT = 0, busy = false;
+function loop(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (!busy) {
+    if (state.sunMove) { state.sunAngle += dt * 0.08; state.lKey++; state.dirty = true; }
+    if (state.moonMove) { state.moonAngle += dt * 0.05; $('moon').value = ((state.moonAngle * 180 / Math.PI) % 360 + 360) % 360; state.lKey++; state.dirty = true; }
+    const f = screenF();
+    if (state.dirty) { state.dirty = false; if (rebuild(f)) state.dirty = true; }
+    else if (state.mode === 'détails') for (const vp of viewports()) { const o = MESH[vp.mode]; if (o.st) o.st.changes = 0; if (o.gl.moving) writeColors(o, dt); }
+    render();
+  }
+  hudT += dt; if (hudT > 0.2) { hudT = 0; updateHud(); }
+  requestAnimationFrame(loop);
+}
+
+// =====================================================================
+// TESTS AUTOMATIQUES
+// =====================================================================
+const pause = () => new Promise(r => setTimeout(r, 0));
+function frustumFor(cam, aspect, pitch = 0) {
+  const c = new THREE.PerspectiveCamera(FOV, aspect, 1e-12, 1e4), o = orient(cam, pitch);
+  c.position.set(0, 0, 0); c.up.set(o.up[0], o.up[1], o.up[2]); c.lookAt(o.fwd[0], o.fwd[1], o.fwd[2]);
+  c.updateMatrixWorld(); c.updateProjectionMatrix();
+  return new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(c.projectionMatrix, c.matrixWorldInverse));
+}
+function colorAt(p, frame) {
+  let node = BASE.find(b => b.contains(p));
+  while (node) {
+    if (node.dF === frame) return node.dC;
+    if (!node.kids) return null;
+    node = node.kids.find(k => k.contains(p));
+  }
+  return null;
+}
+function line(cls, title, text) { return `<div class="t"><b class="${cls}">${cls === 'ok' ? '✅' : cls === 'warn' ? '⚠️' : '❌'} ${title}</b><br>${text}</div>`; }
+const S255 = c => toS(Math.max(0, lum(c))) * 255;
+function fullSelect(p, adaptive) {   // sélection complète (on attend la fin du « détail en route »)
+  let st; for (let i = 0; i < 400; i++) { st = adaptive ? selectAdaptive(p) : selectLOD(p); if (!st.incomplete) break; }
+  return st;
+}
+const RESULTS = [];
+window.__banc = { results: RESULTS, done: false };
+
+async function runTests() {
+  busy = true; RESULTS.length = 0; window.__banc.done = false;
+  const out = $('testOut'); $('tests').classList.add('on');
+  const f = screenF(), aspect = canvas.clientWidth / canvas.clientHeight, rayPx = 8;
+  let html = `<div class="muted">Taille d'un rayon : ${rayPx} px · écran : ${canvas.clientHeight} px de haut</div>`;
+  const add = (cls, title, text) => { RESULTS.push({ cls, title, text: text.replace(/<[^>]+>/g, '') }); html += line(cls, title, text); out.innerHTML = html; };
+  const show = msg => { out.innerHTML = html + `<div class="t muted">${msg}</div>`; };
+  const L = norm([0.6, 0.5, 0.62]), Mfar = [0, -MOON_DIST, 0], lKey = -777;      // Soleil fixe, lune loin (pas d'éclipse)
+  const base = { cam: null, f, rayPx, fusion: true, marge: true, simThr: 0, L, M: Mfar, lKey, budget: 3e6, newMax: 1e9, mark: false, out: [] };
+  const land = findLandNear(L);
+
+  try {
+  // 1. Portée du cône
+  {
+    const a = coneDistances(f, rayPx, 1), b = coneDistances(f, rayPx, 4);
+    const ok = Math.abs(b.dVis / a.dVis - 2) < 1e-9 && Math.abs(a.dCone - (f/rayPx)*2*R) < 1e-9;
+    add(ok ? 'ok' : 'bad', 'Portée selon la luminosité (ta règle du cône)',
+      `d = N × D = ${fmtDist(a.dCone)}. Une source 4 fois plus lumineuse reste visible ${fmt(b.dVis/a.dVis,2)} fois plus loin (attendu 2, loi en 1/distance²).`);
+  }
+  show('Calculs économisés…'); await pause();
+
+  // 2. Calculs économisés, jusqu'au millimètre
+  {
+    const rows = []; let nearRatio = 1;
+    for (const alt of [100, 1, 0.01, 0.0003, 1.7e-7]) {
+      const cam = land.map(v => v*(R+alt));
+      const st = fullSelect({ ...base, mode: 'A', cam, frustum: frustumFor(cam, aspect), budget: BUDGET * 4 });
+      const full = 20 * Math.pow(4, st.maxLevel), ratio = st.count / full;
+      if (alt === 0.0003) nearRatio = ratio;
+      rows.push(`altitude ${fmtDist(alt)} : ${st.count.toLocaleString('fr-FR')} triangles (niveau ${st.maxLevel}) au lieu de ${fmt(full,0)}`);
+      await pause();
+    }
+    add(nearRatio < 0.001 ? 'ok' : 'warn', 'Calculs économisés', rows.join('<br>'));
+  }
+  show('Le parent vaut la moyenne de ses enfants…'); await pause();
+
+  // 3. Couleurs stables : parent = moyenne exacte des enfants ; lumière totale conservée
+  {
+    const cam = land.map(v => v*(R+0.01));
+    fullSelect({ ...base, mode: 'A', cam, frustum: frustumFor(cam, aspect) });
+    let worst = 0, checked = 0;
+    const walk = n => {
+      if (!n.kids || !n.oA || !n.kids.every(k => k.eKey === lKey)) return;
+      let w = 0, e = 0; for (const k of n.kids) { w += k.area; e += lum(k.E) * k.area; }
+      worst = Math.max(worst, Math.abs(lum(n.E) * w - e) / Math.max(1e-30, e)); checked++;
+      n.kids.forEach(walk);
+    };
+    BASE.forEach(walk);
+    const totals = []; let level = BASE.slice();
+    for (let l = 0; l <= 4; l++) {
+      let tot = 0; for (const n of level) tot += n.area * lum(n.energy(L, Mfar, lKey - 1 - l));
+      totals.push(tot); if (l < 4) level = level.flatMap(n => n.split());
+      await pause();
+    }
+    const devs = totals.map(t => (t - totals[4]) / totals[4]);
+    const dev = Math.max(Math.abs(devs[2]), Math.abs(devs[3]));
+    add(worst < 1e-9 && checked > 50 && dev < 0.03 ? 'ok' : 'bad', 'Couleurs stables : le parent vaut exactement la moyenne de ses enfants',
+      `${checked} triangles coupés vérifiés : écart maximal ${worst.toExponential(1)} (zéro aux arrondis près). Quand ils se refusionnent, la lumière totale ne bouge donc pas. Lumière totale de la planète comparée au niveau 4 : ${devs.slice(0, 4).map((d, l) => 'niveau ' + l + ' : ' + (d >= 0 ? '+' : '') + fmt(d*100, 2) + ' %').join(' · ')} (les niveaux 0 et 1 résument un vingtième de planète avec 16 sous-rayons : ils servent seulement de très loin, où la planète fait quelques pixels).`);
+  }
+  show('Fusion par ressemblance…'); await pause();
+
+  // 4. Fusion par ressemblance : moins de triangles, image identique à l'œil
+  {
+    // un point de mer côté jour
+    let sea = null;
+    for (let i = 0; i < 400 && !sea; i++) {
+      const d = norm([L[0] + (hash3(i,2,9)-0.5), L[1] + (hash3(i,4,7)-0.5), L[2] + (hash3(i,8,5)-0.5)]);
+      fbm(d[0]*1.6+11.3, d[1]*1.6+2.7, d[2]*1.6-5.1, 10, _h);
+      if (_h[0] < -0.08 && Math.abs(d[1]) < 0.6) sea = d;
+    }
+    const rows = []; let okAll = true;
+    for (const [nom, dir, alt] of [['au-dessus de la mer', sea || land, 0.02], ['au-dessus de la terre', land, 0.02], ['planète entière', L, 2]]) {
+      const cam = dir.map(v => v*(R+alt)), fr = frustumFor(cam, aspect);
+      const u = norm(cross(dir, [0,1,0])), v = cross(dir, u), sp = alt * 0.4;
+      const pts = []; for (let i = 0; i < 300; i++) pts.push(norm([dir[0]+(u[0]*(hash3(i,1,1)-0.5)+v[0]*(hash3(i,2,2)-0.5))*sp, dir[1]+(u[1]*(hash3(i,1,1)-0.5)+v[1]*(hash3(i,2,2)-0.5))*sp, dir[2]+(u[2]*(hash3(i,1,1)-0.5)+v[2]*(hash3(i,2,2)-0.5))*sp]));
+      const s0 = fullSelect({ ...base, mode: 'A', cam, frustum: fr, simThr: 0, fusion: false, marge: false, mark: true });
+      const c0 = pts.map(p => colorAt(p, s0.frame));
+      const s1 = fullSelect({ ...base, mode: 'A', cam, frustum: fr, simThr: 2, fusion: false, marge: false, mark: true });
+      const c1 = pts.map(p => colorAt(p, s1.frame));
+      let err = 0; c0.forEach((c, i) => { if (c && c1[i]) err = Math.max(err, Math.abs(S255(c) - S255(c1[i]))); });
+      const gain = 1 - s1.count / s0.count;
+      if (err > 3.5) okAll = false;
+      rows.push(`${nom} : ${s0.count.toLocaleString('fr-FR')} → ${s1.count.toLocaleString('fr-FR')} triangles (−${fmt(gain*100, 0)} %), écart max ${fmt(err, 1)} niveau(x) d'écran sur 255`);
+      await pause();
+    }
+    add(okAll ? 'ok' : 'warn', 'Fusion par taille ET par ressemblance (seuil 2 niveaux)', rows.join('<br>') + '<br>Les zones unies (mer, glace) restent en grands triangles ; les côtes et les reliefs gardent leurs petits triangles.');
+  }
+  show('Marge 8 px / 6 px…'); await pause();
+
+  // 5. Marge 8/6 : pas de clignotement quand la caméra hésite
+  {
+    const res = {};
+    for (const marge of [false, true]) {
+      let changes = 0;
+      for (let i = 0; i < 40; i++) {
+        const alt = 0.02 * (1 + 0.03 * Math.sin(i * 0.9));
+        const cam = land.map(v => v*(R+alt));
+        const st = fullSelect({ ...base, mode: 'A', cam, frustum: frustumFor(cam, aspect), marge });
+        if (i >= 2) changes += st.changes;
+      }
+      res[marge] = changes; await pause();
+    }
+    add(res[true] * 4 <= Math.max(1, res[false]) ? 'ok' : 'warn', 'Marge : couper à 8 px, fusionner à 6 px',
+      `Caméra qui monte et descend de ±3 % pendant 40 images : <b>${res[false]}</b> coupes et fusions sans marge, <b>${res[true]}</b> avec la marge. Les triangles ne clignotent plus entre deux tailles.`);
+  }
+  show('Nouveaux coins…'); await pause();
+
+  // 6. Un nouveau coin part de la couleur affichée, puis glisse
+  {
+    const cam0 = land.map(v => v*(R+0.02)), cam1 = land.map(v => v*(R+0.014));
+    const em = [];
+    fullSelect({ ...base, mode: 'A', cam: cam0, frustum: frustumFor(cam0, aspect), out: em });
+    let fr = 1e6 + 1000;
+    for (let i = 0; i < 5; i++) cornerPass('A', em, 1, ++fr, true);
+    const before = new Set(); for (let i = 0; i < em.length; i += 3) for (const v of [em[i].va, em[i].vb, em[i].vc]) before.add(v);
+    const em2 = [];
+    fullSelect({ ...base, mode: 'A', cam: cam1, frustum: frustumFor(cam1, aspect), out: em2 });
+    const r = cornerPass('A', em2, 1/60, ++fr, true);
+    let fresh = 0, jumpNo = 0, jumpYes = 0;
+    for (let i = 0; i < em2.length; i += 3) for (const v of [em2[i].va, em2[i].vb, em2[i].vc]) {
+      if (before.has(v) || !v.from) continue; fresh++;
+      const start = shownFrom(v, 'A', fr);
+      jumpNo = Math.max(jumpNo, Math.abs(S255(v.A.t) - S255(start || v.A.t)));
+      jumpYes = Math.max(jumpYes, Math.abs(S255(v.A.s) - S255(start || v.A.s)));
+    }
+    let left = 0;
+    for (let i = 0; i < 30; i++) left = cornerPass('A', em2, 1/60, ++fr, true).moving;
+    let err = 0; for (let i = 0; i < em2.length; i += 3) for (const v of [em2[i].va, em2[i].vb, em2[i].vc]) err = Math.max(err, Math.abs(S255(v.A.s) - S255(v.A.t)));
+    add(fresh > 0 && jumpYes < 0.5 * Math.max(1, jumpNo) && err < 1 ? 'ok' : 'warn', 'Un nouveau coin part de la couleur déjà affichée, puis glisse',
+      `${fresh} coins neufs en descendant de 12 à 8,4 km. Sans glissement, un coin sauterait jusqu'à <b>${fmt(jumpNo,1)}</b> niveaux d'écran ; avec, le saut à la première image est de <b>${fmt(jumpYes,1)}</b>. Après 0,5 s, chaque coin est à moins de ${fmt(err, 2)} niveau de sa vraie valeur.`);
+  }
+  await pause();
+
+  // 7. Tramage
+  {
+    const q = (v, dith, i) => Math.round(v*255 + (dith ? (hash3(i, 13, 7) - 0.5) : 0)) / 255;
+    let e0 = 0, e1 = 0;
+    for (const v of [0.1012, 0.2534, 0.6667]) {
+      let m0 = 0, m1 = 0; for (let i = 0; i < 4096; i++) { m0 += q(v, false, i); m1 += q(v, true, i); }
+      e0 = Math.max(e0, Math.abs(m0/4096 - v) * 255); e1 = Math.max(e1, Math.abs(m1/4096 - v) * 255);
+    }
+    const run = dith => { let best = 0, cur = 0, prev = -1; for (let x = 0; x < 1280; x++) { const s = q(40/255 + 4/255 * x/1279, dith, x); if (s === prev) cur++; else { cur = 1; prev = s; } best = Math.max(best, cur); } return best; };
+    const r0 = run(false), r1 = run(true);
+    add(e1 < 0.06 && r1 < r0 / 5 ? 'ok' : 'warn', 'Tramage contre les bandes de couleur',
+      `Dégradé très doux sur 1280 pixels : la plus longue bande d'une seule couleur fait <b>${r0} px</b> sans tramage, <b>${r1} px</b> avec. En moyenne, la couleur tramée tombe à ${fmt(e1, 3)} niveau de la vraie (contre ${fmt(e0, 2)} sans).`);
+  }
+  await pause();
+
+  // 8. Éclipse avec pénombre
+  {
+    let worst = 0;
+    for (const [r1, r2, d] of [[1, 0.7, 0.9], [1, 1.6, 1.2], [1, 0.3, 0.85], [1, 1.0, 0.5]]) {
+      let hit = 0; const N = 40000;
+      for (let i = 0; i < N; i++) { const a = hash3(i,3,3)*2*Math.PI, r = Math.sqrt(hash3(i,5,5)) * r1, x = r*Math.cos(a), y = r*Math.sin(a); if ((x-d)**2 + y*y < r2*r2) hit++; }
+      worst = Math.max(worst, Math.abs(diskOverlap(r1, r2, d) / (Math.PI*r1*r1) - hit/N));
+    }
+    const M = L.map(x => x * MOON_DIST), u = norm(cross(L, [0,1,0]));
+    const at = km => sunVis(norm(L.map((x, i) => x + u[i] * km / R_KM)), L, M);
+    const prof = [0, 20, 40, 60, 80, 100, 120, 140, 160].map(km => at(km));
+    let mono = true; for (let i = 1; i < prof.length; i++) if (prof[i] < prof[i-1] - 1e-9) mono = false;
+    const umbra = prof[0] < 1e-6, pen = prof.some(v => v > 0.05 && v < 0.95), out = at(200) > 0.999;
+    add(worst < 0.01 && mono && umbra && pen && out ? 'ok' : 'bad', 'Éclipse avec pénombre',
+      `Part du Soleil cachée calculée exactement (écart ${fmt(worst*100, 2)} % avec un comptage au hasard). Lumière reçue en s'éloignant du centre de l'ombre, tous les 20 km : ${prof.map(v => Math.round(v*100) + ' %').join(' · ')}. Ombre totale au centre (${fmt(Math.max(0,(MOON_R - (MOON_DIST-1)*SUN_ANG))*R_KM, 0)} km de rayon), puis pénombre jusqu'à ${fmt((MOON_R + (MOON_DIST-1)*SUN_ANG)*R_KM, 0)} km.`);
+  }
+  await pause();
+
+  // 9. Question 43 : par rayon (A) et par pixel (B) donnent la même lumière en moyenne
+  {
+    let level = BASE.slice(); for (let l = 0; l < 4; l++) level = level.flatMap(n => n.split());
+    let tA = 0, tB = 0, cnt = 0, maxD = 0;
+    for (const n of level) {
+      const a = lum(n.energy(L, Mfar, lKey)) * n.area; n.samples();
+      const b = lum(n.alb) * Math.max(0, dot(n.nm, L)) * sunVis(n.n, L, Mfar) * n.area;
+      if (dot(n.n, L) > 0.2) { tA += a; tB += b; cnt++; maxD = Math.max(maxD, Math.abs(a - b) / Math.max(1e-12, a)); }
+    }
+    const d = Math.abs(tA - tB) / tA;
+    add(d < 0.05 ? 'ok' : 'warn', 'Question 43 : les deux versions renvoient la même lumière',
+      `Sur ${cnt} grands triangles côté jour, la lumière totale diffère de ${fmt(d*100, 2)} % entre A (par rayon) et B (par pixel). Les différences visibles sont donc locales (ligne jour/nuit, bord de l'ombre, reliefs) : c'est ce que tu compares à l'œil.`);
+  }
+  show('Petite échelle (descente au millimètre)…'); await pause();
+
+  // 10. Petite échelle : jusqu'au millimètre, sans tremblement
+  {
+    const rows = []; let ok = true, deepest = 0;
+    for (const alt of [1.7e-5, 1.7e-6, 1.7e-7]) {
+      const cam = land.map(v => v*(R+alt)), em = [];
+      const t0 = performance.now();
+      lastEff.A = 0;
+      const st = fullSelect({ ...base, mode: 'A', cam, frustum: frustumFor(cam, aspect, 0), budget: BUDGET, out: em }, true);
+      const ms = performance.now() - t0;
+      // précision : position calculée en 64 bits puis envoyée en 32 bits, comparée à la position exacte
+      let worstPx = 0, nan = false;
+      for (let i = 0; i < em.length; i += 3) {
+        const n = em[i]; if (n.E.some(x => !isFinite(x))) nan = true;
+        const q = n.va.p, rel = sub(q, cam), r32 = rel.map(Math.fround);
+        const dd = Math.max(1e-30, len(rel)); worstPx = Math.max(worstPx, dist(rel, r32) / dd * f);
+      }
+      let minEdge = Infinity; for (let i = 0; i < em.length; i += 3) minEdge = Math.min(minEdge, em[i].edge);
+      if (nan || worstPx > 0.1) ok = false;
+      deepest = Math.max(deepest, st.maxLevel);
+      rows.push(`à ${fmtDist(alt)} du sol : niveau ${st.maxLevel}, plus petit triangle ${fmtDist(minEdge)}, ${st.count.toLocaleString('fr-FR')} triangles (rayon ${fmt(st.effRay, 1)} px), erreur d'affichage ${worstPx.toExponential(1)} px (${fmt(ms, 0)} ms en partant de zéro)`);
+      await pause();
+    }
+    if (deepest < 28) ok = false;
+    add(ok ? 'ok' : 'bad', 'Petite échelle (question 37) : descente jusqu\'au millimètre', rows.join('<br>') + '<br>Positions calculées en 64 bits par rapport à la caméra, puis envoyées en 32 bits : rien ne tremble.');
+  }
+  await pause();
+
+  // 11. Soleil visible avec halo, étoiles masquées
+  {
+    const save = { ...state };
+    const Ls = sunDir(), u = norm(cross(Ls, [0,1,0])), a = 6 * Math.PI/180;
+    const dir = norm([-Ls[0]*Math.cos(a) + u[0]*Math.sin(a), -Ls[1]*Math.cos(a) + u[1]*Math.sin(a), -Ls[2]*Math.cos(a) + u[2]*Math.sin(a)]);
+    state.theta = Math.atan2(dir[2], dir[0]); state.phi = Math.acos(dir[1]); state.alt = 20; state.pitch = 0; state.view = 'A';
+    rebuild(f); render();
+    const cam = camPos(); setCam(cam, { x: 0, w: canvas.clientWidth }, 1, 2000);
+    const v = new THREE.Vector3(Ls[0], Ls[1], Ls[2]).multiplyScalar(SKY).project(camera);
+    const gl = renderer.getContext(), pr = renderer.getPixelRatio();
+    const px = Math.round((v.x * 0.5 + 0.5) * canvas.clientWidth * pr), py = Math.round((v.y * 0.5 + 0.5) * canvas.clientHeight * pr);
+    const buf = new Uint8Array(4); gl.readPixels(px, py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    const off = Math.round(12 * pr), buf2 = new Uint8Array(4); gl.readPixels(px + off, py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf2);
+    const gain = state.starGain, sIn = state.sunIn;
+    Object.assign(state, save); state.dirty = true;
+    add(buf[0] > 240 && buf2[0] > 5 && buf2[0] < 200 && sIn && gain === 0 ? 'ok' : 'bad', 'Soleil visible, avec un halo léger, et étoiles masquées',
+      `Au centre du Soleil, l'écran vaut ${buf[0]}/255 (blanc) ; à 12 pixels, dans le halo, ${buf2[0]}/255. Soleil dans le champ : étoiles à ${Math.round(gain*100)} %. Le disque a sa vraie taille (0,53°).`);
+  }
+  await pause();
+  } catch (e) {
+    add('bad', 'Erreur pendant les tests', String(e && e.stack || e));
+  }
+  const nOk = RESULTS.filter(r => r.cls === 'ok').length;
+  html += `<div class="t"><b>${nOk} / ${RESULTS.length} tests réussis</b> · triangles en mémoire : ${nodeCount.toLocaleString('fr-FR')}</div>`;
+  out.innerHTML = html;
+  window.__banc.done = true; window.__banc.ok = nOk; window.__banc.total = RESULTS.length;
+  lastEff.A = lastEff.B = 0; busy = false; state.dirty = true;
+}
+
+// =====================================================================
+// DÉMARRAGE
+// =====================================================================
+resize(); setAlt(state.alt); updateHud();
+requestAnimationFrame(loop);
+if (location.hash === '#tests') setTimeout(runTests, 300);
+</script>
+</body>
+</html>
