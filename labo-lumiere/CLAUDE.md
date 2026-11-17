@@ -42,9 +42,11 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
 - `scripts/lumiere/soleil.gd` : Soleil réel (1 UA, rayon 6,957e8 m, 126 600 lux, éclat 1,86e9 cd/m², bord
   assombri 60 %), positions en 64 bits (`PackedFloat64Array`), part visible du disque derrière une sphère
   (recouvrement de deux disques = pénombre).
-- `scripts/lumiere/oeil.gd` : pupille (Moon et Spencer), adaptation de la rétine en trolands (vite à la
-  lumière 0,4 s ; au noir 8 s accéléré par défaut, 300 s avec T), réponse de Naka-Rushton (k = 4,5),
+- `scripts/lumiere/oeil.gd` : pupille (Moon et Spencer), adaptation de la rétine en trolands (lumière
+  2 s, d'où un vrai éblouissement blanc en sortant du noir ; au noir 8 s accéléré par défaut, 300 s avec T), réponse de Naka-Rushton (k = 4,5),
   vision de nuit entre 3 et 0,003 cd/m², halo = fonction d'éblouissement CIE 146:2002.
+  Le disque du Soleil ne compte qu'à 3 % dans l'adaptation (`PART_DISQUE_ADAPTATION` dans labo.gd) :
+  sinon tout l'écran noircit face au Soleil, effet « paupières qui se ferment » refusé par Gwenaël le 18/11.
   `luminance_scene()` = « posemètre » (aujourd'hui 16 × 9 directions dans labo.gd ; à l'étape 4 ce
   seront les rayons qui donneront ces mesures, sans coût en plus).
 - `scripts/lumiere/oeil.gdshaderinc` : à inclure dans TOUT programme de dessin. Chaque programme calcule

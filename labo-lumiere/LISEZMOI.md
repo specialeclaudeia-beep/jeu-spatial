@@ -15,13 +15,13 @@ Le vrai Soleil, à sa vraie distance (1 unité astronomique, 150 millions de km)
 taille (un demi-degré) et sa vraie lumière, et une boule grise d'essai de 1 km (comme la Lune),
 en attendant la planète en rayons (étape 4). Tout passe par **l'œil du pilote** :
 - la **pupille** se ferme au soleil (2 mm) et s'ouvre dans le noir (8 mm) ;
-- l'œil **s'habitue** : vite à la lumière, lentement au noir ;
+- l'œil **s'habitue** : en quelques secondes à la lumière (ébloui avant), lentement au noir ;
 - le **halo** (éblouissement) autour du Soleil, avec ses fines raies, comme dans un vrai œil ;
 - la **vision de nuit** : dans le noir, les couleurs partent, tout devient gris-bleu avec du grain.
 
 Les points de vue d'essai (touches **1** à **4**) :
 1. départ, la boule à moitié éclairée ;
-2. on regarde le Soleil : éblouissement ;
+2. on regarde le Soleil : éblouissement (tout devient blanc, puis l'œil s'habitue en quelques secondes) ;
 3. dans l'ombre de la boule : nuit complète, l'œil s'habitue au noir en ~20 secondes ;
 4. au bord de l'ombre : la moitié du Soleil dépasse (éclipse).
 
