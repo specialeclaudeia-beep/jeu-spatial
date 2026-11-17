@@ -8,6 +8,10 @@ const ChronoBoucle = preload("res://scripts/lumiere/chrono_boucle.gd")
 ## Le chronomètre lu par le compteur. Chaque scène y range ses mesures.
 var chrono = ChronoBoucle.new()
 
+## Si vrai, le compteur range lui-même le temps de dessin donné par Godot.
+## La scène de mesure le met à faux : elle range son propre temps « dessiner ».
+var mesurer_dessin := true
+
 var _fond: PanelContainer
 var _texte: Label
 var _attente := 0.0
@@ -36,11 +40,12 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
-	var vp := get_viewport().get_viewport_rid()
-	var dessin := RenderingServer.viewport_get_measured_render_time_cpu(vp) \
-		+ RenderingServer.viewport_get_measured_render_time_gpu(vp)
-	# Tant que le système ne dessine rien lui-même, le temps « dessiner » = celui de Godot.
-	chrono.enregistrer(ChronoBoucle.DESSINER, dessin)
+	if mesurer_dessin:
+		var vp := get_viewport().get_viewport_rid()
+		var dessin := RenderingServer.viewport_get_measured_render_time_cpu(vp) \
+			+ RenderingServer.viewport_get_measured_render_time_gpu(vp)
+		# Tant que le système ne dessine rien lui-même, le temps « dessiner » = celui de Godot.
+		chrono.enregistrer(ChronoBoucle.DESSINER, dessin)
 	_attente -= delta
 	if _attente <= 0.0:
 		_attente = RAFRAICHIR_S
