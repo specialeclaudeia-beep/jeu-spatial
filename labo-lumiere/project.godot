@@ -1,0 +1,26 @@
+; Labo-lumière : petit projet Godot à part pour construire le système de lumière
+; (voir LISEZMOI.md). Il est rangé dans le dossier du jeu, mais le jeu ne le charge pas :
+; Godot ignore tout sous-dossier qui contient son propre project.godot.
+
+config_version=5
+
+[application]
+
+config/name="Labo lumière"
+config/description="Labo du système de décomposition fractale de la lumière"
+run/main_scene="res://scenes/labo.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+
+[physics]
+
+common/physics_ticks_per_second=120
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
