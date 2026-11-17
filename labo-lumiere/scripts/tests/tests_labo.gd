@@ -4,6 +4,8 @@ extends Control
 
 const ChronoBoucle = preload("res://scripts/lumiere/chrono_boucle.gd")
 const Compteur = preload("res://scripts/outils/compteur.gd")
+const MorceauType = preload("res://scripts/lumiere/morceau_type.gd")
+const BlocFactice = preload("res://scripts/mesure/bloc_factice.gd")
 
 var texte: RichTextLabel
 var reussis := 0
@@ -51,6 +53,9 @@ func _lancer() -> void:
 	_test_compteur_f3()
 	await _test_scene_labo()
 	_test_systeme_independant()
+	_test_morceau_type()
+	_test_bloc_factice()
+	await _test_scene_mesure()
 
 
 func _test_reglages() -> void:
@@ -152,3 +157,70 @@ func _test_systeme_independant() -> void:
 			pos = code.find("res://", pos + 1)
 	_resultat(fautifs.is_empty(), "Le système (scripts/lumiere) ne dépend de rien d'autre",
 		"aucun lien vers le reste du labo" if fautifs.is_empty() else "liens vers l'extérieur dans : " + ", ".join(fautifs))
+
+
+func _test_morceau_type() -> void:
+	var m: ArrayMesh = MorceauType.creer()
+	var tab := m.surface_get_arrays(0)
+	var sommets: PackedVector3Array = tab[Mesh.ARRAY_VERTEX]
+	var uvs: PackedVector2Array = tab[Mesh.ARRAY_TEX_UV]
+	# Chaque numéro 0..63 apparaît sur exactement 3 sommets, et l'aire totale = celle du triangle de base (0,5).
+	var vus := {}
+	var aire := 0.0
+	for k in sommets.size() / 3:
+		var a := sommets[3 * k]
+		var b := sommets[3 * k + 1]
+		var c := sommets[3 * k + 2]
+		aire += (b - a).cross(c - a).length() * 0.5
+		vus[int(uvs[3 * k].x)] = true
+	var ok := sommets.size() == 192 and vus.size() == 64 and absf(aire - 0.5) < 1e-4
+	_resultat(ok, "Morceau type : 64 petits triangles numérotés",
+		"%d sommets (attendu 192), %d numéros (attendu 64), aire %.4f (attendu 0,5)" % [sommets.size(), vus.size(), aire])
+
+
+func _test_bloc_factice() -> void:
+	var n := 800
+	var centres := PackedFloat64Array()
+	var tailles := PackedFloat32Array()
+	var adresses := PackedInt64Array()
+	for i in n:
+		var p := Vector3(sin(i * 0.1), cos(i * 0.37), sin(i * 0.05) + 0.5).normalized() * 1000.0
+		centres.append_array([p.x, p.y, p.z])
+		tailles.append(5.0)
+		adresses.append(i)
+	var bloc = BlocFactice.new()
+	bloc.preparer(0, centres, tailles, adresses)
+	bloc.eclairer(3, 8, 1.0)   # 1 rayon sur 8 : les rayons 3, 11, 19…
+	var faits := 0
+	var bon_tour := true
+	for i in n:
+		if bloc.rayons[i * 13 + 12] == 1.0:
+			faits += 1
+			bon_tour = bon_tour and i % 8 == 3
+	bloc.choisir(Vector3(0, 0, 1300), 1000.0)
+	var ok: bool = faits == n / 8 and bon_tour and bloc.nb_visibles > 0 and bloc.nb_visibles < n
+	_resultat(ok, "Rayons factices : 1 sur 8 éclairé par image, horizon respecté",
+		"%d rayons refaits (attendu %d), %d visibles sur %d" % [faits, n / 8, bloc.nb_visibles, n])
+
+
+func _test_scene_mesure() -> void:
+	var paquet: PackedScene = load("res://scenes/mesure.tscn")
+	var m: Node = paquet.instantiate() if paquet else null
+	if m == null:
+		_resultat(false, "Scène de mesure", "mesure.tscn ne se charge pas")
+		return
+	add_child(m)
+	m.set_process(false)          # on la pilote à la main, sans attendre ses 25 secondes
+	await get_tree().process_frame
+	m.construire(2000)
+	var ms1: PackedFloat64Array = m._une_image(false, 8)
+	var ms2: PackedFloat64Array = m._une_image(true, 8)
+	var octets_ok: bool = m.image.get_width() == 512 and m.nb_rayons == 2048
+	m.resultats.append({"nom": "Tout, plusieurs fils de calcul", "rayons": 2048, "images_s": 70.0, "image_ms": 14.0,
+		"pire_ms": 15.0, "choisir": 1.0, "eclairer": 2.0, "envoyer": 0.5, "dessiner": 8.0, "gpu": 0.0, "calcul": true})
+	var v: String = m.verdict()
+	var rapport: String = m.rapport_texte()
+	m.queue_free()
+	var ok: bool = ms1[0] >= 0.0 and ms2[1] >= 0.0 and octets_ok and v.begins_with("GDScript SUFFIT") and rapport.contains("| Essai |")
+	_resultat(ok, "Scène de mesure : une image avec 1 fil et plusieurs fils, verdict",
+		"1 fil : choisir %.2f / éclairer %.2f ms ; plusieurs fils : %.2f / %.2f ms ; texture %s ; verdict « %s »" % [ms1[0], ms1[1], ms2[0], ms2[1], "bonne" if octets_ok else "fausse", v.left(30)])
