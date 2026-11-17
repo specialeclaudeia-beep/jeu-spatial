@@ -24,3 +24,53 @@ common/physics_ticks_per_second=120
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+
+; Réglages globaux lus par tous les programmes de dessin du système de lumière (étape 3).
+; Le processeur les change à chaque image (scripts/lumiere/oeil.gd et soleil.gd).
+; À recopier dans le project.godot du jeu au branchement (étape 8).
+[shader_globals]
+
+soleil_direction={
+"type": "vec3",
+"value": Vector3(0.6247, 0.3123, 0.7704)
+}
+soleil_eclairement={
+"type": "float",
+"value": 126573.0
+}
+soleil_luminance={
+"type": "float",
+"value": 2.33e+09
+}
+soleil_rayon_angle={
+"type": "float",
+"value": 0.004653
+}
+soleil_eclairement_oeil={
+"type": "float",
+"value": 0.0
+}
+soleil_couleur={
+"type": "vec3",
+"value": Vector3(1.06, 0.99, 0.93)
+}
+oeil_gain={
+"type": "float",
+"value": 5e-05
+}
+oeil_nuit={
+"type": "float",
+"value": 0.0
+}
+oeil_pixel_angle={
+"type": "float",
+"value": 0.001
+}
+oeil_droite={
+"type": "vec3",
+"value": Vector3(1, 0, 0)
+}
+oeil_haut={
+"type": "vec3",
+"value": Vector3(0, 1, 0)
+}

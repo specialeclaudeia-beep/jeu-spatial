@@ -38,6 +38,25 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
 - **Pas de `class_name`** : on charge les scripts avec `preload`, pour que rien n'entre en conflit
   avec les classes du jeu le jour du branchement.
 
+## Soleil et œil (étape 3)
+- `scripts/lumiere/soleil.gd` : Soleil réel (1 UA, rayon 6,957e8 m, 126 600 lux, éclat 1,86e9 cd/m², bord
+  assombri 60 %), positions en 64 bits (`PackedFloat64Array`), part visible du disque derrière une sphère
+  (recouvrement de deux disques = pénombre).
+- `scripts/lumiere/oeil.gd` : pupille (Moon et Spencer), adaptation de la rétine en trolands (vite à la
+  lumière 0,4 s ; au noir 8 s accéléré par défaut, 300 s avec T), réponse de Naka-Rushton (k = 4,5),
+  vision de nuit entre 3 et 0,003 cd/m², halo = fonction d'éblouissement CIE 146:2002.
+  `luminance_scene()` = « posemètre » (aujourd'hui 16 × 9 directions dans labo.gd ; à l'étape 4 ce
+  seront les rayons qui donneront ces mesures, sans coût en plus).
+- `scripts/lumiere/oeil.gdshaderinc` : à inclure dans TOUT programme de dessin. Chaque programme calcule
+  une vraie luminance (cd/m²), ajoute `oeil_voile(direction, TIME)`, puis `ALBEDO = oeil_vers_ecran(...)`.
+- Réglages globaux des shaders : section `[shader_globals]` de `project.godot` (à recopier dans le jeu
+  à l'étape 8). Le processeur les met à jour à chaque image.
+- **Rendu Compatibilité : aucune conversion vers sRGB pour nos programmes** (vérifié : `ALBEDO = 0.5` sort
+  à 0,502 à l'écran). `oeil_vers_ecran` fait donc lui-même la conversion sRGB. Garder
+  `Environment.tonemap_mode = LINEAR` et pas de glow.
+- `scripts/lumiere/ciel.gdshader` : ciel (lueur de fond 2e-4 cd/m², disque solaire, couronne de Baumbach).
+  Les étoiles arrivent à l'étape 6.
+
 ## Organisation
 | Chemin | Contenu |
 |---|---|
@@ -49,7 +68,7 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
 | `scripts/lumiere/` | Le système lui-même. Ne charge RIEN en dehors de ce dossier (un test le vérifie) : il sera copié tel quel dans le jeu à l'étape 8 |
 | `scripts/outils/` | Outils du labo (compteur…) |
 | `scripts/tests/` | Les tests |
-| `shaders/` | Programmes de la carte graphique |
+| `shaders/` | Programmes de la carte graphique propres au labo (`astre_essai.gdshader`) |
 | `addons/godot_ai/` | Copié depuis le jeu sur le PC, pas dans le dépôt (`.gitignore`) |
 
 ## Tests automatiques
