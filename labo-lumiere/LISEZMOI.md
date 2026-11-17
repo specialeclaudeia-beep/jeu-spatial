@@ -35,3 +35,4 @@ Tout doit être vert.
 
 ## Avancement
 - Étape 0 (17/11/2026) : labo créé, scène vide avec le compteur, 7 tests automatiques.
+- Étape 1 (17/11/2026) : banc d'essai v2 dans `banc-essai/banc-lumiere-v2.html` (page web, voir `banc-essai/LISEZMOI.md`) : question 43 en deux versions côte à côte, ressemblance, couleurs stables, Soleil, éclipse, descente au millimètre. 11 tests automatiques.
