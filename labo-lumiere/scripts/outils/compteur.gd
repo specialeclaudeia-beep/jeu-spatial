@@ -12,6 +12,9 @@ var chrono = ChronoBoucle.new()
 ## La scène de mesure le met à faux : elle range son propre temps « dessiner ».
 var mesurer_dessin := true
 
+## Lignes en plus affichées sous les temps (par exemple l'état de l'œil du pilote).
+var infos := ""
+
 var _fond: PanelContainer
 var _texte: Label
 var _attente := 0.0
@@ -73,6 +76,8 @@ func texte() -> String:
 		temps.append("%s %.2f%s" % [ChronoBoucle.NOMS[i], chrono.moyennes_ms[i], marque])
 	lignes.append("Temps (ms) : " + "  ·  ".join(temps))
 	lignes.append("Total : %.2f ms sur 16,7    Rayons : %d" % [chrono.total_ms(), chrono.nb_rayons])
+	if infos != "":
+		lignes.append(infos)
 	return "\n".join(lignes)
 
 
