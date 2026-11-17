@@ -20,6 +20,9 @@ const ALBEDO_ASTRE := 0.12               # comme la Lune
 const FOND_CIEL := 2.0e-4                # cd/m², le même que dans ciel.gdshader
 const DESSIN_MAX := 20000.0              # au-delà, l'astre est dessiné plus près et plus petit
 ## Direction de l'astre vers le Soleil (fixe pour l'étape 3 ; la rotation viendra à l'étape 5).
+## Le disque du Soleil est minuscule : la rétine ne s'habitue pas à lui, elle sature à cet endroit
+## (éblouissement). Il ne compte donc que très peu dans l'adaptation de tout l'œil.
+const PART_DISQUE_ADAPTATION := 0.03
 const VERS_SOLEIL := Vector3(1.0, 0.25, 0.2)
 
 var camera: Camera3D
@@ -225,7 +228,7 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float) -> float:
 			var demi_v := deg_to_rad(camera.fov) * 0.5
 			var demi_h := atan(tan(demi_v) * taille.x / taille.y)
 			var champ := 4.0 * asin(sin(demi_h) * sin(demi_v))
-			en_plus = Soleil.luminance_moyenne() * PI * alpha * alpha / champ * part_visible
+			en_plus = Soleil.luminance_moyenne() * PI * alpha * alpha / champ * part_visible * PART_DISQUE_ADAPTATION
 	rs_angle_pixel(taille)
 	return Oeil.luminance_scene(echantillons, poids, en_plus)
 

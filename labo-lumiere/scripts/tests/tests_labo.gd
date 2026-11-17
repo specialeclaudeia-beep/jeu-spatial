@@ -304,14 +304,14 @@ func _test_adaptation() -> void:
 	for i in 60:
 		lent.avancer(1e-4, 0.5)         # 30 s à la vraie vitesse : à peine commencé
 	var nuit_lente: float = lent.nuit()
-	o.avancer(1000.0, 2.0)              # retour au jour : 2 s suffisent
+	o.avancer(1000.0, 8.0)              # retour au jour : quelques secondes (ébloui avant)
 	var g: float = o.gain()
 	o.equilibrer(1000.0)
 	var rapport: float = g / o.gain()
 	var ok := absf(gris - 0.18) < 0.02 and blanc > 0.99 and jour_nuit == 0.0 and nuit_rapide > 0.9 \
 		and nuit_lente < 0.5 and rapport > 0.5 and rapport < 2.0
 	_resultat(ok, "Adaptation de l'œil : jour, nuit (lente au noir, rapide à la lumière)",
-		"gris moyen %.2f, Soleil %.2f ; vision de nuit après 30 s : %d %% (accélérée), %d %% (vraie vitesse) ; retour au jour en 2 s : écart ×%.2f" % [gris, blanc, roundi(nuit_rapide * 100), roundi(nuit_lente * 100), rapport])
+		"gris moyen %.2f, Soleil %.2f ; vision de nuit après 30 s : %d %% (accélérée), %d %% (vraie vitesse) ; retour au jour en 8 s : écart ×%.2f" % [gris, blanc, roundi(nuit_rapide * 100), roundi(nuit_lente * 100), rapport])
 
 
 func _test_halo_cie() -> void:
@@ -340,15 +340,21 @@ func _test_labo_oeil() -> void:
 	labo.aller_a(4)
 	labo._process(0.016)
 	var vis_bord: float = labo.part_visible
-	labo.aller_a(2)                     # face au Soleil
-	for i in 10:
+	labo.aller_a(2)                     # face au Soleil, en sortant du noir
+	labo._process(0.1)
+	var ebloui: float = labo.oeil.reponse(labo.luminance_vue)
+	for i in 9:
 		labo._process(0.1)
 	var pupille: float = labo.oeil.pupille_mm
+	for i in 40:
+		labo._process(0.5)
+	var habitue: float = labo.oeil.reponse(labo.luminance_vue)
 	var infos: String = labo.compteur.infos
 	labo.queue_free()
-	var ok := vis_ombre == 0.0 and nuit > 0.9 and absf(vis_bord - 0.5) < 0.05 and pupille < 2.3 and infos.contains("pupille")
-	_resultat(ok, "Labo : nuit dans l'ombre, éclipse à moitié, pupille serrée face au Soleil",
-		"ombre : Soleil visible %d %%, vision de nuit %d %% ; bord : %d %% ; face au Soleil : pupille %.1f mm" % [roundi(vis_ombre * 100), roundi(nuit * 100), roundi(vis_bord * 100), pupille])
+	var ok := vis_ombre == 0.0 and nuit > 0.9 and absf(vis_bord - 0.5) < 0.05 and pupille < 2.6 \
+		and ebloui > 0.9 and habitue < 0.5 and infos.contains("pupille")
+	_resultat(ok, "Labo : nuit dans l'ombre, éclipse à moitié, éblouissement face au Soleil",
+		"ombre : Soleil visible %d %%, vision de nuit %d %% ; bord : %d %% ; face au Soleil : pupille %.1f mm, ébloui %.2f puis habitué %.2f" % [roundi(vis_ombre * 100), roundi(nuit * 100), roundi(vis_bord * 100), pupille, ebloui, habitue])
 
 
 func _test_image_soleil() -> void:
