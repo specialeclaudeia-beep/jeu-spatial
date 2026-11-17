@@ -32,6 +32,9 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
 - **Mesurer avant d'optimiser** : chaque scène affiche le compteur (`scripts/outils/compteur.gd`, F3) :
   images/s, millisecondes des 4 temps de la boucle, nombre de rayons. Le système range ses mesures
   dans `compteur.chrono` (`scripts/lumiere/chrono_boucle.gd` : `debut(i)` / `fin(i)`, `nb_rayons`).
+- **C++ (décidé à l'étape 2)** : mesure sur le PC = choisir 9 ms + éclairer 7 ms en GDScript avec fils
+  (budget 2 + 3). Gwenaël a choisi le C++ (GDExtension) pour ces DEUX temps ; l'envoi, le dessin et le reste
+  restent en GDScript/shader. Résultats : `mesures/resultats-pc.md`, scène `scenes/mesure.tscn`.
 - **Pas de `class_name`** : on charge les scripts avec `preload`, pour que rien n'entre en conflit
   avec les classes du jeu le jour du branchement.
 
