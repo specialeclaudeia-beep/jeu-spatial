@@ -127,6 +127,7 @@ func _lancer() -> void:
 	# Suite du programme : rebonds de la lumière sur le sol (Q38).
 	_test_rebonds()
 	_test_light_sans_double_srgb()
+	_test_fantome_visiere()
 	# Einstein A2 : planète et lune vues à grande vitesse.
 	await _test_champ_repos()
 	await _test_planete_vitesse()
@@ -1535,3 +1536,22 @@ func _test_image_planete_vitesse() -> void:
 	var ok: bool = centres[1] > centres[0] + 20.0 and bleus[1] > bleus[0]
 	_resultat(ok, "Image : planète déplacée et teintée à grande vitesse",
 		"centre des points clairs x = %.0f px au repos, %.0f px à 0,6 c vers la droite ; bleu/rouge %.2f → %.2f" % [centres[0], centres[1], bleus[0], bleus[1]])
+
+
+## Image fantôme du Soleil dans la visière : rien sans casque, faible et floue avec la visière claire,
+## dorée et plus forte avec le film d'or ; le flou suit la pupille. Le shader en a la fonction.
+func _test_fantome_visiere() -> void:
+	var sans := Reflets.fantome_visiere(0, 2.5, 0.0047)
+	var claire := Reflets.fantome_visiere(1, 2.5, 0.0047)
+	var oree := Reflets.fantome_visiere(2, 2.5, 0.0047)
+	var noir := Reflets.fantome_visiere(1, 7.0, 0.0047)
+	var shader := FileAccess.get_file_as_string("res://scripts/lumiere/oeil.gdshaderinc")
+	# Luminance au centre du fantôme (visière claire, plein Soleil 126 600 lux), à comparer au Soleil (1,6 milliard cd/m²).
+	var l_claire := claire.x * 126600.0 / (PI * 0.82 * claire.w * claire.w)
+	var ok := sans.x == 0.0 and claire.x > 0.001 and claire.x < 0.005 and oree.x > 5.0 * claire.x \
+		and oree.x > oree.z and noir.w > 2.0 * claire.w and absf(claire.w - 0.0005 * 2.5 / 0.075) < 1e-6 \
+		and shader.find("oeil_image_fantome(d, e)") > 0
+	_resultat(ok, "Visière : image fantôme du Soleil",
+		"claire %.2f %% (flou %.2f°, %.0f cd/m² au centre) ; or %.1f/%.1f/%.1f %% ; pupille 7 mm : flou %.2f°" % [
+			claire.x * 100.0, rad_to_deg(claire.w), l_claire, oree.x * 100.0, oree.y * 100.0, oree.z * 100.0,
+			rad_to_deg(noir.w)])
