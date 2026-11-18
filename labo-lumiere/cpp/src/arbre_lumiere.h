@@ -34,8 +34,7 @@ constexpr int COUPES = 8;              // 8 petits triangles par côté du morce
 constexpr int NB_COINS = 45;           // (8+1)(8+2)/2
 constexpr int NB_RAYONS = 64;          // 8 × 8
 constexpr int NIVEAU_MAX = 26;         // morceau de niveau 26 : rayons d'environ 1 cm sur la planète d'essai
-constexpr int RAYONS_PAR_LIGNE = 256;  // texture des rayons : 256 rayons (4 morceaux) par ligne
-constexpr int TEXELS_PAR_RAYON = 3;    // couleur de départ, couleur visée, direction
+constexpr int TEXELS_PAR_COIN_LUMIERE = 3; // couleur de départ, couleur visée, direction
 constexpr int TEXELS_PAR_COIN = 2;     // position de départ, position visée
 
 struct Vec3d {
@@ -65,9 +64,12 @@ struct Morceau {
 	float cible[NB_COINS][3];     // positions des coins, m, par rapport au centre
 	float depart[NB_COINS][3];    // positions de départ du glissement (forme du parent)
 	float centres[NB_RAYONS][3];  // centre de chaque rayon, par rapport au centre du morceau
-	float albedo[NB_RAYONS][3];   // couleur du sol (part de lumière renvoyée), lumière linéaire
-	float albedo_depart[NB_RAYONS][3];
-	float direction[NB_RAYONS][3]; // direction moyenne de la surface, longueur = 1 − étalement
+	// La lumière des rayons est rangée sur leurs COINS partagés (doc « couleurs stables ») : deux
+	// morceaux voisins ont exactement les mêmes valeurs sur leur bord commun, et la carte graphique
+	// passe en douceur d'un coin à l'autre (pas de mosaïque).
+	float albedo[NB_COINS][3];    // couleur du sol (part de lumière renvoyée), lumière linéaire
+	float albedo_depart[NB_COINS][3];
+	float direction[NB_COINS][3]; // direction moyenne de la surface, longueur = (1 + cos b) / 2
 	uint64_t derniere_image = 0;  // pour oublier les morceaux inutiles les plus anciens
 };
 
@@ -95,8 +97,9 @@ public:
 	// hauteur_px = hauteur de l'écran ; temps = horloge du labo (s), pour le glissement.
 	int choisir(const PackedFloat64Array &p_camera, const PackedFloat32Array &p_axes, double p_tan_h,
 			double p_tan_v, double p_hauteur_px, double p_temps);
-	// 2. ÉCLAIRER : calcule jusqu'à max_morceaux nouveaux morceaux demandés (sur plusieurs fils).
-	int eclairer(int p_max_morceaux);
+	// 2. ÉCLAIRER : calcule jusqu'à max_morceaux nouveaux morceaux demandés (sur plusieurs fils),
+	// en s'arrêtant quand le temps donné (ms) est dépassé.
+	int eclairer(int p_max_morceaux, double p_budget_ms = 3.0);
 
 	// Envoi (préparé ici, fait par GDScript).
 	PackedFloat32Array tampon_instances(const Basis &p_rotation, const PackedFloat64Array &p_decalage) const;
@@ -117,8 +120,8 @@ public:
 	int nb_en_cache() const { return (int)cache.size(); }
 	int nb_demandes() const { return (int)demandes.size(); }
 	int get_places() const { return places; }
-	int largeur_rayons() const { return lumiere::RAYONS_PAR_LIGNE * lumiere::TEXELS_PAR_RAYON; }
-	int hauteur_rayons() const { return places * lumiere::NB_RAYONS / lumiere::RAYONS_PAR_LIGNE; }
+	int largeur_rayons() const { return lumiere::NB_COINS * lumiere::TEXELS_PAR_COIN_LUMIERE; }
+	int hauteur_rayons() const { return places; }
 	int largeur_coins() const { return lumiere::NB_COINS * lumiere::TEXELS_PAR_COIN; }
 	int niveau_max_affiche() const;
 
@@ -176,6 +179,9 @@ private:
 	void finir_calcul(lumiere::Morceau &m, const lumiere::Morceau *parent, int quel_enfant) const;
 	lumiere::Morceau *assurer(uint64_t adresse);
 	void visiter(lumiere::Morceau *m);
+	void considerer(lumiere::Morceau *m);
+	double taille_ecran(const lumiere::Morceau &m) const;
+	std::vector<std::pair<double, lumiere::Morceau *>> file; // morceaux à couper, le plus gros d'abord
 	bool visible(const lumiere::Morceau &m) const;
 	void ecrire_place(int place, const lumiere::Morceau &m);
 	void vider_place(int place);
@@ -186,6 +192,7 @@ public:
 	double hauteur(const lumiere::Vec3d &dir, int octaves) const;
 	void couleur_sol(const lumiere::Vec3d &dir, int octaves, float out[3]) const;
 	double amplitude(int octave) const;
+	void lumiere_coin(const lumiere::Vec3d &dir, int naissance, float albedo[3], float direction[3]) const;
 	double longueur_onde(int octave) const;
 
 	// Pour la tâche des fils de calcul.

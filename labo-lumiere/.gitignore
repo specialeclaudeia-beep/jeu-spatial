@@ -2,3 +2,7 @@
 .godot/
 # Module Godot AI : copié depuis le jeu sur le PC, pas dans le dépôt
 addons/
+# Fichiers intermédiaires de la compilation C++
+cpp/.sconsign.dblite
+cpp/src/*.os
+cpp/src/*.o

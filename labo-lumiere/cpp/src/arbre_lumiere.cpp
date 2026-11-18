@@ -5,6 +5,7 @@
 #include <godot_cpp/core/class_db.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 
@@ -45,21 +46,6 @@ struct TableRayons {
 	}
 };
 static const TableRayons TABLE;
-
-// Numéro du rayon qui contient le point (x, y) du morceau (unités : 1 = un petit triangle).
-static int rayon_sous(double x, double y) {
-	int b = std::clamp((int)std::floor(y), 0, COUPES - 1);
-	int j = std::clamp((int)std::floor(x), 0, COUPES - 1 - b);
-	double fu = x - j, fv = y - b;
-	int base = 0;
-	for (int r = 0; r < b; r++) {
-		base += 2 * (COUPES - r) - 1;
-	}
-	if (fu + fv >= 1.0 && j < COUPES - b - 1) {
-		return base + 2 * j + 1;
-	}
-	return base + 2 * j;
-}
 
 // Mélange de bits (splitmix64) : un nombre au hasard, mais toujours le même pour la même entrée.
 static inline uint64_t melanger(uint64_t z) {
@@ -304,56 +290,75 @@ void ArbreLumiere::finir_calcul(Morceau &m, const Morceau *parent, int k) const 
 		std::memcpy(m.depart, m.cible, sizeof(m.cible));
 	}
 
-	// 4. Les rayons : couleur du sol, direction moyenne et son étalement.
-	int oct_couleur = m.niveau + 3 - 1;      // les rayons sont au niveau du morceau + 3
-	int oct_relief = m.niveau + 3 - 1;
-	double etal = 0;
-	for (int n = oct_relief; n < oct_relief + 8; n++) {
-		double pente = 2.0 * amplitude(n) / longueur_onde(n);
-		etal += pente * pente;
-	}
-	double longueur = std::clamp(1.0 / std::sqrt(1.0 + etal), 0.25, 1.0);
+	// 4. Les rayons : leur centre (pour le posemètre) ; leur lumière est rangée sur les coins.
 	for (int t = 0; t < NB_RAYONS; t++) {
 		const int *c = TABLE.coins[t];
-		Vec3d p0 = pos[c[0]], p1 = pos[c[1]], p2 = pos[c[2]];
-		Vec3d mil = (p0 + p1 + p2) * (1.0 / 3.0);
-		Vec3d n = (p1 - p0).cross(p2 - p0).normalized();
-		if (n.dot(mil) < 0) {
-			n = n * -1.0;
-		}
-		Vec3d d = mil - m.centre;
+		Vec3d d = (pos[c[0]] + pos[c[1]] + pos[c[2]]) * (1.0 / 3.0) - m.centre;
 		m.centres[t][0] = (float)d.x;
 		m.centres[t][1] = (float)d.y;
 		m.centres[t][2] = (float)d.z;
-		m.direction[t][0] = (float)(n.x * longueur);
-		m.direction[t][1] = (float)(n.y * longueur);
-		m.direction[t][2] = (float)(n.z * longueur);
-		Vec3d dm = (dir[c[0]] + dir[c[1]] + dir[c[2]]).normalized();
-		couleur_sol(dm, oct_couleur, m.albedo[t]);
+	}
+	for (int i = 0; i < NB_COINS; i++) {
+		lumiere_coin(dir[i], nais[i], m.albedo[i], m.direction[i]);
 	}
 	if (parent) {
+		// Départ du glissement des couleurs : comme pour les positions, la valeur du parent sous le coin.
 		const int(*C)[2] = ENFANTS[k];
-		for (int t = 0; t < NB_RAYONS; t++) {
-			// Centre du rayon en coordonnées du morceau (un petit triangle = 1), puis chez le parent.
-			const int *c = TABLE.coins[t];
-			double ca = 0, cb = 0;
-			for (int i = 0; i < 3; i++) {
-				int idx = c[i];
-				int bb = 0;
-				while (coin(0, bb + 1) <= idx && bb < 8) bb++;
-				ca += idx - coin(0, bb);
-				cb += bb;
+		for (int b = 0; b <= 8; b++) {
+			for (int a = 0; a + b <= 8; a++) {
+				int x = (C[0][0] * 8 + (C[1][0] - C[0][0]) * a + (C[2][0] - C[0][0]) * b) / 8;
+				int y = (C[0][1] * 8 + (C[1][1] - C[0][1]) * a + (C[2][1] - C[0][1]) * b) / 8;
+				int i = coin(a, b);
+				if (x % 2 == 0 && y % 2 == 0) {
+					std::memcpy(m.albedo_depart[i], parent->albedo[coin(x / 2, y / 2)], sizeof(float) * 3);
+				} else {
+					int a1, b1, a2, b2;
+					voisins_milieu(x, y, 1, a1, b1, a2, b2);
+					const float *u = parent->albedo[coin(a1 / 2, b1 / 2)];
+					const float *v = parent->albedo[coin(a2 / 2, b2 / 2)];
+					for (int q = 0; q < 3; q++) m.albedo_depart[i][q] = 0.5f * (u[q] + v[q]);
+				}
 			}
-			ca /= 3.0;
-			cb /= 3.0;
-			double X = (C[0][0] * 8 + (C[1][0] - C[0][0]) * ca + (C[2][0] - C[0][0]) * cb) / 16.0;
-			double Y = (C[0][1] * 8 + (C[1][1] - C[0][1]) * ca + (C[2][1] - C[0][1]) * cb) / 16.0;
-			int tp = rayon_sous(X, Y);
-			std::memcpy(m.albedo_depart[t], parent->albedo[tp], sizeof(float) * 3);
 		}
 	} else {
 		std::memcpy(m.albedo_depart, m.albedo, sizeof(m.albedo));
 	}
+}
+
+// Lumière d'un coin : couleur du sol, direction moyenne de la surface et son étalement. Tout ne dépend
+// que de la direction du coin et de son niveau de naissance : deux morceaux qui partagent ce coin
+// trouvent exactement la même chose (pas de couture entre morceaux).
+void ArbreLumiere::lumiere_coin(const Vec3d &d, int nais, float albedo[3], float direction[3]) const {
+	int oct = std::max(0, nais - 1);
+	couleur_sol(d, oct, albedo);
+	// Pente du relief : différences de hauteur à l'écart des coins de ce niveau, de part et d'autre.
+	double e = 1.0515 * rayon / std::ldexp(1.0, nais) * 0.5;
+	Vec3d t1 = (std::fabs(d.y) < 0.9 ? Vec3d(0, 1, 0) : Vec3d(1, 0, 0)).cross(d).normalized();
+	Vec3d t2 = d.cross(t1);
+	double k = e / rayon;
+	auto point = [&](const Vec3d &dd) {
+		Vec3d u = dd.normalized();
+		return u * (rayon + hauteur(u, oct));
+	};
+	Vec3d gx = point(d + t1 * k) - point(d - t1 * k);
+	Vec3d gy = point(d + t2 * k) - point(d - t2 * k);
+	Vec3d n = gx.cross(gy).normalized();
+	if (n.dot(d) < 0) {
+		n = n * -1.0;
+	}
+	// Étalement : la pente des détails plus fins que ce coin (ils sont dans le rayon, pas dans le dessin).
+	double etal = 0;
+	for (int q = oct; q < oct + 8; q++) {
+		double pente = 2.0 * amplitude(q) / longueur_onde(q);
+		etal += pente * pente;
+	}
+	// Cône de petites faces dont l'angle moyen avec la direction moyenne vaut atan(pente) :
+	// longueur de la moyenne = (1 + cos b) / 2.
+	double cb = 1.0 / std::sqrt(1.0 + etal);
+	double longueur = std::clamp((1.0 + cb) * 0.5, 0.5, 1.0);
+	direction[0] = (float)(n.x * longueur);
+	direction[1] = (float)(n.y * longueur);
+	direction[2] = (float)(n.z * longueur);
 }
 
 Morceau *ArbreLumiere::assurer(uint64_t adresse) {
@@ -408,16 +413,49 @@ bool ArbreLumiere::visible(const Morceau &m) const {
 	return true;
 }
 
-void ArbreLumiere::visiter(Morceau *m) {
+// Taille d'un rayon de ce morceau à l'écran, en pixels. Un sol vu de biais paraît plus petit
+// (on compte la surface à l'écran : racine du cosinus, au moins 0,2).
+double ArbreLumiere::taille_ecran(const Morceau &m) const {
+	Vec3d v = m.centre - cam;
+	double dist = v.length();
+	double d = std::max(dist - m.rayon_englobant, 1e-3);
+	double biais = 1.0;
+	if (dist > m.rayon_englobant) {
+		double c = std::fabs(m.centre.normalized().dot(v * (1.0 / dist)));
+		biais = std::sqrt(std::max(c, 0.2));
+	}
+	return m.cote / d * px_par_radian / COUPES * biais;
+}
+
+// Regarde un morceau : invisible → rien ; assez fin → affiché ; trop gros → dans la file des coupes.
+void ArbreLumiere::considerer(Morceau *m) {
 	m->derniere_image = image;
 	if (!visible(*m)) {
 		return;
 	}
-	double d = std::max((m->centre - cam).length() - m->rayon_englobant, 1e-3);
-	double taille_px = m->cote / d * px_par_radian / COUPES; // taille d'un rayon à l'écran
+	double t = taille_ecran(*m);
 	bool etait_coupe = interieurs_prec.count(m->adresse) > 0;
 	double seuil = etait_coupe ? seuil_fusion : seuil_couper;
-	if (taille_px > seuil && m->niveau < NIVEAU_MAX && budget_coupes >= 3) {
+	if (t > seuil && m->niveau < NIVEAU_MAX) {
+		file.push_back({ t, m });
+		std::push_heap(file.begin(), file.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+	} else {
+		affiches.push_back(m);
+	}
+}
+
+// Coupe les morceaux du plus gros à l'écran au plus petit, tant qu'il reste des places : le sol
+// tout près de l'œil passe toujours en premier.
+void ArbreLumiere::visiter(Morceau *) {
+	auto plus_petit = [](const std::pair<double, Morceau *> &a, const std::pair<double, Morceau *> &b) { return a.first < b.first; };
+	while (!file.empty()) {
+		std::pop_heap(file.begin(), file.end(), plus_petit);
+		auto [t, m] = file.back();
+		file.pop_back();
+		if (budget_coupes < 3) {
+			affiches.push_back(m);
+			continue;
+		}
 		Morceau *enfants[4];
 		bool prets = true;
 		for (int i = 0; i < 4; i++) {
@@ -426,26 +464,29 @@ void ArbreLumiere::visiter(Morceau *m) {
 			if (it == cache.end()) {
 				prets = false;
 				if (deja_demande.insert(a).second) {
-					demandes.push_back({ taille_px, a });
+					demandes.push_back({ t, a });
 				}
 			} else {
 				enfants[i] = it->second.get();
 			}
 		}
-		if (prets) {
-			budget_coupes -= 3;
-			interieurs.insert(m->adresse);
-			for (int i = 0; i < 4; i++) {
-				visiter(enfants[i]);
-			}
-			return;
+		if (!prets) {
+			affiches.push_back(m);
+			continue;
+		}
+		budget_coupes -= 3;
+		interieurs.insert(m->adresse);
+		for (int i = 0; i < 4; i++) {
+			considerer(enfants[i]);
 		}
 	}
-	affiches.push_back(m);
 }
 
 int ArbreLumiere::choisir(const PackedFloat64Array &p_camera, const PackedFloat32Array &p_axes, double p_tan_h,
 		double p_tan_v, double p_hauteur_px, double p_temps) {
+	if (occupant.empty()) {
+		configurer(rayon, 1, places);
+	}
 	image++;
 	if (p_camera.size() >= 3) {
 		cam = Vec3d(p_camera[0], p_camera[1], p_camera[2]);
@@ -463,9 +504,11 @@ int ArbreLumiere::choisir(const PackedFloat64Array &p_camera, const PackedFloat3
 	interieurs.clear();
 	demandes.clear();
 	deja_demande.clear();
+	file.clear();
 	for (int f = 0; f < 20; f++) {
-		visiter(assurer((1ULL << 5) | (uint64_t)f));
+		considerer(assurer((1ULL << 5) | (uint64_t)f));
 	}
+	visiter(nullptr);
 	interieurs_prec.swap(interieurs);
 
 	// Places dans les textures : on libère celles des morceaux partis, on donne une place aux nouveaux.
@@ -514,42 +557,52 @@ void ArbreLumiere::tache_eclairer(void *p_travail, uint32_t p_i) {
 	t->arbre->calculer(*t->sortie[p_i], t->parents[p_i], t->enfants[p_i]);
 }
 
-int ArbreLumiere::eclairer(int p_max) {
+// Calcule les morceaux demandés, les plus gros à l'écran d'abord, par paquets de 8 répartis sur les
+// fils de calcul, jusqu'à max_morceaux ou jusqu'à ce que le temps donné (ms) soit dépassé : une image
+// ne doit jamais attendre longtemps (le reste sera fait aux images suivantes).
+int ArbreLumiere::eclairer(int p_max, double p_budget_ms) {
 	int n = std::min((int)demandes.size(), std::max(p_max, 0));
-	if (n == 0) {
-		return 0;
-	}
-	Travail t;
-	t.arbre = this;
-	std::vector<std::unique_ptr<Morceau>> neufs;
-	for (int i = 0; i < n; i++) {
-		uint64_t a = demandes[i].second;
-		auto it = cache.find(a >> 2);
-		if (it == cache.end()) {
-			continue;
+	auto debut = std::chrono::steady_clock::now();
+	int fait = 0;
+	const int PAQUET = 8;
+	for (int depart = 0; depart < n; depart += PAQUET) {
+		Travail t;
+		t.arbre = this;
+		std::vector<std::unique_ptr<Morceau>> neufs;
+		for (int i = depart; i < std::min(n, depart + PAQUET); i++) {
+			uint64_t a = demandes[i].second;
+			auto it = cache.find(a >> 2);
+			if (it == cache.end() || cache.count(a)) {
+				continue;
+			}
+			neufs.push_back(std::make_unique<Morceau>());
+			t.sortie.push_back(neufs.back().get());
+			t.parents.push_back(it->second.get());
+			t.enfants.push_back((int)(a & 3));
 		}
-		neufs.push_back(std::make_unique<Morceau>());
-		t.sortie.push_back(neufs.back().get());
-		t.parents.push_back(it->second.get());
-		t.enfants.push_back((int)(a & 3));
-	}
-	int nb = (int)t.sortie.size();
-	if (nb >= 4 && WorkerThreadPool::get_singleton()) {
-		WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-		int64_t groupe = pool->add_native_group_task(&ArbreLumiere::tache_eclairer, &t, nb, -1, true, "Lumière : éclairer");
-		pool->wait_for_group_task_completion(groupe);
-	} else {
-		for (int i = 0; i < nb; i++) {
-			tache_eclairer(&t, i);
+		int nb = (int)t.sortie.size();
+		if (nb >= 2 && WorkerThreadPool::get_singleton()) {
+			WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
+			int64_t groupe = pool->add_native_group_task(&ArbreLumiere::tache_eclairer, &t, nb, -1, true, "Lumière : éclairer");
+			pool->wait_for_group_task_completion(groupe);
+		} else {
+			for (int i = 0; i < nb; i++) {
+				tache_eclairer(&t, i);
+			}
 		}
-	}
-	for (auto &m : neufs) {
-		m->derniere_image = image;
-		uint64_t a = m->adresse;
-		cache[a] = std::move(m);
+		for (auto &m : neufs) {
+			m->derniere_image = image;
+			uint64_t a = m->adresse;
+			cache[a] = std::move(m);
+		}
+		fait += nb;
+		double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - debut).count();
+		if (ms > p_budget_ms) {
+			break;
+		}
 	}
 	oublier_anciens();
-	return nb;
+	return fait;
 }
 
 void ArbreLumiere::oublier_anciens() {
@@ -580,15 +633,13 @@ static inline uint8_t octet(double v) { return (uint8_t)std::clamp((int)std::lro
 
 void ArbreLumiere::ecrire_place(int p, const Morceau &m) {
 	uint8_t *r = tampon_rayons.ptrw();
-	const int largeur = RAYONS_PAR_LIGNE * TEXELS_PAR_RAYON;
-	for (int t = 0; t < NB_RAYONS; t++) {
-		int g = p * NB_RAYONS + t;
-		int o = ((g / RAYONS_PAR_LIGNE) * largeur + (g % RAYONS_PAR_LIGNE) * TEXELS_PAR_RAYON) * 4;
+	for (int k = 0; k < NB_COINS; k++) {
+		int o = (p * NB_COINS * TEXELS_PAR_COIN_LUMIERE + k * TEXELS_PAR_COIN_LUMIERE) * 4;
 		// Couleur codée par sa racine carrée : plus de nuances dans les sombres (8 bits seulement).
 		for (int i = 0; i < 3; i++) {
-			r[o + i] = octet(std::sqrt(m.albedo_depart[t][i]));
-			r[o + 4 + i] = octet(std::sqrt(m.albedo[t][i]));
-			r[o + 8 + i] = octet(m.direction[t][i] * 0.5 + 0.5);
+			r[o + i] = octet(std::sqrt(m.albedo_depart[k][i]));
+			r[o + 4 + i] = octet(std::sqrt(m.albedo[k][i]));
+			r[o + 8 + i] = octet(m.direction[k][i] * 0.5 + 0.5);
 		}
 		r[o + 3] = 255;
 		r[o + 7] = 255;
@@ -671,19 +722,25 @@ PackedFloat32Array ArbreLumiere::posemetre(const PackedFloat64Array &p_camera, c
 			if (z <= 0) continue;
 			double x = v.dot(dr) / (z * p_tan_h), y = -v.dot(hu) / (z * p_tan_v);
 			if (x <= -1 || x >= 1 || y <= -1 || y >= 1) continue;
-			Vec3d n(m->direction[t][0], m->direction[t][1], m->direction[t][2]);
+			const int *cc = TABLE.coins[t];
+			Vec3d n;
+			float al[3] = { 0, 0, 0 };
+			for (int q = 0; q < 3; q++) {
+				n = n + Vec3d(m->direction[cc[q]][0], m->direction[cc[q]][1], m->direction[cc[q]][2]) * (1.0 / 3.0);
+				for (int w = 0; w < 3; w++) al[w] += m->albedo[cc[q]][w] / 3.0f;
+			}
 			double ln = n.length();
 			double vers_oeil = -n.dot(v) / (ln * v.length());
 			if (vers_oeil <= 0) continue; // face cachée
 			int i = std::min(NX - 1, (int)((x + 1) * 0.5 * NX));
 			int j = std::min(NY - 1, (int)((y + 1) * 0.5 * NY));
 			double cs = n.dot(s) / ln;
-			double etal = 1.0 - ln;
-			double direct = std::max(cs, 0.0);
-			direct = direct + (0.5 * (cs + 1.0) * 0.6 - direct) * etal;
-			const float *al = m->albedo[t];
+			// Même loi que planete.gdshader : la lumière moyenne d'un cône de petites faces.
+			double cb = std::clamp(2.0 * ln - 1.0, -1.0, 1.0);
+			double sb = std::sqrt(std::max(1.0 - cb * cb, 0.0));
+			double direct = cs > sb ? cs : (cs < -sb ? 0.0 : (cs + sb) * (cs + sb) / (4.0 * sb + 1e-6));
 			double y_al = 0.2126 * al[0] + 0.7152 * al[1] + 0.0722 * al[2];
-			double l = y_al * p_eclairement * direct / Math_PI;
+			double l = y_al * p_eclairement * direct / 3.14159265358979323846;
 			double ap = a_rayon * vers_oeil / (z * z);
 			somme[j * NX + i] += l * ap;
 			aire[j * NX + i] += ap;
@@ -703,7 +760,9 @@ PackedFloat32Array ArbreLumiere::posemetre(const PackedFloat64Array &p_camera, c
 // Divers
 // ---------------------------------------------------------------------------------------------
 
-ArbreLumiere::ArbreLumiere() { configurer(600000.0, 1, 1024); }
+// Le constructeur ne fait rien de lourd : l'éditeur de Godot crée parfois un exemplaire juste pour
+// lire ses réglages, et le détruit tard (vu dans le cloud : plantage à la fermeture sinon).
+ArbreLumiere::ArbreLumiere() {}
 ArbreLumiere::~ArbreLumiere() {}
 
 void ArbreLumiere::configurer(double p_rayon, int64_t p_graine, int p_places) {
@@ -796,8 +855,8 @@ PackedFloat64Array ArbreLumiere::coins_depart_morceau(int64_t a) {
 PackedFloat32Array ArbreLumiere::couleurs_morceau(int64_t a) {
 	Morceau *m = assurer((uint64_t)a);
 	PackedFloat32Array r;
-	r.resize(NB_RAYONS * 3);
-	for (int t = 0; t < NB_RAYONS; t++)
+	r.resize(NB_COINS * 3);
+	for (int t = 0; t < NB_COINS; t++)
 		for (int i = 0; i < 3; i++) r[t * 3 + i] = m->albedo[t][i];
 	return r;
 }
@@ -805,8 +864,8 @@ PackedFloat32Array ArbreLumiere::couleurs_morceau(int64_t a) {
 PackedFloat32Array ArbreLumiere::directions_morceau(int64_t a) {
 	Morceau *m = assurer((uint64_t)a);
 	PackedFloat32Array r;
-	r.resize(NB_RAYONS * 3);
-	for (int t = 0; t < NB_RAYONS; t++)
+	r.resize(NB_COINS * 3);
+	for (int t = 0; t < NB_COINS; t++)
 		for (int i = 0; i < 3; i++) r[t * 3 + i] = m->direction[t][i];
 	return r;
 }
@@ -828,7 +887,7 @@ void ArbreLumiere::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_rayon"), &ArbreLumiere::get_rayon);
 	ClassDB::bind_method(D_METHOD("get_relief_max"), &ArbreLumiere::get_relief_max);
 	ClassDB::bind_method(D_METHOD("choisir", "camera", "axes", "tan_h", "tan_v", "hauteur_px", "temps"), &ArbreLumiere::choisir);
-	ClassDB::bind_method(D_METHOD("eclairer", "max_morceaux"), &ArbreLumiere::eclairer);
+	ClassDB::bind_method(D_METHOD("eclairer", "max_morceaux", "budget_ms"), &ArbreLumiere::eclairer, DEFVAL(3.0));
 	ClassDB::bind_method(D_METHOD("tampon_instances", "rotation", "decalage"), &ArbreLumiere::tampon_instances);
 	ClassDB::bind_method(D_METHOD("donnees_rayons"), &ArbreLumiere::donnees_rayons);
 	ClassDB::bind_method(D_METHOD("donnees_coins"), &ArbreLumiere::donnees_coins);

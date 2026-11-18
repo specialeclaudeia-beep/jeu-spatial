@@ -10,7 +10,24 @@ en triangles sans risquer de casser le jeu. Le jeu ne voit pas ce dossier.
    coche **Godot AI**. Ferme la fenêtre.
 4. Appuie sur **F5** (ou Lecture ▶) : la scène du labo s'ouvre.
 
-## Ce qu'on voit (étape 3)
+## Ce qu'on voit (étape 4)
+Une vraie **planète de 600 km de rayon** dessinée avec ton système de lumière en triangles :
+des montagnes, de grandes plaines sombres et des hauts plateaux clairs. Plus on s'approche,
+plus les triangles se coupent en 4 (jusqu'à des rayons de quelques centimètres au ras du sol),
+et chaque nouveau triangle **glisse** doucement de la forme de son parent vers la sienne :
+rien ne doit clignoter. Le calcul (choisir les triangles, les éclairer) est fait en **C++**,
+beaucoup plus vite que le GDScript. La planète **tourne** : un jour dure 2 heures (le Soleil avance
+dans le ciel ; touche **R** pour arrêter).
+La vitesse dépend de l'altitude : lent au ras du sol, très rapide en orbite (molette pour régler).
+
+Les points de vue d'essai (touches **1** à **5**) :
+1. vue d'orbite, la planète à moitié éclairée ;
+2. au sol, on regarde le Soleil : éblouissement ;
+3. côté nuit : noir complet, l'œil passe en vision de nuit ;
+4. coucher de Soleil : la moitié du Soleil dépasse de l'horizon ;
+5. rase-mottes à 200 m, en plein jour (avance avec Z).
+
+## Ce qu'on voyait à l'étape 3
 Le vrai Soleil, à sa vraie distance (1 unité astronomique, 150 millions de km), avec sa vraie
 taille (un demi-degré) et sa vraie lumière, et une boule grise d'essai de 1 km (comme la Lune),
 en attendant la planète en rayons (étape 4). Tout passe par **l'œil du pilote** :
@@ -43,8 +60,9 @@ en haut à gauche, le **compteur** :
 | aller 5 fois plus vite | Maj (maintenue) |
 | regarder autour | clic droit maintenu + souris |
 | changer la vitesse | molette |
-| points de vue d'essai | 1, 2, 3, 4 |
+| points de vue d'essai | 1, 2, 3, 4, 5 |
 | halo de l'œil oui / non | H |
+| rotation de la planète oui / non | R |
 | œil qui s'habitue au noir à la vraie vitesse (lente, ~5 min) ou accélérée | T |
 
 ## Mesure de vitesse (étape 2)
@@ -52,12 +70,17 @@ Ouvre `scenes/mesure.tscn` puis **F6**. Ne touche à rien pendant ~25 secondes :
 s'enchaînent, puis un tableau s'affiche et s'enregistre dans `mesures/resultats-pc.md`.
 La planète a des couleurs au hasard : c'est normal, les rayons sont factices.
 
+## Mesure de la planète (étape 4)
+Lance le labo avec l'option `-- --mesure` (Claude le fait pour toi) : 5 essais s'enchaînent
+(~30 s), puis le tableau s'enregistre dans `mesures/resultats-planete-pc.md`.
+
 ## Tests automatiques
 Ouvre `scenes/tests.tscn` (double-clic dans le panneau Système de fichiers), puis **F6**.
-Tout doit être vert (17 tests depuis l'étape 3).
+Tout doit être vert (26 tests depuis l'étape 4).
 
 ## Avancement
 - Étape 0 (17/11/2026) : labo créé, scène vide avec le compteur, 7 tests automatiques.
 - Étape 1 (17/11/2026) : banc d'essai v2 dans `banc-essai/banc-lumiere-v2.html` (page web, voir `banc-essai/LISEZMOI.md`) : question 43 en deux versions côte à côte, ressemblance, couleurs stables, Soleil, éclipse, descente au millimètre. 11 tests automatiques.
 - Étape 2 (17/11/2026) : mesure de vitesse sur le PC (`scenes/mesure.tscn`). Dessin très rapide (2,3 ms), mais le calcul en GDScript prend 16 ms au lieu de 5 → 53 images/s. Décision de Gwenaël : le calcul (choisir + éclairer) passera en C++. 10 tests automatiques.
+- Étape 4 (18/11/2026) : la planète en rayons, calculée en C++ (rien à installer : la partie C++ est déjà compilée dans `scripts/lumiere/bin`). 600 km, relief, couleurs stables, glissement, rotation (jour de 2 h), l'œil mesure la lumière avec les rayons. Mesure automatique : voir « Mesure de la planète » ci-dessous.
 - Étape 3 (18/11/2026) : le vrai Soleil à 1 UA et l'œil du pilote (pupille, adaptation, halo selon la formule d'éblouissement de la CIE, vision de nuit, couronne du Soleil visible pendant une éclipse). 17 tests automatiques.
