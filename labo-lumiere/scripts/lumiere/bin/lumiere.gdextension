@@ -1,0 +1,14 @@
+; Partie C++ du système de lumière (étape 4) : la classe ArbreLumiere (choisir + éclairer).
+; Compilée dans le cloud, rien à installer sur le PC. Sources : labo-lumiere/cpp/.
+[configuration]
+
+entry_symbol = "lumiere_init"
+compatibility_minimum = "4.5"
+reloadable = false
+
+[libraries]
+
+windows.debug.x86_64 = "res://scripts/lumiere/bin/liblumiere.windows.template_release.x86_64.dll"
+windows.release.x86_64 = "res://scripts/lumiere/bin/liblumiere.windows.template_release.x86_64.dll"
+linux.debug.x86_64 = "res://scripts/lumiere/bin/liblumiere.linux.template_release.x86_64.so"
+linux.release.x86_64 = "res://scripts/lumiere/bin/liblumiere.linux.template_release.x86_64.so"
