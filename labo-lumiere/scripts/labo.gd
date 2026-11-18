@@ -19,6 +19,11 @@ extends Node3D
 ## une étoile compagne (naine orange à 5 UA) qui éclaire aussi la planète, l'aberration et le Doppler.
 ## 9 la planète éclairée par l'étoile compagne seule · 0 ciel étoilé, côté nuit
 ## E étoile compagne oui / non · B essai à grande vitesse (0, 0,1 c, 0,5 c, 0,9 c, 0,99 c, droit devant)
+## Étape 7 : la petite échelle, jusqu'au millimètre. L'œil descend jusqu'à 5 mm du sol ; des cailloux
+## (de 1,5 m à 1 cm) et le grain du sable (jusqu'au mm) ; l'ombre du relief proche et des cailloux
+## (horizon de chaque coin). Tous les calculs de position sont en 64 bits (avant : 4 cm d'erreur).
+## L loupe : 3 cm au-dessus du sol, Soleil bas (ombres des cailloux) · G descente continue de
+## l'orbite jusqu'à 3 cm du sol, en 40 s
 
 const Compteur = preload("res://scripts/outils/compteur.gd")
 const Soleil = preload("res://scripts/lumiere/soleil.gd")
@@ -37,7 +42,13 @@ const GRAINE := 7
 const ALBEDO_ASTRE := 0.12               # boule de secours (si la partie C++ manque)
 const FOND_CIEL := 2.0e-4                # cd/m², le même que dans ciel.gdshader
 const DUREE_JOUR := 7200.0               # s : un jour de 2 h pour les essais (Q40)
-const ALTITUDE_MIN := 1.8                # m : l'œil ne descend pas sous le sol
+const ALTITUDE_MIN := 0.005              # m : l'œil ne descend pas sous le sol (étape 7 : 5 mm, avant 1,8 m)
+## Étape 7 : descente continue (touche G), de l'orbite jusqu'à 3 cm du sol.
+const DESCENTE_DEPART := 1.5e6           # m d'altitude
+const DESCENTE_ARRIVEE := 0.03           # m
+const DESCENTE_DUREE := 40.0             # s
+const LOUPE_ALTITUDE := 0.03             # m (touche L)
+const LOUPE_SOLEIL := 12.0               # degrés : Soleil bas, les cailloux font de longues ombres
 ## Direction de la planète vers le Soleil au départ (elle tourne ensuite avec le jour).
 ## Le disque du Soleil est minuscule : la rétine ne s'habitue pas à lui, elle sature à cet endroit
 ## (éblouissement). Il ne compte donc que très peu dans l'adaptation de tout l'œil.
@@ -112,7 +123,12 @@ const PHASES_MESURE := [
 	["Ciel étoilé, côté nuit (0)", 0, 4.0, false],
 	["Étoile compagne seule (9)", 9, 4.0, false],
 	["Grande vitesse 0,9 c (1 + B)", 1, 4.0, false, 0.9],
+	["Loupe : 3 cm au-dessus du sol (L)", 10, 6.0, false],
+	["Descente continue jusqu'à 3 cm (G)", 11, 41.0, false],
 ]
+var descente_t := -1.0                   # s depuis le début de la descente (G) ; < 0 : pas de descente
+var descente_lieu := Vector3.UP          # direction (repère de la planète) du lieu où l'on descend
+var descente_regard := Vector3.FORWARD
 var mesure_auto := false
 var _phase := -1
 var _phase_t := 0.0
@@ -217,6 +233,7 @@ func _ready() -> void:
 ## Téléportation vers un point de vue d'essai (1 à 5). L'œil n'est PAS remis à zéro :
 ## on le voit s'habituer à la nouvelle lumière.
 func aller_a(n: int) -> void:
+	descente_t = -1.0
 	var s := _soleil_planete()
 	var cote := s.cross(Vector3.UP).normalized()
 	var r := RAYON_ASTRE
@@ -286,6 +303,22 @@ func aller_a(n: int) -> void:
 			horizontal = horizontal.normalized()
 			var hauteur := clampf(asin(clampf(vers_centre.dot(g), -1.0, 1.0)), deg_to_rad(20.0), deg_to_rad(35.0))
 			_placer(g * (r + _sol(g) + 30.0), horizontal * cos(hauteur) + g * sin(hauteur))
+		10, 11:
+			# Étape 7 : un lieu où le Soleil est à 12° au-dessus de l'horizon ; on regarde de côté par
+			# rapport au Soleil (les ombres des cailloux s'allongent en travers de la vue), un peu vers le bas.
+			var g := (s * sin(deg_to_rad(LOUPE_SOLEIL)) + cote * cos(deg_to_rad(LOUPE_SOLEIL))).normalized()
+			var travers := g.cross(s).normalized()
+			var vers_soleil := (s - g * s.dot(g)).normalized()
+			var horiz := (travers * 0.8 - vers_soleil * 0.6).normalized()
+			var bas := 25.0 if n == 10 else 30.0
+			var regard := horiz * cos(deg_to_rad(bas)) - g * sin(deg_to_rad(bas))
+			if n == 10:
+				_placer64(g, LOUPE_ALTITUDE, regard)
+			else:
+				_placer64(g, DESCENTE_DEPART, regard)
+				descente_lieu = g
+				descente_regard = regard
+				descente_t = 0.0
 
 
 ## Lieu (repère fixe, longueur 1) où tombe l'ombre de la lune aux points de vue 6 et 7 : à 55° du point
@@ -353,8 +386,31 @@ func _sol(d: Vector3) -> float:
 	return planete.hauteur_sol(PackedFloat64Array([d.x, d.y, d.z]))
 
 
+## Hauteur du sol sous une direction donnée en 64 bits (la partie C++ la ramène à la longueur 1).
+func _sol64(x: float, y: float, z: float) -> float:
+	if not avec_planete:
+		return 0.0
+	return planete.hauteur_sol(PackedFloat64Array([x, y, z]))
+
+
+## Étape 7 : place l'œil à une altitude donnée au-dessus du sol, dans la direction g, en 64 bits
+## (en 32 bits, la position sur une planète de 600 km a 4 cm d'erreur).
+func _placer64(g: Vector3, alt: float, regard: Vector3) -> void:
+	var gx := float(g.x)
+	var gy := float(g.y)
+	var gz := float(g.z)
+	var n := sqrt(gx * gx + gy * gy + gz * gz)
+	var k := (RAYON_ASTRE + _sol64(gx, gy, gz) + alt) / n
+	pos_oeil = PackedFloat64Array([pos_astre[0] + gx * k, pos_astre[1] + gy * k, pos_astre[2] + gz * k])
+	_orienter(regard)
+
+
 func _placer(p: Vector3, regard: Vector3) -> void:
 	pos_oeil = PackedFloat64Array([p.x, p.y, p.z])
+	_orienter(regard)
+
+
+func _orienter(regard: Vector3) -> void:
 	var haut := _verticale()
 	var f := regard.normalized()
 	var aide := haut if absf(f.dot(haut)) < 0.99 else haut.cross(Vector3.RIGHT).normalized()
@@ -407,6 +463,8 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_8, KEY_KP_8: aller_a(8)
 			KEY_9, KEY_KP_9: aller_a(9)
 			KEY_0, KEY_KP_0: aller_a(0)
+			KEY_L: aller_a(10)
+			KEY_G: aller_a(11)
 			KEY_E: compagne.allumee = not compagne.allumee
 			KEY_B: changer_vitesse_essai()
 			KEY_V:
@@ -435,9 +493,13 @@ func _process(delta: float) -> void:
 	if rotation_on:
 		angle_jour = fmod(angle_jour + TAU * delta * acceleration / DUREE_JOUR, TAU)
 	_placer_soleil()
+	if descente_t >= 0.0:
+		_avancer_descente(delta)
+		dir = Vector3.ZERO
 	if dir != Vector3.ZERO:
-		# Vitesse proportionnelle à l'altitude : lent au ras du sol, rapide en orbite.
-		var v := vitesse * maxf(altitude, 5.0) * (5.0 if Input.is_physical_key_pressed(KEY_SHIFT) else 1.0)
+		# Vitesse proportionnelle à l'altitude : lent au ras du sol, rapide en orbite (étape 7 : jusqu'à
+		# quelques millimètres par seconde au ras du sol).
+		var v := vitesse * maxf(altitude, 0.005) * (5.0 if Input.is_physical_key_pressed(KEY_SHIFT) else 1.0)
 		var pas := camera.global_transform.basis * dir.normalized() * v * delta
 		pos_oeil[0] += pas.x
 		pos_oeil[1] += pas.y
@@ -466,8 +528,22 @@ func _process(delta: float) -> void:
 		" · Doppler du Soleil ×%.2f" % doppler_soleil if beta != Vector3.ZERO else ""]
 	compteur.infos = infos_planete + "Œil : pupille %.1f mm · habitué à %s cd/m² · vision de nuit %d %% · Soleil visible %d %%\n" % [
 		oeil.pupille_mm, _nombre(oeil.luminance_adaptation()), roundi(oeil.nuit() * 100.0), roundi(part_visible * 100.0)] \
-		+ "0-9 points de vue · B grande vitesse · R rotation · H halo %s · T adaptation au noir %s" % [
+		+ "0-9 points de vue · L loupe · G descente · B grande vitesse · R rotation · H halo %s · T adaptation au noir %s" % [
 		"oui" if oeil.halo else "non", "réelle (lente)" if oeil.temps_reel else "accélérée"]
+
+
+## Étape 7 : descente continue (G). L'altitude baisse en suivant une loi exponentielle (le même temps
+## pour passer de 1 000 km à 100 km que de 10 cm à 1 cm) : on doit voir les triangles s'affiner sans
+## à-coup, de l'orbite jusqu'aux grains de sable.
+func _avancer_descente(delta: float) -> void:
+	descente_t += delta
+	var f := clampf(descente_t / DESCENTE_DUREE, 0.0, 1.0)
+	var alt := DESCENTE_DEPART * pow(DESCENTE_ARRIVEE / DESCENTE_DEPART, f)
+	var avant := PackedFloat64Array(pos_oeil)
+	_placer64(descente_lieu, alt, descente_regard)
+	vitesse_oeil = Vector3(pos_oeil[0] - avant[0], pos_oeil[1] - avant[1], pos_oeil[2] - avant[2]) / maxf(delta, 1e-6)
+	if f >= 1.0:
+		descente_t = -1.0
 
 
 ## Place le monde autour de la caméra, envoie le Soleil aux shaders et mesure la lumière vue.
@@ -475,23 +551,35 @@ func _mettre_a_jour_monde() -> void:
 	camera.position = Vector3.ZERO
 	_placer_lune()
 	var rel := Vector3(pos_astre[0] - pos_oeil[0], pos_astre[1] - pos_oeil[1], pos_astre[2] - pos_oeil[2])
-	var d := rel.length()
-	altitude = d - RAYON_ASTRE - _sol(-rel / maxf(d, 1.0))
+	# Étape 7 : le centre de la planète vu de l'œil, en 64 bits (en 32 bits : 4 cm d'erreur à 600 km,
+	# les morceaux de quelques millimètres tremblaient et l'altitude était fausse au ras du sol).
+	var rel64 := PackedFloat64Array([pos_astre[0] - pos_oeil[0], pos_astre[1] - pos_oeil[1], pos_astre[2] - pos_oeil[2]])
+	var d := sqrt(rel64[0] * rel64[0] + rel64[1] * rel64[1] + rel64[2] * rel64[2])
+	altitude = d - RAYON_ASTRE - _sol64(-rel64[0], -rel64[1], -rel64[2])
 	var rel_lune := _rel_lune()
 	if lune:
 		altitude = minf(altitude, _altitude_lune())
 	# Plan proche et plan lointain de la caméra : jusqu'aux montagnes derrière l'horizon (et la lune).
 	var h := 12000.0
-	camera.near = clampf(altitude * 0.05, 0.05, 20000.0)
 	var bas := RAYON_ASTRE - h
 	camera.far = sqrt(maxf(d * d - bas * bas, 0.0)) + sqrt((RAYON_ASTRE + h) ** 2 - bas * bas) + 1000.0
 	if lune:
 		camera.far = maxf(camera.far, rel_lune.length() + RAYON_LUNE * 1.1)
+	# Étape 7 : le sol est dessiné jusqu'à 0,2 mm de l'œil (profondeur logarithmique des astres), mais la
+	# caméra de Godot ne supporte pas un écart si grand entre ses plans proche et lointain (plus rien ne
+	# s'affichait sous 3 m d'altitude) : son plan proche reste à 1/100 000 du plan lointain, et les
+	# astres ne sont pas coupés par lui (planete.gdshader).
+	var pres := clampf(altitude * 0.05, 0.0002, 20000.0)
+	camera.near = maxf(pres, camera.far * 1.0e-5)
+	if avec_planete:
+		planete.profondeur_pres = pres
+		if lune:
+			lune.profondeur_pres = pres
 	if avec_planete:
 		chrono_planete.nb_rayons = 0
 		if lune:
 			planete.occulteur = PackedFloat64Array([pos_lune[0], pos_lune[1], pos_lune[2], RAYON_LUNE])
-		planete.mettre_a_jour(camera, pos_oeil, PackedFloat64Array([rel.x, rel.y, rel.z]), temps, chrono_planete,
+		planete.mettre_a_jour(camera, pos_oeil, rel64, temps, chrono_planete,
 			Vector4(rel_lune.x, rel_lune.y, rel_lune.z, RAYON_LUNE if lune else 0.0))
 		if lune:
 			lune.rotation_astre = rot_lune
@@ -599,12 +687,15 @@ static func _duree(s: float) -> String:
 
 ## L'œil ne passe pas sous le sol.
 func _garder_au_dessus_du_sol() -> void:
-	var p := Vector3(pos_oeil[0] - pos_astre[0], pos_oeil[1] - pos_astre[1], pos_oeil[2] - pos_astre[2])
-	var d := p.length()
-	var mini := RAYON_ASTRE + _sol(p / maxf(d, 1.0)) + ALTITUDE_MIN
+	# En 64 bits (étape 7) : l'œil peut descendre à 5 mm du sol.
+	var px := pos_oeil[0] - pos_astre[0]
+	var py := pos_oeil[1] - pos_astre[1]
+	var pz := pos_oeil[2] - pos_astre[2]
+	var d := sqrt(px * px + py * py + pz * pz)
+	var mini := RAYON_ASTRE + _sol64(px, py, pz) + ALTITUDE_MIN
 	if d < mini:
-		var q := p / maxf(d, 1.0) * mini
-		pos_oeil = PackedFloat64Array([pos_astre[0] + q.x, pos_astre[1] + q.y, pos_astre[2] + q.z])
+		var k := mini / maxf(d, 1.0)
+		pos_oeil = PackedFloat64Array([pos_astre[0] + px * k, pos_astre[1] + py * k, pos_astre[2] + pz * k])
 	if lune:
 		_placer_lune()
 		var alt := _altitude_lune()
@@ -617,6 +708,10 @@ func _garder_au_dessus_du_sol() -> void:
 
 
 static func _distance(m: float) -> String:
+	if m < 0.01:
+		return "%.1f mm" % (m * 1000.0)
+	if m < 1.0:
+		return "%.1f cm" % (m * 100.0)
 	if m >= 10000.0:
 		return "%d km" % roundi(m / 1000.0)
 	if m >= 1000.0:
@@ -773,7 +868,7 @@ func _avancer_mesure(delta: float) -> void:
 
 
 func _ecrire_mesure() -> void:
-	var texte := "# Mesure de la planète en rayons, de sa lune et des étoiles (étapes 4 à 6)\n\n"
+	var texte := "# Mesure de la planète en rayons, de sa lune et des étoiles (étapes 4 à 7)\n\n"
 	texte += "Date : %s · %s · %s\n\n" % [Time.get_datetime_string_from_system(), OS.get_processor_name(),
 		RenderingServer.get_video_adapter_name()]
 	texte += "Sans synchronisation avec l'écran (vsync coupée). Dessiner = processeur + carte graphique (Godot) ;\n"

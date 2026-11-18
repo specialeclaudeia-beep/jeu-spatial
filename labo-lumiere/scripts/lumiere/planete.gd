@@ -26,6 +26,9 @@ var rayon := 600000.0
 ## programme : éclairer 3 ms) ; le reste attend l'image suivante.
 var max_par_image := 96
 var budget_eclairer_ms := 3.0
+## Étape 7 : distance la plus proche qu'on dessine (m) pour la profondeur logarithmique. Elle peut être
+## bien plus petite que le plan proche de la caméra (Godot ne sait pas gérer 0,2 mm → 300 km). 0 : camera.near.
+var profondeur_pres := 0.0
 var materiau: ShaderMaterial
 var image_rayons: Image
 var image_coins: Image
@@ -103,7 +106,7 @@ func mettre_a_jour(camera: Camera3D, oeil: PackedFloat64Array, vers_centre: Pack
 		tex_coins.update(image_coins)
 	RenderingServer.multimesh_set_buffer(multimesh.get_rid(), arbre.tampon_instances(rotation_astre, vers_centre))
 	materiau.set_shader_parameter("maintenant", temps)
-	materiau.set_shader_parameter("profondeur_pres", camera.near)
+	materiau.set_shader_parameter("profondeur_pres", profondeur_pres if profondeur_pres > 0.0 else camera.near)
 	materiau.set_shader_parameter("profondeur_loin", camera.far)
 	materiau.set_shader_parameter("centre_planete", Vector3(vers_centre[0], vers_centre[1], vers_centre[2]))
 	materiau.set_shader_parameter("occulteur", occulteur_affichage)

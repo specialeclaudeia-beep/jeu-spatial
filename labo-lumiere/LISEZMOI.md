@@ -10,7 +10,28 @@ en triangles sans risquer de casser le jeu. Le jeu ne voit pas ce dossier.
    coche **Godot AI**. Ferme la fenêtre.
 4. Appuie sur **F5** (ou Lecture ▶) : la scène du labo s'ouvre.
 
-## Ce qu'on voit (étape 6)
+## Ce qu'on voit (étape 7)
+**On peut descendre jusqu'au millimètre.** L'œil va maintenant jusqu'à 5 mm du sol (avant : 1,8 m), et
+les triangles se coupent jusqu'à des rayons d'environ **1 mm**. Près du sol, on découvre :
+- des **cailloux**, des blocs de 1,5 m jusqu'aux graviers de 1 cm, chacun avec sa propre teinte ;
+- le **grain du sable**, jusqu'au millimètre ;
+- les **ombres du relief proche** : chaque coin de triangle connaît la hauteur de son horizon vers
+  l'est, le nord, l'ouest et le sud. Quand le Soleil (ou l'étoile compagne) passe sous cet horizon,
+  le coin est à l'ombre. Les cailloux font donc de l'ombre, les montagnes aussi (la limite jour / nuit,
+  vue d'orbite, devient déchiquetée comme sur la Lune), et les ombres suivent le Soleil qui avance.
+  Les ombres sont toutes noires : sans air, rien ne les éclaire (la lumière renvoyée par le sol
+  autour viendra avec les rebonds, question 38).
+
+Avant, tout était calculé en « 32 bits » à 600 km du centre de la planète, soit 4 cm d'erreur : en
+dessous, les petits triangles auraient tremblé. Tout est maintenant en « 64 bits ».
+
+Nouvelles touches :
+- **L** (loupe) : l'œil à 3 cm au-dessus du sol, le Soleil bas (12°) : on voit les grains et les
+  ombres des graviers. Avance doucement avec Z (quelques mm par seconde) ;
+- **G** (descente) : descente continue de l'orbite (1 500 km) jusqu'à 3 cm du sol, en 40 secondes.
+  Rien ne doit sauter ni clignoter : les triangles s'affinent tout le long.
+
+## Ce qu'on voyait à l'étape 6
 **Le vrai ciel étoilé** : les 9 096 étoiles du catalogue de Yale (toutes celles qu'un œil humain peut
 voir, jusqu'à la magnitude 6,5), à leur vraie place, avec leur vrai éclat et leur vraie couleur
 (Bételgeuse orangée, Rigel bleutée…), et la **Voie lactée**, plus claire vers le centre de la galaxie.

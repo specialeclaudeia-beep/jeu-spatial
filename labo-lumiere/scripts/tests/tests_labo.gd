@@ -95,6 +95,12 @@ func _lancer() -> void:
 	# Étape 6 : les étoiles dans le labo.
 	await _test_labo_etoiles()
 	await _test_image_ciel_etoile()
+	# Étape 7 : la petite échelle, jusqu'au millimètre.
+	_test_descente_mm()
+	_test_sans_fente_mm()
+	_test_cailloux_grains()
+	_test_ombre_horizon()
+	await _test_labo_loupe_descente()
 
 
 func _test_reglages() -> void:
@@ -604,9 +610,10 @@ func _test_labo_planete() -> void:
 	labo._process(0.016)
 	var alt: float = labo.altitude
 	labo.queue_free()
-	ok = ok and jour > 100.0 and nuit < 0.01 and rayons > 2000 and alt >= 1.5 and alt < 3.0
+	# Étape 7 : l'œil descend jusqu'à ALTITUDE_MIN (5 mm), en 64 bits.
+	ok = ok and jour > 100.0 and nuit < 0.01 and rayons > 2000 and absf(alt - labo.ALTITUDE_MIN) < 0.001
 	_resultat(ok, "Labo : planète en rayons, jour, nuit, sol infranchissable",
-		"jour %.0f cd/m² avec %d rayons ; nuit %.5f cd/m² (rayons + fond du ciel) ; sous le sol → remis à %.1f m" % [jour, rayons, nuit, alt])
+		"jour %.0f cd/m² avec %d rayons ; nuit %.5f cd/m² (rayons + fond du ciel) ; sous le sol → remis à %.4f m" % [jour, rayons, nuit, alt])
 
 
 func _test_image_planete() -> void:
@@ -776,9 +783,9 @@ func _test_labo_lune() -> void:
 	var retard: float = labo.retard_lune
 	labo.queue_free()
 	ok = totale < 0.001 and eclipse < 0.01 * jour and apres > 0.999 and rayons_lune > 0 and pres_lune > maxi(2000, loin_lune) \
-		and d_lune < 700000.0 and alt >= 1.5 and alt < 3.0 and retard > 0.0
+		and d_lune < 700000.0 and alt >= labo.ALTITUDE_MIN * 0.5 and alt < 0.2 and retard > 0.0
 	_resultat(ok, "Labo : petite lune, éclipse de Soleil totale, éclipse de lune",
-		"Soleil visible pendant l'éclipse %.3f, l'œil voit %.4f au lieu de %.0f cd/m², puis Soleil revenu %.2f ; lune à 500 km %d rayons, à 20 km %d ; sous son sol → %.1f m" % [
+		"Soleil visible pendant l'éclipse %.3f, l'œil voit %.4f au lieu de %.0f cd/m², puis Soleil revenu %.2f ; lune à 500 km %d rayons, à 20 km %d ; sous son sol → %.4f m" % [
 			totale, eclipse, jour, apres, loin_lune, pres_lune, alt])
 
 
@@ -1029,3 +1036,198 @@ func _test_image_ciel_etoile() -> void:
 	var ok := etoiles_vues > 40 and sol < 0.05
 	_resultat(ok, "Image : ciel étoilé et sol dans le noir",
 		"%d pixels d'étoiles dans le haut de l'image, sol %.3f" % [etoiles_vues, sol])
+
+
+# ---------------------------------------------------------------------------------------------
+# Étape 7 : petite échelle jusqu'au millimètre
+# ---------------------------------------------------------------------------------------------
+
+## Axes d'une caméra au lieu g (longueur 1), qui regarde vers l'horizon et baisse les yeux de « bas » degrés.
+func _axes_lieu(g: Vector3, bas: float) -> PackedFloat32Array:
+	var t := g.cross(Vector3.RIGHT).normalized()
+	var devant := (t * cos(deg_to_rad(bas)) - g * sin(deg_to_rad(bas))).normalized()
+	var droite := devant.cross(g).normalized()
+	var haut := droite.cross(devant).normalized()
+	return PackedFloat32Array([devant.x, devant.y, devant.z, droite.x, droite.y, droite.z, haut.x, haut.y, haut.z])
+
+
+## L'œil en 64 bits à « alt » mètres au-dessus du sol, dans la direction g.
+func _oeil_au_dessus(a: Object, g: Vector3, alt: float) -> PackedFloat64Array:
+	var gx := float(g.x)
+	var gy := float(g.y)
+	var gz := float(g.z)
+	var n := sqrt(gx * gx + gy * gy + gz * gz)
+	var k: float = (600000.0 + a.hauteur_sol(PackedFloat64Array([gx, gy, gz])) + alt) / n
+	return PackedFloat64Array([gx * k, gy * k, gz * k])
+
+
+func _test_descente_mm() -> void:
+	# L'œil à 3 cm du sol : l'arbre descend jusqu'au niveau 26 (rayons d'environ 1 mm), sans dépasser
+	# les places, et le calcul reste dans le budget.
+	var a := _nouvel_arbre()
+	var g := Vector3(0.3, 0.8, 0.52).normalized()
+	var cam := _oeil_au_dessus(a, g, 0.03)
+	var axes := _axes_lieu(g, 30.0)
+	var tan_v := tan(deg_to_rad(37.5))
+	var tan_h := tan_v * 16.0 / 9.0
+	var niveau := 0
+	var images := 0
+	var max_morceaux := 0
+	var total_ms := 0.0
+	for i in 600:
+		var t0 := Time.get_ticks_usec()
+		var n: int = a.choisir(cam, axes, tan_h, tan_v, 720.0, i / 60.0)
+		a.eclairer(96, 3.0)
+		total_ms += (Time.get_ticks_usec() - t0) / 1000.0
+		max_morceaux = maxi(max_morceaux, n)
+		images = i + 1
+		niveau = a.niveau_max_affiche()
+		if niveau >= 26 and a.nb_demandes() == 0:
+			break
+	var plus_petit := INF
+	for adr in a.morceaux_affiches():
+		plus_petit = minf(plus_petit, a.centre_morceau(adr)[4] / 8.0)
+	var ok := niveau >= 25 and plus_petit < 0.0025 and max_morceaux <= 1024
+	_resultat(ok, "Petite échelle : à 3 cm du sol, les triangles descendent jusqu'au millimètre",
+		"niveau %d atteint en %d images, plus petit rayon %.2f mm, %d morceaux au plus ; calcul %.2f ms par image en moyenne" % [
+			niveau, images, plus_petit * 1000.0, max_morceaux, total_ms / images])
+
+
+func _test_sans_fente_mm() -> void:
+	# Au niveau 25 (morceaux de 2 cm) : deux voisins ont les mêmes coins (au micromètre) et le même
+	# horizon sur leur bord commun ; un enfant retrouve les coins de son parent.
+	var a := _nouvel_arbre()
+	var parent: int = a.racines()[3]
+	for i in 24:
+		parent = _enfant(parent, (i * 7 + 1) % 4)
+	var c0: PackedFloat64Array = a.coins_morceau(_enfant(parent, 0))
+	var c3: PackedFloat64Array = a.coins_morceau(_enfant(parent, 3))
+	var h0: PackedFloat32Array = a.horizons_morceau(_enfant(parent, 0))
+	var h3: PackedFloat32Array = a.horizons_morceau(_enfant(parent, 3))
+	var communs := 0
+	var pire := 0.0
+	var pire_h := 0.0
+	for i in 45:
+		var meilleur := INF
+		var j_m := -1
+		for j in 45:
+			var dx := c0[i * 3] - c3[j * 3]
+			var dy := c0[i * 3 + 1] - c3[j * 3 + 1]
+			var dz := c0[i * 3 + 2] - c3[j * 3 + 2]
+			var dd := sqrt(dx * dx + dy * dy + dz * dz)
+			if dd < meilleur:
+				meilleur = dd
+				j_m = j
+		if meilleur < 1e-4:
+			communs += 1
+			pire = maxf(pire, meilleur)
+			for q in 4:
+				pire_h = maxf(pire_h, absf(h0[i * 4 + q] - h3[j_m * 4 + q]))
+	var pp: PackedFloat64Array = a.coins_morceau(parent)
+	var pire_enfant := 0.0
+	for b in range(0, 5):
+		for c in range(0, 5 - b):
+			var i := _coin(2 * c, 2 * b)
+			var k := _coin(c, b)
+			var dx := c0[i * 3] - pp[k * 3]
+			var dy := c0[i * 3 + 1] - pp[k * 3 + 1]
+			var dz := c0[i * 3 + 2] - pp[k * 3 + 2]
+			pire_enfant = maxf(pire_enfant, sqrt(dx * dx + dy * dy + dz * dz))
+	var cote: float = a.centre_morceau(_enfant(parent, 0))[4]
+	var ok := communs == 9 and pire < 1e-5 and pire_h < 1e-6 and pire_enfant < 1e-5
+	_resultat(ok, "Pas de fente au millimètre : bords communs, horizon et coins du parent identiques",
+		"morceaux de %.1f cm : %d coins communs (attendu 9), écart %.4f mm, horizon %.6f rad ; parent/enfant %.4f mm" % [
+			cote * 100.0, communs, pire * 1000.0, pire_h, pire_enfant * 1000.0])
+
+
+func _test_cailloux_grains() -> void:
+	# Le sol a du relief à toutes les échelles : des cailloux (bosses de quelques cm sur 1 m) et le grain
+	# du sable (au mm), sans saut (deux points à 1 µm l'un de l'autre ont la même hauteur).
+	var a := _nouvel_arbre()
+	var g := Vector3(0.3, 0.8, 0.52).normalized()
+	var t := g.cross(Vector3.RIGHT).normalized()
+	var r := 600000.0
+	var h := PackedFloat64Array()
+	for i in 2001:      # 2 m, un point tous les mm
+		var d := g * r + t * (i * 0.001)
+		h.append(a.hauteur_sol(PackedFloat64Array([d.x, d.y, d.z])))
+	var ecart_cm := 0.0
+	var ecart_mm := 0.0
+	for i in range(0, 1990):
+		ecart_cm = maxf(ecart_cm, absf(h[i + 10] - h[i]))
+		ecart_mm += absf(h[i + 1] - h[i])
+	ecart_mm /= 1990.0
+	var saut := 0.0
+	for i in 200:
+		var d := g * r + t * (i * 0.0101)
+		var d2 := d + t * 1e-6
+		saut = maxf(saut, absf(a.hauteur_sol(PackedFloat64Array([d.x, d.y, d.z])) - a.hauteur_sol(PackedFloat64Array([d2.x, d2.y, d2.z]))))
+	var ok := ecart_cm > 0.002 and ecart_mm > 0.00005 and saut < 0.0001
+	_resultat(ok, "Cailloux et grains : du relief jusqu'au millimètre, sans saut",
+		"sur 1 cm la hauteur change jusqu'à %.1f mm ; d'un mm au suivant %.3f mm en moyenne ; à 1 µm d'écart %.5f mm" % [
+			ecart_cm * 1000.0, ecart_mm * 1000.0, saut * 1000.0])
+
+
+func _test_ombre_horizon() -> void:
+	# Ombres du relief proche : Soleil au zénith → tout éclairé ; 2° sous l'horizon → tout dans l'ombre ;
+	# Soleil bas (4°) au ras du sol → des points à l'ombre des cailloux et d'autres au soleil.
+	var a := _nouvel_arbre()
+	var g := Vector3(0.3, 0.8, 0.52).normalized()
+	var t1 := Vector3.UP.cross(g).normalized()
+	var t2 := g.cross(t1)
+	var r := 600000.0
+	var zenith := 0.0
+	var dessous := 0.0
+	var bas := 0.0
+	var n := 60
+	for i in n:
+		var d := g * r + t1 * (i * 0.0137) + t2 * (i * 0.0071)
+		var p := PackedFloat64Array([d.x, d.y, d.z])
+		zenith += a.part_horizon(p, 29, g, 0.004652)
+		var sous := (t1 * cos(deg_to_rad(-2.0)) + g * sin(deg_to_rad(-2.0))).normalized()
+		dessous += a.part_horizon(p, 29, sous, 0.004652)
+		# Du côté ouest (pas de montagne proche de ce côté) : seuls les cailloux et les grains font de l'ombre.
+		var s_bas := (-t1 * cos(deg_to_rad(4.0)) + g * sin(deg_to_rad(4.0))).normalized()
+		bas += a.part_horizon(p, 26, s_bas, 0.004652)
+	zenith /= n
+	dessous /= n
+	bas /= n
+	var ok := zenith > 0.999 and dessous < 0.05 and bas > 0.1 and bas < 0.9
+	_resultat(ok, "Ombres du relief proche (horizon de chaque coin)",
+		"part éclairée : Soleil au zénith %.0f %%, 2° sous l'horizon %.0f %%, à 4° au ras des cailloux %.0f %%" % [
+			zenith * 100.0, dessous * 100.0, bas * 100.0])
+
+
+func _test_labo_loupe_descente() -> void:
+	# Dans le labo : la loupe (L) pose l'œil à 3 cm (en 64 bits), la descente (G) va de l'orbite à 3 cm
+	# sans à-coup (l'altitude baisse à chaque image, les triangles s'affinent jusqu'au bout).
+	var labo: Node = load("res://scenes/labo.tscn").instantiate()
+	add_child(labo)
+	await get_tree().process_frame
+	labo.set_process(false)
+	labo.aller_a(10)
+	for i in 80:
+		labo._process(0.05)
+	var alt_loupe: float = labo.altitude
+	var niveau_loupe: int = labo.planete.arbre.niveau_max_affiche()
+	var lum: float = labo.luminance_vue
+	labo.aller_a(11)
+	labo._process(0.0)
+	var depart: float = labo.altitude
+	var precedente := INF
+	var toujours := true
+	var niveaux := PackedInt32Array()
+	for i in 170:
+		labo._process(0.25)
+		if labo.descente_t >= 0.0 or i == 0:
+			toujours = toujours and labo.altitude < precedente
+			precedente = labo.altitude
+		niveaux.append(labo.planete.arbre.niveau_max_affiche())
+	var arrivee: float = labo.altitude
+	var niveau_fin: int = niveaux[niveaux.size() - 1]
+	labo.queue_free()
+	var ok: bool = absf(alt_loupe - 0.03) < 0.002 and niveau_loupe >= 22 and lum > 0.0 and depart > 1.0e6 \
+		and toujours and absf(arrivee - 0.03) < 0.002 and niveau_fin >= 22 and niveaux[20] < niveau_fin
+	_resultat(ok, "Labo : loupe à 3 cm (L) et descente continue de l'orbite jusqu'à 3 cm (G)",
+		"loupe : altitude %.2f cm, niveau %d, %.0f cd/m² ; descente de %.0f km à %.2f cm, altitude toujours en baisse %s, niveau %d → %d" % [
+			alt_loupe * 100.0, niveau_loupe, lum, depart / 1000.0, arrivee * 100.0, "oui" if toujours else "NON", niveaux[20], niveau_fin])

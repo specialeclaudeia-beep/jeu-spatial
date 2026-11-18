@@ -131,14 +131,63 @@ double ArbreLumiere::hauteur(const Vec3d &dir, int octaves) const {
 	double h = 0;
 	Vec3d p = dir * rayon;
 	for (int n = 0; n < octaves; n++) {
-		double l = 1.0 / longueur_onde(n);
-		double v = bruit(p.x * l + n * 17.31, p.y * l - n * 9.77, p.z * l + n * 5.13, graine + (uint64_t)n * 101);
-		if (n >= 2 && n < 8) {
-			v = 1.0 - 2.0 * std::fabs(v); // crêtes : des chaînes de montagnes
-		}
-		h += amplitude(n) * v;
+		h += octave(p, n);
 	}
 	return h;
+}
+
+// Un détail du relief. Octaves 2 à 7 : des crêtes (chaînes de montagnes). Étape 7, octaves 17 à 25
+// (des blocs de 1,5 m aux graviers de 1 cm) : des cailloux posés sur un sol bosselé. Au-delà : le
+// grain du sable, jusqu'au millimètre. La valeur reste entre -1,5 et 1,5 fois l'amplitude.
+double ArbreLumiere::octave(const Vec3d &p, int n) const {
+	double l = 1.0 / longueur_onde(n);
+	double x = p.x * l + n * 17.31, y = p.y * l - n * 9.77, z = p.z * l + n * 5.13;
+	double v = bruit(x, y, z, graine + (uint64_t)n * 101);
+	if (n >= 2 && n < 8) {
+		v = 1.0 - 2.0 * std::fabs(v); // crêtes : des chaînes de montagnes
+	} else if (n >= OCTAVE_CAILLOUX_MIN && n <= OCTAVE_CAILLOUX_MAX) {
+		v = 0.55 * v + 1.2 * caillou(Vec3d(x, y, z), n, nullptr) - 0.2;
+	}
+	return amplitude(n) * v;
+}
+
+// Cailloux : au plus un par cellule d'une grille (taille = longueur d'onde de l'octave), placé et
+// taillé au hasard (toujours le même pour la même cellule). On regarde les 8 cellules voisines.
+// Forme : une bosse arrondie aux bords raides, plus haute pour les gros cailloux.
+double ArbreLumiere::caillou(const Vec3d &q, int n, double *teinte) const {
+	double bx = std::floor(q.x - 0.5), by = std::floor(q.y - 0.5), bz = std::floor(q.z - 0.5);
+	double meilleur = 0.0;
+	double t = 0.0;
+	// Moins de gros blocs que de petits cailloux.
+	double densite = 0.22 + 0.04 * (n - OCTAVE_CAILLOUX_MIN);
+	uint64_t g = graine ^ (0x5EED0000ULL + (uint64_t)n * 7919ULL);
+	for (int c = 0; c < 8; c++) {
+		int64_t ix = (int64_t)bx + (c & 1), iy = (int64_t)by + ((c >> 1) & 1), iz = (int64_t)bz + ((c >> 2) & 1);
+		uint64_t h = melanger(g ^ ((uint64_t)ix * 0x9E3779B97F4A7C15ULL));
+		h = melanger(h ^ ((uint64_t)iy * 0xC2B2AE3D27D4EB4FULL));
+		h = melanger(h ^ ((uint64_t)iz * 0x165667B19E3779F9ULL));
+		if ((double)(h & 0xFFFF) / 65535.0 > densite) {
+			continue;
+		}
+		double jx = ((double)((h >> 16) & 0xFF) / 255.0 - 0.5) * 0.6;
+		double jy = ((double)((h >> 24) & 0xFF) / 255.0 - 0.5) * 0.6;
+		double jz = ((double)((h >> 32) & 0xFF) / 255.0 - 0.5) * 0.6;
+		double r = 0.18 + 0.22 * (double)((h >> 40) & 0xFF) / 255.0;
+		double dx = q.x - (ix + 0.5 + jx), dy = q.y - (iy + 0.5 + jy), dz = q.z - (iz + 0.5 + jz);
+		double d2 = (dx * dx + dy * dy + dz * dz) / (r * r);
+		if (d2 >= 1.0) {
+			continue;
+		}
+		double v = std::pow(1.0 - d2, 0.6) * (r / 0.4);
+		if (v > meilleur) {
+			meilleur = v;
+			t = (double)((h >> 48) & 0xFF) / 127.5 - 1.0;
+		}
+	}
+	if (teinte) {
+		*teinte = t * std::min(1.0, meilleur * 4.0);
+	}
+	return meilleur;
 }
 
 // Couleur du sol (albédo, lumière linéaire) : de grandes plaines sombres (comme les « mers » de la
@@ -158,7 +207,15 @@ void ArbreLumiere::couleur_sol(const Vec3d &dir, int octaves, float out[3]) cons
 		detail += 0.25 * std::pow(2.0, -0.25 * (n - 2)) *
 				bruit(p.x * l - n * 3.3, p.y * l + n * 7.9, p.z * l + n * 1.7, graine ^ (0xA1B2C3ULL + n));
 	}
-	double base = (0.17 + (0.075 - 0.17) * m) * std::exp(0.8 * detail);
+	// Étape 7 : chaque caillou a sa propre teinte (plus clair ou plus sombre que le sol autour).
+	double pierres = 0;
+	for (int n = OCTAVE_CAILLOUX_MIN; n <= std::min(OCTAVE_CAILLOUX_MAX, octaves - 1); n++) {
+		double l = 1.0 / longueur_onde(n);
+		double t = 0;
+		caillou(Vec3d(p.x * l + n * 17.31, p.y * l - n * 9.77, p.z * l + n * 5.13), n, &t);
+		pierres += 0.35 * t;
+	}
+	double base = (0.17 + (0.075 - 0.17) * m) * std::exp(0.8 * detail + pierres);
 	const double haut_[3] = { 1.0, 0.96, 0.90 };
 	const double mer_[3] = { 0.92, 0.94, 1.0 };
 	for (int i = 0; i < 3; i++) {
@@ -237,10 +294,13 @@ void ArbreLumiere::finir_calcul(Morceau &m, const Morceau *parent, int k) const 
 	}
 	// 2. Le relief : chaque coin a les détails de son niveau de naissance (moins 2, pour qu'un
 	// détail soit toujours plus grand que deux fois l'écart entre les coins).
+	// Étape 7 : la lumière du coin (couleur, direction, horizon) est calculée en même temps que sa
+	// hauteur (les mêmes détails du relief servent aux deux).
 	Vec3d pos[NB_COINS];
 	Vec3d somme;
 	for (int i = 0; i < NB_COINS; i++) {
-		pos[i] = dir[i] * (rayon + hauteur(dir[i], std::max(0, nais[i] - 1)));
+		double h = lumiere_coin(dir[i], nais[i], m.albedo[i], m.direction[i], m.horizon[i]);
+		pos[i] = dir[i] * (rayon + h);
 		somme = somme + pos[i];
 	}
 	m.centre = somme * (1.0 / NB_COINS);
@@ -253,7 +313,7 @@ void ArbreLumiere::finir_calcul(Morceau &m, const Morceau *parent, int k) const 
 		m.cible[i][2] = (float)d.z;
 	}
 	int oct_fin = m.niveau + 2; // octaves des coins les plus fins
-	double reste = amplitude(oct_fin) / (1.0 - std::pow(2.0, -0.8));
+	double reste = 1.5 * amplitude(oct_fin) / (1.0 - std::pow(2.0, -0.8)); // 1,5 : les cailloux
 	m.rayon_englobant = std::sqrt(r2) + reste;
 	m.cote = (m.coins[1] - m.coins[0]).length() * rayon;
 	m.taille_rayon = (float)(m.cote / COUPES);
@@ -298,9 +358,6 @@ void ArbreLumiere::finir_calcul(Morceau &m, const Morceau *parent, int k) const 
 		m.centres[t][1] = (float)d.y;
 		m.centres[t][2] = (float)d.z;
 	}
-	for (int i = 0; i < NB_COINS; i++) {
-		lumiere_coin(dir[i], nais[i], m.albedo[i], m.direction[i]);
-	}
 	if (parent) {
 		// Départ du glissement des couleurs : comme pour les positions, la valeur du parent sous le coin.
 		const int(*C)[2] = ENFANTS[k];
@@ -311,37 +368,68 @@ void ArbreLumiere::finir_calcul(Morceau &m, const Morceau *parent, int k) const 
 				int i = coin(a, b);
 				if (x % 2 == 0 && y % 2 == 0) {
 					std::memcpy(m.albedo_depart[i], parent->albedo[coin(x / 2, y / 2)], sizeof(float) * 3);
+					std::memcpy(m.horizon_depart[i], parent->horizon[coin(x / 2, y / 2)], sizeof(float) * NB_AZIMUTS);
 				} else {
 					int a1, b1, a2, b2;
 					voisins_milieu(x, y, 1, a1, b1, a2, b2);
 					const float *u = parent->albedo[coin(a1 / 2, b1 / 2)];
 					const float *v = parent->albedo[coin(a2 / 2, b2 / 2)];
 					for (int q = 0; q < 3; q++) m.albedo_depart[i][q] = 0.5f * (u[q] + v[q]);
+					const float *hu = parent->horizon[coin(a1 / 2, b1 / 2)];
+					const float *hv = parent->horizon[coin(a2 / 2, b2 / 2)];
+					for (int q = 0; q < NB_AZIMUTS; q++) m.horizon_depart[i][q] = 0.5f * (hu[q] + hv[q]);
 				}
 			}
 		}
 	} else {
 		std::memcpy(m.albedo_depart, m.albedo, sizeof(m.albedo));
+		std::memcpy(m.horizon_depart, m.horizon, sizeof(m.horizon));
 	}
 }
 
-// Lumière d'un coin : couleur du sol, direction moyenne de la surface et son étalement. Tout ne dépend
-// que de la direction du coin et de son niveau de naissance : deux morceaux qui partagent ce coin
-// trouvent exactement la même chose (pas de couture entre morceaux).
-void ArbreLumiere::lumiere_coin(const Vec3d &d, int nais, float albedo[3], float direction[3]) const {
+// Repère du lieu, le même dans planete.gdshader : t1 = « est » (perpendiculaire à l'axe Y de l'astre),
+// t2 = « nord ». Il ne dépend que de la direction : deux morceaux voisins trouvent le même.
+void ArbreLumiere::repere_lieu(const Vec3d &d, Vec3d &t1, Vec3d &t2) {
+	Vec3d e = Vec3d(0, 1, 0).cross(d);
+	if (e.length() < 1e-9) {
+		e = Vec3d(1, 0, 0).cross(d); // tout près d'un pôle
+	}
+	t1 = e.normalized();
+	t2 = d.cross(t1);
+}
+
+// Lumière d'un coin : couleur du sol, direction moyenne de la surface et son étalement, et (étape 7)
+// hauteur de l'horizon dans 4 directions. Tout ne dépend que de la direction du coin et de son niveau
+// de naissance : deux morceaux qui partagent ce coin trouvent exactement la même chose (pas de couture).
+double ArbreLumiere::lumiere_coin(const Vec3d &d, int nais, float albedo[3], float direction[3],
+		float horizon[NB_AZIMUTS]) const {
 	int oct = std::max(0, nais - 1);
 	couleur_sol(d, oct, albedo);
 	// Pente du relief : différences de hauteur à l'écart des coins de ce niveau, de part et d'autre.
+	// Chaque détail (octave) est gardé à part : sa pente sert ensuite pour l'horizon.
 	double e = 1.0515 * rayon / std::ldexp(1.0, nais) * 0.5;
-	Vec3d t1 = (std::fabs(d.y) < 0.9 ? Vec3d(0, 1, 0) : Vec3d(1, 0, 0)).cross(d).normalized();
-	Vec3d t2 = d.cross(t1);
+	Vec3d t1, t2;
+	repere_lieu(d, t1, t2);
 	double k = e / rayon;
-	auto point = [&](const Vec3d &dd) {
-		Vec3d u = dd.normalized();
-		return u * (rayon + hauteur(u, oct));
-	};
-	Vec3d gx = point(d + t1 * k) - point(d - t1 * k);
-	Vec3d gy = point(d + t2 * k) - point(d - t2 * k);
+	const Vec3d u_pts[4] = { (d + t1 * k).normalized(), (d - t1 * k).normalized(), (d + t2 * k).normalized(),
+		(d - t2 * k).normalized() };
+	double v0[40], g1[40], g2[40];
+	double h0 = 0, hp[4] = { 0, 0, 0, 0 };
+	Vec3d p0 = d * rayon;
+	for (int n = 0; n < oct; n++) {
+		v0[n] = octave(p0, n);
+		double o[4];
+		for (int j = 0; j < 4; j++) {
+			o[j] = octave(u_pts[j] * rayon, n);
+			hp[j] += o[j];
+		}
+		h0 += v0[n];
+		g1[n] = (o[0] - o[1]) / (2.0 * e);
+		g2[n] = (o[2] - o[3]) / (2.0 * e);
+	}
+	auto point = [&](int j) { return u_pts[j] * (rayon + hp[j]); };
+	Vec3d gx = point(0) - point(1);
+	Vec3d gy = point(2) - point(3);
 	Vec3d n = gx.cross(gy).normalized();
 	if (n.dot(d) < 0) {
 		n = n * -1.0;
@@ -350,6 +438,9 @@ void ArbreLumiere::lumiere_coin(const Vec3d &d, int nais, float albedo[3], float
 	double etal = 0;
 	for (int q = oct; q < oct + 8; q++) {
 		double pente = 2.0 * amplitude(q) / longueur_onde(q);
+		if (q >= OCTAVE_CAILLOUX_MIN && q <= OCTAVE_CAILLOUX_MAX) {
+			pente *= 1.5; // les bords raides des cailloux
+		}
 		etal += pente * pente;
 	}
 	// Cône de petites faces dont l'angle moyen avec la direction moyenne vaut atan(pente) :
@@ -359,6 +450,70 @@ void ArbreLumiere::lumiere_coin(const Vec3d &d, int nais, float albedo[3], float
 	direction[0] = (float)(n.x * longueur);
 	direction[1] = (float)(n.y * longueur);
 	direction[2] = (float)(n.z * longueur);
+
+	// Étape 7 : l'horizon. On marche vers l'est, le nord, l'ouest et le sud, à des distances qui doublent
+	// (2, 4, 8, 16 fois l'écart des coins) puis quadruplent, jusqu'à 60 km (planète d'essai). À chaque pas,
+	// les détails de la taille de la distance sont calculés pour de vrai ; les plus grands, qui ne font
+	// qu'incliner le sol à cette échelle, suivent leur pente ; les plus petits ne cachent presque rien
+	// de si loin. La courbure de la planète fait baisser le sol au loin (D² / 2R).
+	double prefixe1[41], prefixe2[41];
+	prefixe1[0] = prefixe2[0] = 0;
+	for (int q = 0; q < oct; q++) {
+		prefixe1[q + 1] = prefixe1[q] + g1[q];
+		prefixe2[q + 1] = prefixe2[q] + g2[q];
+	}
+	const Vec3d axes[NB_AZIMUTS] = { t1, t2, t1 * -1.0, t2 * -1.0 };
+	const double signe1[NB_AZIMUTS] = { 1, 0, -1, 0 }, signe2[NB_AZIMUTS] = { 0, 1, 0, -1 };
+	double d_max = 60000.0 * rayon / 600000.0;
+	double l0 = longueur_onde(0);
+	for (int j = 0; j < NB_AZIMUTS; j++) {
+		double meilleur = -1.5707963;
+		double D = 2.0 * e;
+		for (int pas = 0; pas < 40 && (D <= d_max || pas < 2); pas++) {
+			int n_hi = std::min(oct - 1, (int)std::floor(std::log2(2.0 * l0 / D)));
+			int n_lo = std::max(0, n_hi - 5);
+			double dh = 0;
+			if (oct > 0) {
+				if (n_hi < 0) {
+					n_lo = oct; // tout est plus grand que la distance : seulement la pente
+				}
+				dh = (prefixe1[n_lo] * signe1[j] + prefixe2[n_lo] * signe2[j]) * D;
+				if (n_hi >= n_lo) {
+					Vec3d q = (d + axes[j] * (D / rayon)).normalized() * rayon;
+					for (int o = n_lo; o <= n_hi; o++) {
+						dh += octave(q, o) - v0[o];
+					}
+				}
+			}
+			dh -= D * D / (2.0 * rayon);
+			meilleur = std::max(meilleur, std::atan2(dh, D));
+			D *= pas < 3 ? 2.0 : 4.0;
+		}
+		horizon[j] = (float)meilleur;
+	}
+	return h0;
+}
+
+// Part du disque d'une étoile (direction s, rayon apparent a) au-dessus de l'horizon h (4 azimuts) du
+// lieu (verticale up, repère t1, t2). Même formule que planete.gdshader : l'horizon dans la direction de
+// l'étoile est un mélange des 4 valeurs, et le bord de l'ombre est adouci sur le diamètre du disque
+// (plus 0,6°, la finesse de la mesure de l'horizon).
+double ArbreLumiere::part_sous_horizon(const Vec3d &up, const Vec3d &t1, const Vec3d &t2, const float h[NB_AZIMUTS],
+		const Vec3d &s, double a) {
+	double se = std::clamp(s.dot(up), -1.0, 1.0);
+	double ce = s.dot(t1), cn = s.dot(t2);
+	double l = std::sqrt(ce * ce + cn * cn);
+	double hz = 0;
+	if (l > 1e-9) {
+		double c = ce / l, sn = cn / l;
+		double pc = std::max(c, 0.0), pn = std::max(sn, 0.0), mc = std::max(-c, 0.0), mn = std::max(-sn, 0.0);
+		hz = h[0] * pc * pc + h[1] * pn * pn + h[2] * mc * mc + h[3] * mn * mn;
+	} else {
+		hz = -1.5707963;
+	}
+	double el = std::asin(se);
+	double demi = a + 0.005;
+	return std::clamp((el - hz) / (2.0 * demi) + 0.5, 0.0, 1.0);
 }
 
 Morceau *ArbreLumiere::assurer(uint64_t adresse) {
@@ -418,7 +573,7 @@ bool ArbreLumiere::visible(const Morceau &m) const {
 double ArbreLumiere::taille_ecran(const Morceau &m) const {
 	Vec3d v = m.centre - cam;
 	double dist = v.length();
-	double d = std::max(dist - m.rayon_englobant, 1e-3);
+	double d = std::max(dist - m.rayon_englobant, 1e-5);
 	double biais = 1.0;
 	if (dist > m.rayon_englobant) {
 		double c = std::fabs(m.centre.normalized().dot(v * (1.0 / dist)));
@@ -630,6 +785,15 @@ void ArbreLumiere::oublier_anciens() {
 // ---------------------------------------------------------------------------------------------
 
 static inline uint8_t octet(double v) { return (uint8_t)std::clamp((int)std::lround(v * 255.0), 0, 255); }
+// Hauteur de l'horizon (rad) → 0..1 : x = h / 90°, code = 0,5 + 0,5 signe(x) √|x| (planete.gdshader décode).
+static inline double code_horizon(double h) {
+	double x = std::clamp(h / 1.5707963267948966, -1.0, 1.0);
+	return 0.5 + 0.5 * (x < 0 ? -std::sqrt(-x) : std::sqrt(x));
+}
+static inline double decode_horizon(double c) {
+	double x = 2.0 * c - 1.0;
+	return (x < 0 ? -x * x : x * x) * 1.5707963267948966;
+}
 
 void ArbreLumiere::ecrire_place(int p, const Morceau &m) {
 	uint8_t *r = tampon_rayons.ptrw();
@@ -644,6 +808,12 @@ void ArbreLumiere::ecrire_place(int p, const Morceau &m) {
 		r[o + 3] = 255;
 		r[o + 7] = 255;
 		r[o + 11] = 255;
+		// Étape 7 : l'horizon (4 azimuts), codé par la racine de sa hauteur : plus de finesse près de 0
+		// (là où le Soleil se couche derrière les cailloux).
+		for (int q = 0; q < NB_AZIMUTS; q++) {
+			r[o + 12 + q] = octet(code_horizon(m.horizon_depart[k][q]));
+			r[o + 16 + q] = octet(code_horizon(m.horizon[k][q]));
+		}
 	}
 	float *c = (float *)tampon_coins.ptrw();
 	for (int k = 0; k < NB_COINS; k++) {
@@ -754,6 +924,19 @@ PackedFloat32Array ArbreLumiere::posemetre(const PackedFloat64Array &p_camera, c
 					direct *= part_soleil_visible(p, Vec3d(), std::min(rayon, dp * 0.9999), s, p_soleil_angle);
 				}
 			}
+			if (direct > 0.0) {
+				// Étape 7 : l'ombre du relief proche et des cailloux (horizon des 3 coins du rayon, tel que
+				// la carte graphique le reçoit : codé sur 8 bits).
+				float hz[NB_AZIMUTS] = { 0, 0, 0, 0 };
+				for (int q = 0; q < 3; q++) {
+					for (int w = 0; w < NB_AZIMUTS; w++) {
+						hz[w] += (float)(decode_horizon(octet(code_horizon(m->horizon[cc[q]][w])) / 255.0) / 3.0);
+					}
+				}
+				Vec3d up = (c + v).normalized(), e1, e2;
+				repere_lieu(up, e1, e2);
+				direct *= part_sous_horizon(up, e1, e2, hz, s, p_soleil_angle);
+			}
 			if (avec_occulteur && direct > 0.0) {
 				direct *= part_soleil_visible(c + v, occ_c, occ_r, s, p_soleil_angle);
 			}
@@ -790,7 +973,7 @@ void ArbreLumiere::configurer(double p_rayon, int64_t p_graine, int p_places) {
 	places = std::max(64, (p_places / 4) * 4);
 	relief_max = 0;
 	for (int n = 0; n < 40; n++) {
-		relief_max += amplitude(n);
+		relief_max += amplitude(n) * ((n >= OCTAVE_CAILLOUX_MIN && n <= OCTAVE_CAILLOUX_MAX) ? 1.5 : 1.0);
 	}
 	cache.clear();
 	interieurs_prec.clear();
@@ -921,6 +1104,31 @@ PackedFloat32Array ArbreLumiere::directions_morceau(int64_t a) {
 	return r;
 }
 
+PackedFloat32Array ArbreLumiere::horizons_morceau(int64_t a) {
+	Morceau *m = assurer((uint64_t)a);
+	PackedFloat32Array r;
+	r.resize(NB_COINS * NB_AZIMUTS);
+	for (int t = 0; t < NB_COINS; t++)
+		for (int i = 0; i < NB_AZIMUTS; i++) r[t * NB_AZIMUTS + i] = m->horizon[t][i];
+	return r;
+}
+
+PackedFloat32Array ArbreLumiere::horizon_point(const PackedFloat64Array &p, int nais) const {
+	float al[3], di[3], hz[NB_AZIMUTS];
+	lumiere_coin(Vec3d(p[0], p[1], p[2]).normalized(), nais, al, di, hz);
+	PackedFloat32Array r;
+	for (int i = 0; i < NB_AZIMUTS; i++) r.push_back(hz[i]);
+	return r;
+}
+
+double ArbreLumiere::part_horizon(const PackedFloat64Array &p, int nais, const Vector3 &s, double a) const {
+	float al[3], di[3], hz[NB_AZIMUTS];
+	Vec3d d = Vec3d(p[0], p[1], p[2]).normalized(), t1, t2;
+	lumiere_coin(d, nais, al, di, hz);
+	repere_lieu(d, t1, t2);
+	return part_sous_horizon(d, t1, t2, hz, Vec3d(s.x, s.y, s.z).normalized(), a);
+}
+
 PackedFloat64Array ArbreLumiere::centre_morceau(int64_t a) {
 	Morceau *m = assurer((uint64_t)a);
 	PackedFloat64Array r;
@@ -966,4 +1174,7 @@ void ArbreLumiere::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("couleurs_morceau", "adresse"), &ArbreLumiere::couleurs_morceau);
 	ClassDB::bind_method(D_METHOD("directions_morceau", "adresse"), &ArbreLumiere::directions_morceau);
 	ClassDB::bind_method(D_METHOD("centre_morceau", "adresse"), &ArbreLumiere::centre_morceau);
+	ClassDB::bind_method(D_METHOD("horizons_morceau", "adresse"), &ArbreLumiere::horizons_morceau);
+	ClassDB::bind_method(D_METHOD("horizon_point", "direction", "naissance"), &ArbreLumiere::horizon_point);
+	ClassDB::bind_method(D_METHOD("part_horizon", "direction", "naissance", "etoile", "rayon_angle"), &ArbreLumiere::part_horizon);
 }

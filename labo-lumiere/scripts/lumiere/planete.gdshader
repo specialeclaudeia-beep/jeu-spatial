@@ -9,6 +9,9 @@
 //   l'autre : pas de mosaïque, et deux morceaux voisins ont les mêmes valeurs sur leur bord commun.
 // - La lumière directe du Soleil est calculée ici, à chaque pixel (décision Q43 = version B), en vraies
 //   unités (cd/m²), puis passe par l'œil du pilote.
+// - Étape 7 : 2 texels de plus par coin, la hauteur de l'HORIZON (départ et visée) vers l'est, le nord,
+//   l'ouest et le sud. Elle ne dépend pas du Soleil : on compare ici la hauteur de l'étoile à celle de
+//   l'horizon dans sa direction → ombres du relief proche et des cailloux, qui suivent le Soleil.
 // Données par copie (INSTANCE_CUSTOM) : x = heure d'arrivée, y = profondeur des jupes, z = taille d'un rayon.
 shader_type spatial;
 render_mode unshaded, cull_disabled, skip_vertex_transform;
@@ -17,7 +20,7 @@ render_mode unshaded, cull_disabled, skip_vertex_transform;
 #include "res://scripts/lumiere/compagnon.gdshaderinc"
 
 uniform sampler2D coins : filter_nearest;      // RGBA 32 bits flottants, 90 × places
-uniform sampler2D rayons : filter_nearest;     // RGBA 8 bits, 135 × places
+uniform sampler2D rayons : filter_nearest;     // RGBA 8 bits, 225 × places (5 texels par coin)
 uniform float maintenant = 0.0;                // horloge du labo (s), la même que la partie C++
 uniform float duree_glissement = 0.5;          // s
 uniform float lux_fond = 2.0e-4;               // lumière des étoiles et du fond du ciel (lux)
@@ -38,6 +41,9 @@ varying float profondeur;
 varying vec3 voile_v;
 varying float soleil_visible;
 varying float compagnon_visible;
+varying vec4 horizon_v;          // hauteur de l'horizon (rad) vers l'est, le nord, l'ouest, le sud
+varying vec3 soleil_lieu;        // Soleil dans le repère du lieu : (sinus de sa hauteur, vers l'est, vers le nord)
+varying vec3 compagnon_lieu;
 
 // Part d'un disque de rayon a cachée par un disque de rayon b dont le centre est à e
 // (même formule que soleil.gd et la partie C++).
@@ -85,6 +91,31 @@ float part_etoile(vec3 p, vec3 dir, float a) {
 	return part;
 }
 
+// Étape 7 : hauteur codée de l'horizon → radians (même code que la partie C++).
+vec4 decode_horizon(vec4 c) {
+	vec4 x = c * 2.0 - 1.0;
+	return sign(x) * x * x * (PI * 0.5);
+}
+
+// Étoile dans le repère du lieu (up = verticale, t1 = est, t2 = nord ; le même que la partie C++).
+vec3 vers_lieu(vec3 s, vec3 up, vec3 t1, vec3 t2) {
+	return vec3(dot(s, up), dot(s, t1), dot(s, t2));
+}
+
+// Part du disque d'une étoile au-dessus de l'horizon proche (même formule que la partie C++).
+float part_horizon(vec4 h, vec3 l, float a) {
+	float n = length(l.yz);
+	float hz = -PI * 0.5;
+	if (n > 1e-6) {
+		vec2 c = l.yz / n;
+		vec2 p = max(c, 0.0);
+		vec2 m = max(-c, 0.0);
+		hz = h.x * p.x * p.x + h.y * p.y * p.y + h.z * m.x * m.x + h.w * m.y * m.y;
+	}
+	float el = asin(clamp(l.x, -1.0, 1.0));
+	return clamp((el - hz) / (2.0 * (a + 0.005)) + 0.5, 0.0, 1.0);
+}
+
 // Profondeur « logarithmique » : de 5 cm à des milliers de km sans que les montagnes lointaines se
 // mélangent (la profondeur normale n'a pas assez de précision si loin).
 uniform float profondeur_pres = 0.05;
@@ -108,10 +139,20 @@ void vertex() {
 		p -= normalize(p - centre_planete) * INSTANCE_CUSTOM.y;
 	}
 	pos_monde = p;
-	vec3 c0 = texelFetch(rayons, ivec2(k * 3, place), 0).rgb;
-	vec3 c1 = texelFetch(rayons, ivec2(k * 3 + 1, place), 0).rgb;
+	vec3 c0 = texelFetch(rayons, ivec2(k * 5, place), 0).rgb;
+	vec3 c1 = texelFetch(rayons, ivec2(k * 5 + 1, place), 0).rgb;
 	albedo_v = mix(c0 * c0, c1 * c1, glisse);   // couleurs rangées par leur racine carrée
-	direction_v = rotation * (texelFetch(rayons, ivec2(k * 3 + 2, place), 0).xyz * 2.0 - 1.0);
+	direction_v = rotation * (texelFetch(rayons, ivec2(k * 5 + 2, place), 0).xyz * 2.0 - 1.0);
+	// Étape 7 : horizon du coin et étoiles dans le repère du lieu (axe Y de l'astre = rotation[1]).
+	vec4 h0 = decode_horizon(texelFetch(rayons, ivec2(k * 5 + 3, place), 0));
+	vec4 h1 = decode_horizon(texelFetch(rayons, ivec2(k * 5 + 4, place), 0));
+	horizon_v = mix(h0, h1, glisse);
+	vec3 up = normalize(p - centre_planete);
+	vec3 t1 = cross(rotation[1], up);
+	t1 = length(t1) > 1e-6 ? normalize(t1) : normalize(cross(rotation[0], up));
+	vec3 t2 = cross(up, t1);
+	soleil_lieu = vers_lieu(soleil_direction, up, t1, t2);
+	compagnon_lieu = vers_lieu(compagnon_direction, up, t1, t2);
 	// Halo de l'œil calculé aux coins (il varie lentement à l'échelle d'un rayon de 8 pixels) :
 	// beaucoup moins de calcul par pixel pour la petite carte graphique du PC.
 	voile_v = oeil_voile(normalize(p - CAMERA_POSITION_WORLD), TIME);
@@ -121,6 +162,11 @@ void vertex() {
 	vec4 vue = VIEW_MATRIX * vec4(p, 1.0);
 	profondeur = -vue.z;
 	POSITION = PROJECTION_MATRIX * vue;
+	// Étape 7 : la profondeur est écrite par le fragment (logarithmique) ; ici on met chaque point au
+	// milieu de la boîte de vue, pour que la carte graphique ne coupe jamais le sol aux plans proche et
+	// lointain de la caméra (l'œil peut être à 5 mm du sol et voir à 300 km). Seuls les points derrière
+	// l'œil sont coupés (w < 0).
+	POSITION.z = 0.0;
 }
 
 // Lumière moyenne d'un cône de petites faces (direction moyenne n, sinus du demi-angle sb) éclairé par
@@ -144,9 +190,12 @@ void fragment() {
 	// Sol mat : luminance = albédo × éclairement × cos / π. Étape 6 : deux étoiles proches, leurs
 	// lumières s'additionnent ; tout le reste du ciel (étoiles lointaines, Voie lactée) est regroupé
 	// dans lux_fond.
-	vec3 e = soleil_couleur * soleil_eclairement * eclairage(n, sb, soleil_direction) * soleil_visible;
+	// Étape 7 : l'ombre du relief proche et des cailloux (horizon), à chaque pixel.
+	vec3 e = soleil_couleur * soleil_eclairement * eclairage(n, sb, soleil_direction) * soleil_visible
+		* part_horizon(horizon_v, soleil_lieu, soleil_rayon_angle);
 	if (compagnon_eclairement > 0.0) {
-		e += compagnon_couleur * compagnon_eclairement * eclairage(n, sb, compagnon_direction) * compagnon_visible;
+		e += compagnon_couleur * compagnon_eclairement * eclairage(n, sb, compagnon_direction) * compagnon_visible
+			* part_horizon(horizon_v, compagnon_lieu, compagnon_rayon_angle);
 	}
 	vec3 l = albedo * (e + lux_fond) / PI;
 	ALBEDO = oeil_vers_ecran(l + voile_v, FRAGCOORD.xy, TIME);
