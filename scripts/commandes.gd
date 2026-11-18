@@ -50,6 +50,10 @@ const ACTIONS := [
 	["temps_x10", "Temps x10", "p:50", ""],                           # 2
 	["temps_x100", "Temps x100", "p:51", ""],                         # 3
 	["temps_x1000", "Temps x1000", "p:52", ""],                       # 4
+	["temps_x10000", "Temps x10 000", "p:53", ""],                     # 5
+	["temps_x100000", "Temps x100 000", "p:54", ""],                   # 6
+	["poussee_moins", "Puissance des moteurs : moins (÷10)", "p:55", ""],   # 7
+	["poussee_plus", "Puissance des moteurs : plus (x10)", "p:56", ""],     # 8
 	["temps_moins", "Temps moins rapide", "", "b:13"],                # croix directionnelle gauche
 	["temps_plus", "Temps plus rapide", "", "b:14"],                  # croix directionnelle droite
 	["regard_gauche", "Tourner la tête à gauche", "", "a:2:-1"],      # stick droit gauche

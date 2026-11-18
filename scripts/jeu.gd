@@ -36,7 +36,10 @@ const VUE_EXT_HAUTEUR := deg_to_rad(-12.0)    # un peu au-dessus du vaisseau
 const FOV_NORMAL := 75.0
 const FOV_ZOOM := 25.0        # zoom pour lire les instruments (3 fois plus gros)
 const PART_TRAPPES := 0.3     # part du mouvement du train pendant laquelle les trappes s'ouvrent
-const ACCELERATIONS_TEMPS := [1, 10, 100, 1000]
+const ACCELERATIONS_TEMPS := [1, 10, 100, 1000, 10000, 100000]
+## Puissance des moteurs principaux (touches 7 / 8) : x1 = la vraie poussée (5 × 200 kN, ≈ 12 g).
+## Plus fort, c'est un moteur imaginaire, mais toujours une vraie force : la relativité s'applique.
+const FACTEURS_POUSSEE := [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0]
 # tête du pilote (stick droit) : ne touche qu'à la caméra, jamais au vaisseau
 const TETE_VITESSE := 2.5                     # rad/s quand le stick est poussé à fond (environ 140°/s)
 const TETE_LACET_MAX := deg_to_rad(130.0)     # jusqu'où on peut tourner la tête à gauche / à droite
@@ -635,7 +638,8 @@ func _ecrire_aide() -> void:
 		+ "Tangage %s      Lacet %s\n" % [_paire("tangage_haut", "tangage_bas"), _paire("lacet_gauche", "lacet_droite")]
 		+ "Roulis %s\n" % _paire("roulis_gauche", "roulis_droite")
 		+ "Pilote auto : %s garder le cap   %s s'arrêter   %s atterrir (une touche de pilotage le coupe)\n" % [c.resume("pilote_cap"), c.resume("pilote_arret"), c.resume("pilote_atterrir")]
-		+ "%s : stabilisateur   %s : pause   Temps : %s %s %s %s, ou %s / %s\n" % [c.resume("stabilisateur"), c.resume("pause"), c.resume("temps_x1"), c.resume("temps_x10"), c.resume("temps_x100"), c.resume("temps_x1000"), c.resume("temps_moins"), c.resume("temps_plus")]
+		+ "%s : stabilisateur   %s : pause   Temps : %s %s %s %s %s %s, ou %s / %s\n" % [c.resume("stabilisateur"), c.resume("pause"), c.resume("temps_x1"), c.resume("temps_x10"), c.resume("temps_x100"), c.resume("temps_x1000"), c.resume("temps_x10000"), c.resume("temps_x100000"), c.resume("temps_moins"), c.resume("temps_plus")]
+		+ "Puissance des moteurs (relativité) : %s moins   %s plus\n" % [c.resume("poussee_moins"), c.resume("poussee_plus")]
 		+ "%s : remettre en orbite   %s : recommencer   %s : tests   %s : cacher l'aide\n" % [c.resume("remettre_orbite"), c.resume("recommencer"), c.resume("tests"), c.resume("aide")]
 		+ "%s : ailes   %s : train d'atterrissage   %s : vol vertical   %s : vue cockpit / extérieure\n" % [c.resume("ailes"), c.resume("train"), c.resume("vol_vertical"), c.resume("vue")]
 		+ "Tourner la tête (ou la caméra) : %s   %s : regarder droit devant   %s (maintenir) : zoom\n" % [_aide_tete(), c.resume("regard_centre"), c.resume("zoom")]
@@ -685,6 +689,10 @@ func _lire_boutons() -> void:
 	if _appui("temps_x10"): acc_temps = ACCELERATIONS_TEMPS[1]
 	if _appui("temps_x100"): acc_temps = ACCELERATIONS_TEMPS[2]
 	if _appui("temps_x1000"): acc_temps = ACCELERATIONS_TEMPS[3]
+	if _appui("temps_x10000"): acc_temps = ACCELERATIONS_TEMPS[4]
+	if _appui("temps_x100000"): acc_temps = ACCELERATIONS_TEMPS[5]
+	if _appui("poussee_plus"): _changer_poussee(1)
+	if _appui("poussee_moins"): _changer_poussee(-1)
 	if _appui("temps_plus"):
 		acc_temps = ACCELERATIONS_TEMPS[mini(ACCELERATIONS_TEMPS.find(acc_temps) + 1, ACCELERATIONS_TEMPS.size() - 1)]
 	if _appui("temps_moins"):
@@ -725,6 +733,13 @@ func _lire_boutons() -> void:
 	clics.clear()
 	if Input.is_action_just_pressed("tests"):
 		get_tree().change_scene_to_file("res://scenes/tests.tscn")
+
+
+## Puissance des moteurs principaux : un cran de plus (+1) ou de moins (-1) dans FACTEURS_POUSSEE.
+func _changer_poussee(sens: int) -> void:
+	var i_p: int = maxi(FACTEURS_POUSSEE.find(vaisseau.facteur_poussee), 0)
+	i_p = clampi(i_p + sens, 0, FACTEURS_POUSSEE.size() - 1)
+	vaisseau.regler_poussee(FACTEURS_POUSSEE[i_p])
 
 
 ## Vrai si l'action vient d'être demandée (touche, manette ou clic sur le cockpit).
@@ -852,7 +867,8 @@ func _physics_process(delta: float) -> void:
 	if acc_temps == 1:
 		vaisseau.pas(PAS)
 	else:
-		var n: int = mini(acc_temps, 25)
+		# au-delà de x1000, plus de petits pas (au plus 8 s chacun à x100 000) pour rester précis
+		var n: int = mini(acc_temps, 25) if acc_temps <= 1000 else 100
 		var dt: float = PAS * acc_temps / n
 		for i in n:
 			vaisseau.pas(dt)
@@ -1024,6 +1040,85 @@ func _construire_calotte(c: Vector3, angle: float) -> void:
 	calotte_angle = angle
 
 
+## Nombre avec des espaces entre les milliers : 12 345,6.
+static func _nombre(x: float, decimales := 0) -> String:
+	var t := String.num(absf(x), decimales) if decimales > 0 else str(int(round(absf(x))))
+	var entier := t.get_slice(".", 0)
+	var reste := t.get_slice(".", 1) if t.contains(".") else ""
+	if decimales > 0 and reste == "":
+		reste = "0".repeat(decimales)
+	var groupes := ""
+	while entier.length() > 3:
+		groupes = " " + entier.right(3) + groupes
+		entier = entier.left(entier.length() - 3)
+	return ("-" if x < 0.0 else "") + entier + groupes + ("," + reste if reste != "" else "")
+
+
+static func _vitesse_txt(v: float, signe := false) -> String:
+	var s := "+" if signe and v >= 0.0 else ""
+	if absf(v) < 10000.0:
+		return s + _nombre(v, 1) + " m/s"
+	return s + _nombre(v / 1000.0, 0) + " km/s"
+
+
+## Fraction de la vitesse de la lumière : assez de chiffres pour voir s'approcher de 1 sans l'atteindre.
+static func _fraction_c(b: float) -> String:
+	if b < 0.999:
+		return String.num(b, 6 if b < 0.001 else 4).replace(".", ",")
+	# 0,999 999… : on compte les 9
+	var d := clampi(int(ceil(-log(1.0 - b) / log(10.0))) + 2, 4, 15)
+	return String.num(b, d).replace(".", ",")
+
+
+static func _gamma_txt(g: float) -> String:
+	if g < 1.001:
+		return String.num(g, 9).replace(".", ",")
+	if g < 100.0:
+		return String.num(g, 3).replace(".", ",")
+	return _nombre(g)
+
+
+static func _force_txt(f: float) -> String:
+	if f < 1e6:
+		return _nombre(f / 1000.0) + " kN"
+	if f < 1e9:
+		return _nombre(f / 1e6, 1) + " MN"
+	return _nombre(f / 1e9, 1) + " GN"
+
+
+## Durée lisible : « 2 ans 41 j 03:12:45 ».
+static func _duree(s: float) -> String:
+	var an := 365.25 * 86400.0
+	var t := ""
+	var reste := maxf(s, 0.0)
+	if reste >= an:
+		var n := int(floor(reste / an))
+		t += "%d an%s " % [n, "s" if n > 1 else ""]
+		reste -= n * an
+	if reste >= 86400.0 or t != "":
+		var j := int(floor(reste / 86400.0))
+		t += "%d j " % j
+		reste -= j * 86400.0
+	var hh := int(floor(reste / 3600.0))
+	var mm := int(floor(fmod(reste, 3600.0) / 60.0))
+	var ss := fmod(reste, 60.0)
+	return t + "%02d:%02d:%04.1f" % [hh, mm, ss]
+
+
+## Petit écart de temps : en microsecondes, secondes… ou comme _duree.
+static func _duree_courte(s: float) -> String:
+	var a := absf(s)
+	if a < 1e-6:
+		return "%.1f ns" % (s * 1e9)
+	if a < 1e-3:
+		return "%.1f µs" % (s * 1e6)
+	if a < 1.0:
+		return "%.1f ms" % (s * 1e3)
+	if a < 60.0:
+		return "%.2f s" % s
+	return _duree(s)
+
+
 func _distance(m: float) -> String:
 	if absf(m) >= 10000.0:
 		return "%.1f km" % (m / 1000.0)
@@ -1053,7 +1148,9 @@ func _mettre_a_jour_hud() -> void:
 	var w: Vector3 = vaisseau.omega * (180.0 / PI)
 	var m: Array = vaisseau.moteurs
 	var lignes := PackedStringArray()
-	lignes.append("VITESSE       %.1f m/s   (verticale %+.1f   horizontale %.1f)" % [vaisseau.vitesse(), vaisseau.vitesse_verticale(), vaisseau.vitesse_horizontale()])
+	lignes.append("VITESSE       %s   (verticale %s   horizontale %s)" % [_vitesse_txt(vaisseau.vitesse()), _vitesse_txt(vaisseau.vitesse_verticale(), true), _vitesse_txt(vaisseau.vitesse_horizontale())])
+	lignes.append("RELATIVITÉ    %s c   γ = %s   rapidité %.4f" % [_fraction_c(vaisseau.beta()), _gamma_txt(vaisseau.gamma()), vaisseau.rapidite()])
+	lignes.append("HORLOGES      pilote %s   univers %s   (le pilote a %s de moins)" % [_duree(vaisseau.temps_pilote), _duree(vaisseau.temps_univers), _duree_courte(vaisseau.temps_univers - vaisseau.temps_pilote)])
 	lignes.append("ALTITUDE      %s" % _distance(vaisseau.altitude()))
 	lignes.append("ORBITE        %s" % orbite_txt)
 	lignes.append("RESSENTI      %.2f g" % (vaisseau.acceleration_ressentie.length() / VaisseauPhysique.G0))
@@ -1064,7 +1161,8 @@ func _mettre_a_jour_hud() -> void:
 	lignes.append("ROTATION      tangage %+.1f°/s   lacet %+.1f°/s   roulis %+.1f°/s" % [w.x, w.y, w.z])
 	lignes.append("AILES         %s      TRAIN %s      VUE %s" % [_etat(vaisseau.ailes, vaisseau.ailes_consigne, "ouvertes", "repliées"),
 		_etat(vaisseau.train, vaisseau.train_consigne, "sorti", "rentré"), "cockpit" if vue_interieure else "extérieure"])
-	lignes.append("VOL VERTICAL  %s   (tuyère %.0f°, poussée max %.0f kN)" % [_etat(vaisseau.vertical, vaisseau.vertical_consigne, "activé", "désactivé"), vaisseau.angle_tuyere(), vaisseau.poussee_avant_max / 1000.0])
+	lignes.append("VOL VERTICAL  %s   (tuyère %.0f°)" % [_etat(vaisseau.vertical, vaisseau.vertical_consigne, "activé", "désactivé"), vaisseau.angle_tuyere()])
+	lignes.append("PUISSANCE     x%s   poussée max %s (%s g)%s" % [_nombre(vaisseau.facteur_poussee), _force_txt(vaisseau.poussee_avant_max), _nombre(vaisseau.poussee_avant_max / vaisseau.masse / VaisseauPhysique.G0, 1), "   (vrais moteurs)" if vaisseau.facteur_poussee == 1.0 else "   (moteurs imaginaires)"])
 	lignes.append("PILOTE AUTO   %s" % ordinateur.nom_mode())
 	var temps_txt := "x%d" % acc_temps
 	if acc_effectif < acc_temps:

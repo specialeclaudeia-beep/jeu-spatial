@@ -41,7 +41,8 @@ Disposition par défaut :
 | pause | P | Carré |
 | cacher / montrer l'aide | H | Rond |
 | recommencer / remettre en orbite | R / O | Créer |
-| temps ×1, ×10, ×100, ×1000 | 1 2 3 4 | croix directionnelle gauche / droite (moins / plus vite) |
+| temps ×1, ×10, ×100, ×1000, ×10 000, ×100 000 | 1 2 3 4 5 6 | croix directionnelle gauche / droite (moins / plus vite) |
+| puissance des moteurs : moins / plus (÷10 / ×10, de ×1 à ×100 000) | 7 / 8 | — (à choisir avec F2) |
 | tourner la tête, ou la caméra en vue extérieure (le vaisseau ne bouge pas) | — | stick droit (lâché : la tête revient devant) |
 | regarder droit devant | C | R3 (enfoncer le stick droit) |
 | projecteur du vaisseau (allumer / éteindre) | J | — (à choisir avec F2) |
@@ -76,6 +77,14 @@ ou couper la poussée, le désactive.
 - Calcul automatique des poussées : on demande une poussée et une rotation, et le calcul choisit
   combien chaque propulseur pousse, d'après sa position (moteurs d'un côté plus forts que de l'autre,
   propulseurs d'orientation). Le vaisseau n'est jamais tourné directement.
+- Relativité restreinte d'Einstein (étape A du programme « Einstein ») : on ne peut jamais atteindre la
+  vitesse de la lumière. La physique suit la « vitesse propre » (γ·v) : le pilote sent toujours la même
+  poussée, mais vue de la planète, la vitesse s'approche de c sans jamais l'atteindre. À petite vitesse,
+  c'est exactement Newton. Deux horloges à l'écran : celle du pilote retarde quand il va vite (facteur γ)
+  et, un tout petit peu, au fond d'un puits de gravité. Les vrais moteurs donnent 12 g (0,9 c en 43 jours
+  du pilote) ; touches 7 / 8 : moteurs « imaginaires » jusqu'à ×100 000 (toujours de vraies forces, dont la
+  part en plus passe par le centre de gravité). Le ciel (aberration, Doppler) suit la vraie vitesse.
+  Pas encore : planète et lune déformées par l'aberration (étape A2), gravité d'Einstein (étape B).
 - Gravité de Newton calculée en permanence (planète de test : 600 km de rayon, 9,81 m/s² au sol).
 - Gravité de plusieurs astres possible (somme des attractions) et petit couple dû au gradient de gravité :
   laissé seul en orbite, le vaisseau se balance lentement autour de la direction de la planète.
