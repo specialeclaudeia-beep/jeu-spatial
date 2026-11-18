@@ -188,6 +188,15 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	var h := 12000.0
 	var bas := rayon - h
 	var loin := sqrt(maxf(d * d - bas * bas, 0.0)) + sqrt((rayon + h) ** 2 - bas * bas) + 1000.0
+	# Vitesse de l'œil : aberration et Doppler (invisibles aux vitesses du jeu, < 1/10 de pixel).
+	var beta := vitesse / Etoiles.C
+	if beta.length() < 0.1 * deg_to_rad(camera.fov) / maxf(get_viewport().get_visible_rect().size.y, 1.0):
+		beta = Vector3.ZERO
+	# Einstein A2 : la planète est vue là où sa lumière est partie, jusqu'à γ(1 + β) fois plus loin.
+	planete.vitesse_oeil = beta
+	if beta != Vector3.ZERO:
+		var b := minf(beta.length(), 0.999999)
+		loin *= (1.0 + b) / sqrt(1.0 - b * b)
 	planete.profondeur_pres = PRES
 	planete.profondeur_loin = loin
 	var rs := RenderingServer
@@ -223,10 +232,6 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	rs.global_shader_parameter_set("compagnon_couleur", Vector3(cc.r, cc.g, cc.b))
 	rs.global_shader_parameter_set("ciel_pole_galaxie", Etoiles.pole_galaxie())
 	rs.global_shader_parameter_set("ciel_centre_galaxie", Etoiles.centre_galaxie())
-	# Vitesse de l'œil : aberration et Doppler (invisibles aux vitesses du jeu, < 1/10 de pixel).
-	var beta := vitesse / Etoiles.C
-	if beta.length() < 0.1 * deg_to_rad(camera.fov) / maxf(get_viewport().get_visible_rect().size.y, 1.0):
-		beta = Vector3.ZERO
 	rs.global_shader_parameter_set("oeil_vitesse", beta)
 	var vu: Array = Etoiles.aberration(s, beta)
 	rs.global_shader_parameter_set("soleil_direction_vue", vu[0])
