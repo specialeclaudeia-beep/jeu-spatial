@@ -12,6 +12,7 @@ extends MultiMeshInstance3D
 const MorceauType = preload("res://scripts/lumiere/morceau_type.gd")
 const ShaderPlanete = preload("res://scripts/lumiere/planete.gdshader")
 const ChronoBoucle = preload("res://scripts/lumiere/chrono_boucle.gd")
+const Etoiles = preload("res://scripts/lumiere/etoiles.gd")
 
 const PLACES := 1024                 ## morceaux affichés au plus par défaut (65 536 rayons)
 var places := PLACES
@@ -32,6 +33,13 @@ var profondeur_pres := 0.0
 ## Étape 8 : distance la plus lointaine pour la profondeur logarithmique (m). Dans le jeu, la caméra de
 ## Godot ne va pas plus loin que le vaisseau ; la planète (jamais coupée) va bien au-delà. 0 : camera.far.
 var profondeur_loin := 0.0
+## Einstein A2 : vitesse de l'œil en fraction de c (repère d'affichage). Non nulle, la planète est vue
+## déformée par l'aberration, et la partie C++ choisit ses triangles dans le champ de vision « au repos »
+## (là d'où vient vraiment la lumière qui arrive à l'écran).
+var vitesse_oeil := Vector3.ZERO
+## Facteur Doppler au centre de la planète (dernière image) : > 1 devant (bleu, brillant), < 1 derrière.
+var doppler_centre := 1.0
+static var _table_corps_noir: ImageTexture
 var materiau: ShaderMaterial
 var image_rayons: Image
 var image_coins: Image
@@ -71,6 +79,9 @@ func preparer(p_rayon: float, graine: int, p_places := PLACES) -> bool:
 	materiau.set_shader_parameter("rayons", tex_rayons)
 	materiau.set_shader_parameter("coins", tex_coins)
 	materiau.set_shader_parameter("rayon_corps", p_rayon)
+	if _table_corps_noir == null:
+		_table_corps_noir = Etoiles.table_corps_noir()
+	materiau.set_shader_parameter("corps_noir", _table_corps_noir)
 	material_override = materiau
 	return true
 
@@ -81,19 +92,68 @@ func _axes(camera: Camera3D) -> PackedFloat32Array:
 	return PackedFloat32Array([-b.z.x, -b.z.y, -b.z.z, b.x.x, b.x.y, b.x.z, b.y.x, b.y.y, b.y.z])
 
 
+## Einstein A2 : le champ de vision à donner à la partie C++. Sans vitesse : celui de la caméra.
+## À grande vitesse, l'écran reçoit la lumière d'un autre morceau du ciel « au repos » (aberration à
+## l'envers). L'aberration change les cercles du ciel en cercles : le cercle qui entoure l'écran devient
+## un autre cercle, qu'on retrouve avec 3 de ses points. Renvoie [axes, tan_h, tan_v, hauteur_px] :
+## la hauteur en pixels est réglée pour que les triangles gardent leur taille VUE à l'écran
+## (un objet devant paraît D fois plus petit, derrière plus grand).
+func champ_repos(camera: Camera3D, vers_centre: PackedFloat64Array) -> Array:
+	var axes := _axes(camera)
+	var taille := camera.get_viewport().get_visible_rect().size
+	var tan_v := tan(deg_to_rad(camera.fov) * 0.5)
+	var tan_h := tan_v * taille.x / taille.y
+	var b := vitesse_oeil
+	if b.length() < 1e-9:
+		doppler_centre = 1.0
+		return [axes, tan_h, tan_v, taille.y, axes, tan_h, tan_v]
+	var cb := camera.global_transform.basis
+	var f := -cb.z
+	var t := sqrt(tan_h * tan_h + tan_v * tan_v)
+	var points: Array[Vector3] = []
+	for k in 3:
+		var phi := TAU * k / 3.0
+		var d := (f + (cb.x * cos(phi) + cb.y * sin(phi)) * t).normalized()
+		points.append(Etoiles.aberration(d, -b)[0])
+	var f_repos: Vector3 = Etoiles.aberration(f, -b)[0]
+	var a := (points[1] - points[0]).cross(points[2] - points[0]).normalized()
+	if a.dot(f_repos) < a.dot(points[0]):
+		a = -a
+	var demi := acos(clampf(a.dot(points[0]), -1.0, 1.0))
+	var c := Vector3(vers_centre[0], vers_centre[1], vers_centre[2]).normalized()
+	var g := 1.0 / sqrt(1.0 - minf(b.length_squared(), 0.999999999))
+	doppler_centre = g * (1.0 + b.dot(c))
+	var loupe := clampf(1.0 / doppler_centre, 0.1, 10.0)
+	var px_par_radian := taille.y / (2.0 * tan_v) * loupe
+	var inv := rotation_astre.transposed()
+	var droite := (cb.y.cross(a) if absf(cb.y.dot(a)) < 0.99 else cb.x.cross(a)).normalized()
+	var haut := a.cross(droite)
+	# Pour le posemètre : toujours le cercle « au repos » (au plus 85° de rayon, 4 bords).
+	var tp := tan(minf(demi, deg_to_rad(85.0)))
+	var axes_pose := _paquet(inv * a, inv * droite, inv * haut)
+	if demi < deg_to_rad(80.0):
+		var tn := tan(demi)
+		return [_paquet(inv * a, inv * droite, inv * haut), tn, tn, px_par_radian * 2.0 * tn, axes_pose, tp]
+	# Champ trop large pour 4 bords : la partie C++ garde seulement la moitié du ciel tournée vers la
+	# planète (de l'extérieur, on n'en voit jamais plus ; l'horizon fait le reste).
+	var vc := inv * c
+	return [_paquet(vc, vc, vc), 2.0, 2.0, px_par_radian * 4.0, axes_pose, tp]
+
+
+static func _paquet(devant: Vector3, droite: Vector3, haut: Vector3) -> PackedFloat32Array:
+	return PackedFloat32Array([devant.x, devant.y, devant.z, droite.x, droite.y, droite.z, haut.x, haut.y, haut.z])
+
+
 ## Une image de la boucle. oeil = position de l'œil dans le repère de la planète (m, 64 bits) ;
 ## vers_centre = centre de la planète moins position de l'œil, dans le repère d'affichage (la caméra
 ## est à l'origine) ; temps = horloge du labo en secondes ; occulteur_affichage = centre (par rapport
 ## à la caméra) et rayon de l'astre qui peut cacher le Soleil (w = 0 : aucun).
 func mettre_a_jour(camera: Camera3D, oeil: PackedFloat64Array, vers_centre: PackedFloat64Array, temps: float,
 		chrono: RefCounted, occulteur_affichage := Vector4.ZERO) -> void:
-	var axes := _axes(camera)
-	var taille := camera.get_viewport().get_visible_rect().size
-	var tan_v := tan(deg_to_rad(camera.fov) * 0.5)
-	var tan_h := tan_v * taille.x / taille.y
+	var champ := champ_repos(camera, vers_centre)
 
 	chrono.debut(ChronoBoucle.CHOISIR)
-	arbre.choisir(oeil, axes, tan_h, tan_v, taille.y, temps)
+	arbre.choisir(oeil, champ[0], champ[1], champ[2], champ[3], temps)
 	chrono.fin(ChronoBoucle.CHOISIR)
 
 	chrono.debut(ChronoBoucle.ECLAIRER)
@@ -120,14 +180,22 @@ func mettre_a_jour(camera: Camera3D, oeil: PackedFloat64Array, vers_centre: Pack
 ## Le posemètre : luminance (cd/m²) de 16 × 9 cases de l'écran, tirée des rayons affichés.
 ## Le Soleil caché par l'occulteur (éclipse) est pris en compte rayon par rayon.
 ## soleil_dir est donné dans le repère d'affichage.
+## Einstein A2 : à grande vitesse, les cases couvrent le champ « au repos » (voir champ_repos) et leur
+## luminance est multipliée par l'effet Doppler au centre de la planète (approximation pour régler l'œil).
 func posemetre(camera: Camera3D, oeil: PackedFloat64Array, soleil_dir: Vector3, eclairement: float,
 		fond: float, soleil_angle := 0.004652) -> PackedFloat32Array:
-	var axes := _axes(camera)
-	var taille := camera.get_viewport().get_visible_rect().size
-	var tan_v := tan(deg_to_rad(camera.fov) * 0.5)
+	var vers_centre := PackedFloat64Array([-oeil[0], -oeil[1], -oeil[2]])
+	var vc := rotation_astre * Vector3(vers_centre[0], vers_centre[1], vers_centre[2])
+	var champ := champ_repos(camera, PackedFloat64Array([vc.x, vc.y, vc.z]))
 	var s := rotation_astre.transposed() * soleil_dir
-	return arbre.posemetre(oeil, axes, tan_v * taille.x / taille.y, tan_v, s, eclairement, fond, occulteur,
-		soleil_angle)
+	var tv: float = champ[6] if champ.size() > 6 else champ[5]
+	var cases: PackedFloat32Array = arbre.posemetre(oeil, champ[4], champ[5], tv, s, eclairement, fond,
+		occulteur, soleil_angle)
+	if doppler_centre != 1.0:
+		var k := Etoiles.facteur_luminance(doppler_centre, Etoiles.T_SOLEIL)
+		for i in cases.size():
+			cases[i] *= k
+	return cases
 
 
 ## Étape 9 : la carte du ciel vue de l'œil (toutes les directions), tirée des rayons affichés, pour les

@@ -12,6 +12,12 @@
 // - Étape 7 : 2 texels de plus par coin, la hauteur de l'HORIZON (départ et visée) vers l'est, le nord,
 //   l'ouest et le sud. Elle ne dépend pas du Soleil : on compare ici la hauteur de l'étoile à celle de
 //   l'horizon dans sa direction → ombres du relief proche et des cailloux, qui suivent le Soleil.
+// - Einstein A2 : à très grande vitesse (oeil_vitesse, fraction de c), chaque coin est vu là où sa lumière
+//   arrive vraiment dans l'œil qui bouge (aberration : tout se resserre vers l'avant), à la distance où
+//   cette lumière est partie (× D), avec sa couleur et son éclat changés par l'effet Doppler (vers le
+//   bleu et plus brillant devant, vers le rouge et plus sombre derrière : l'éclat vers l'avant).
+//   L'éclairage (Soleil, ombres, éclipses) reste calculé là où la planète est vraiment : c'est la lumière
+//   déjà renvoyée par le sol qui change en chemin vers l'œil. Vitesse nulle : rien ne change.
 // Données par copie (INSTANCE_CUSTOM) : x = heure d'arrivée, y = profondeur des jupes, z = taille d'un rayon.
 shader_type spatial;
 render_mode unshaded, cull_disabled, skip_vertex_transform;
@@ -19,6 +25,7 @@ render_mode unshaded, cull_disabled, skip_vertex_transform;
 #include "res://scripts/lumiere/oeil.gdshaderinc"
 #include "res://scripts/lumiere/compagnon.gdshaderinc"
 #include "res://scripts/lumiere/lampes.gdshaderinc"
+#include "res://scripts/lumiere/etoiles.gdshaderinc"
 
 uniform sampler2D coins : filter_nearest;      // RGBA 32 bits flottants, 90 × places
 uniform sampler2D rayons : filter_nearest;     // RGBA 8 bits, 225 × places (5 texels par coin)
@@ -45,6 +52,7 @@ varying float compagnon_visible;
 varying vec4 horizon_v;          // hauteur de l'horizon (rad) vers l'est, le nord, l'ouest, le sud
 varying vec3 soleil_lieu;        // Soleil dans le repère du lieu : (sinus de sa hauteur, vers l'est, vers le nord)
 varying vec3 compagnon_lieu;
+varying vec3 doppler_v;          // Einstein A2 : facteur Doppler sur la lumière renvoyée (rouge, vert, bleu)
 
 // Part d'un disque de rayon a cachée par un disque de rayon b dont le centre est à e
 // (même formule que soleil.gd et la partie C++).
@@ -154,13 +162,26 @@ void vertex() {
 	vec3 t2 = cross(up, t1);
 	soleil_lieu = vers_lieu(soleil_direction, up, t1, t2);
 	compagnon_lieu = vers_lieu(compagnon_direction, up, t1, t2);
-	// Halo de l'œil calculé aux coins (il varie lentement à l'échelle d'un rayon de 8 pixels) :
-	// beaucoup moins de calcul par pixel pour la petite carte graphique du PC.
-	voile_v = oeil_voile(normalize(p - CAMERA_POSITION_WORLD), TIME);
 	// L'ombre d'une éclipse varie lentement à l'échelle d'un rayon : calculée aux coins.
 	soleil_visible = part_etoile(p, soleil_direction, soleil_rayon_angle);
 	compagnon_visible = compagnon_eclairement > 0.0 ? part_etoile(p, compagnon_direction, compagnon_rayon_angle) : 0.0;
-	vec4 vue = VIEW_MATRIX * vec4(p, 1.0);
+	// Einstein A2 : où l'œil qui va très vite voit ce coin, et le Doppler de sa lumière (reflet du Soleil,
+	// corps noir à 5 772 K).
+	vec3 vu = p;
+	doppler_v = vec3(1.0);
+	if (dot(oeil_vitesse, oeil_vitesse) > 0.0) {
+		vec3 r = p - CAMERA_POSITION_WORLD;
+		float dist = length(r);
+		if (dist > 0.0) {
+			vec4 ab = aberration(r / dist, oeil_vitesse);
+			vu = CAMERA_POSITION_WORLD + ab.xyz * (dist * ab.w);
+			doppler_v = doppler_surface(vec3(1.0), T_SOLEIL, ab.w);
+		}
+	}
+	// Halo de l'œil calculé aux coins (il varie lentement à l'échelle d'un rayon de 8 pixels) :
+	// beaucoup moins de calcul par pixel pour la petite carte graphique du PC.
+	voile_v = oeil_voile(normalize(vu - CAMERA_POSITION_WORLD), TIME);
+	vec4 vue = VIEW_MATRIX * vec4(vu, 1.0);
 	profondeur = -vue.z;
 	POSITION = PROJECTION_MATRIX * vue;
 	// Étape 7 : la profondeur est écrite par le fragment (logarithmique) ; ici on met chaque point au
@@ -200,7 +221,7 @@ void fragment() {
 	}
 	// Étape 8 : les lampes du vaisseau (projecteur) éclairent aussi le sol.
 	e += lampes_eclairement(pos_monde, n);
-	vec3 l = albedo * (e + lux_fond) / PI;
+	vec3 l = albedo * (e + lux_fond) / PI * doppler_v;
 	ALBEDO = oeil_vers_ecran(l + voile_v, FRAGCOORD.xy, TIME);
 	DEPTH = 1.0 - clamp(log2(max(profondeur, profondeur_pres) / profondeur_pres) / log2(profondeur_loin / profondeur_pres), 0.0, 1.0);
 }
