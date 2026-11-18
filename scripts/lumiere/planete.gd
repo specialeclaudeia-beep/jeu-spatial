@@ -130,6 +130,15 @@ func posemetre(camera: Camera3D, oeil: PackedFloat64Array, soleil_dir: Vector3, 
 		soleil_angle)
 
 
+## Étape 9 : la carte du ciel vue de l'œil (toutes les directions), tirée des rayons affichés, pour les
+## reflets. largeur × hauteur cases en longitude-latitude, repère d'affichage ; 4 nombres par case
+## (luminance rouge, verte, bleue en cd/m², part couverte par l'astre). soleil_dir : repère d'affichage.
+func carte_ciel(oeil: PackedFloat64Array, soleil_dir: Vector3, eclairement: float, largeur: int, hauteur: int,
+		soleil_angle := 0.004652) -> PackedFloat32Array:
+	var s := rotation_astre.transposed() * soleil_dir
+	return arbre.carte_ciel(oeil, rotation_astre, largeur, hauteur, s, eclairement, occulteur, soleil_angle)
+
+
 ## Part de chaque case (0 à 1) couverte par la planète au dernier posemètre.
 func couverture() -> PackedFloat32Array:
 	return arbre.couverture()

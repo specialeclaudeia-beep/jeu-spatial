@@ -3,6 +3,7 @@
 #include "res://scripts/lumiere/compagnon.gdshaderinc"
 #include "res://scripts/lumiere/lampes.gdshaderinc"
 #include "res://scripts/lumiere/objets.gdshaderinc"
+#include "res://scripts/lumiere/reflets.gdshaderinc"
 
 uniform vec3 albedo_lin = vec3(0.5);            // couleur de la surface (part de lumière renvoyée, linéaire)
 uniform sampler2D tex_albedo : source_color, hint_default_white;
@@ -35,8 +36,18 @@ void fragment() {
 	if (compagnon_eclairement > 0.0) {
 		e += compagnon_couleur * compagnon_eclairement * objets_compagnon_visible * max(dot(n, compagnon_direction), 0.0);
 	}
+	// Étape 9 : la lumière renvoyée par les autres surfaces du cockpit (rebond).
+	e += reflets_rebond_cockpit(p, n);
 	vec3 emis = emission_couleur * texture(tex_emission, UV).rgb * emission_luminance;
-	reste = a * (1.0 - metal) * e / PI + emis + oeil_voile(normalize(p - CAMERA_POSITION_WORLD), TIME);
+	// Étape 9 : reflet de ce qui entoure l'objet (cockpit, planète), flou selon la rugosité. Le Soleil
+	// et la compagne n'y sont pas : leur reflet est calculé dans light() (avec l'ombre).
+	vec3 vv = normalize(CAMERA_POSITION_WORLD - p);
+	float nv = max(dot(n, vv), 1e-4);
+	vec3 f0 = mix(vec3(0.04), a, metal);
+	float rg = clamp(rugosite, 0.03, 1.0);
+	vec3 autour = reflets_part(f0, rg, nv) * reflets_luminance(p, reflect(-vv, n), rg * rg * 1.2,
+		objets_soleil_visible, objets_compagnon_visible, 0.0);
+	reste = a * (1.0 - metal) * e / PI + emis + autour + oeil_voile(normalize(p - CAMERA_POSITION_WORLD), TIME);
 	alb = a;
 	// Godot multiplie la lumière par ALBEDO : on lui donne 1, la vraie couleur est dans notre calcul.
 	ALBEDO = vec3(1.0);

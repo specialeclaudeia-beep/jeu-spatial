@@ -896,50 +896,25 @@ PackedFloat32Array ArbreLumiere::posemetre(const PackedFloat64Array &p_camera, c
 			if (z <= 0) continue;
 			double x = v.dot(dr) / (z * p_tan_h), y = -v.dot(hu) / (z * p_tan_v);
 			if (x <= -1 || x >= 1 || y <= -1 || y >= 1) continue;
-			const int *cc = TABLE.coins[t];
 			Vec3d n;
 			float al[3] = { 0, 0, 0 };
-			for (int q = 0; q < 3; q++) {
-				n = n + Vec3d(m->direction[cc[q]][0], m->direction[cc[q]][1], m->direction[cc[q]][2]) * (1.0 / 3.0);
-				for (int w = 0; w < 3; w++) al[w] += m->albedo[cc[q]][w] / 3.0f;
+			double ln_test = 0;
+			{
+				// Face cachée : test fait avant le calcul de la lumière (le plus cher).
+				const int *cc = TABLE.coins[t];
+				Vec3d nn;
+				for (int q = 0; q < 3; q++) {
+					nn = nn + Vec3d(m->direction[cc[q]][0], m->direction[cc[q]][1], m->direction[cc[q]][2]) * (1.0 / 3.0);
+				}
+				ln_test = nn.length();
+				if (-nn.dot(v) / (ln_test * v.length()) <= 0) continue; // face cachée
 			}
+			double direct = eclairage_rayon(*m, t, c + v, s, avec_occulteur, occ_c, occ_r, p_soleil_angle, n, al);
 			double ln = n.length();
 			double vers_oeil = -n.dot(v) / (ln * v.length());
-			if (vers_oeil <= 0) continue; // face cachée
 			int i = std::min(NX - 1, (int)((x + 1) * 0.5 * NX));
 			int j = std::min(NY - 1, (int)((y + 1) * 0.5 * NY));
-			double cs = n.dot(s) / ln;
-			// Même loi que planete.gdshader : la lumière moyenne d'un cône de petites faces.
-			double cb = std::clamp(2.0 * ln - 1.0, -1.0, 1.0);
-			double sb = std::sqrt(std::max(1.0 - cb * cb, 0.0));
-			double direct = cs > sb ? cs : (cs < -sb ? 0.0 : (cs + sb) * (cs + sb) / (4.0 * sb + 1e-6));
 			double y_al = 0.2126 * al[0] + 0.7152 * al[1] + 0.0722 * al[2];
-			if (direct > 0.0) {
-				// Étape 6 : l'astre lui-même cache l'étoile quand elle est sous l'horizon (côté nuit, même
-				// sur une pente tournée vers elle). Boule au niveau 0 (ou juste sous le point, s'il est plus bas).
-				Vec3d p = c + v;
-				double dp = p.length();
-				double haut = p.dot(s) / dp;
-				if (haut < 0.3) {
-					direct *= part_soleil_visible(p, Vec3d(), std::min(rayon, dp * 0.9999), s, p_soleil_angle);
-				}
-			}
-			if (direct > 0.0) {
-				// Étape 7 : l'ombre du relief proche et des cailloux (horizon des 3 coins du rayon, tel que
-				// la carte graphique le reçoit : codé sur 8 bits).
-				float hz[NB_AZIMUTS] = { 0, 0, 0, 0 };
-				for (int q = 0; q < 3; q++) {
-					for (int w = 0; w < NB_AZIMUTS; w++) {
-						hz[w] += (float)(decode_horizon(octet(code_horizon(m->horizon[cc[q]][w])) / 255.0) / 3.0);
-					}
-				}
-				Vec3d up = (c + v).normalized(), e1, e2;
-				repere_lieu(up, e1, e2);
-				direct *= part_sous_horizon(up, e1, e2, hz, s, p_soleil_angle);
-			}
-			if (avec_occulteur && direct > 0.0) {
-				direct *= part_soleil_visible(c + v, occ_c, occ_r, s, p_soleil_angle);
-			}
 			double l = y_al * p_eclairement * direct / 3.14159265358979323846;
 			double ap = a_rayon * vers_oeil / (z * z);
 			somme[j * NX + i] += l * ap;
@@ -954,6 +929,195 @@ PackedFloat32Array ArbreLumiere::posemetre(const PackedFloat64Array &p_camera, c
 		derniere_couverture.set(k, (float)cov);
 		double moy = aire[k] > 0 ? somme[k] / aire[k] : 0.0;
 		out[k] = (float)(moy * cov + p_fond * (1.0 - cov));
+	}
+	return out;
+}
+
+double ArbreLumiere::eclairage_rayon(const Morceau &m, int t, const Vec3d &p, const Vec3d &s, bool avec_occ,
+		const Vec3d &occ_c, double occ_r, double angle, Vec3d &n, float al[3]) const {
+	const int *cc = TABLE.coins[t];
+	n = Vec3d();
+	al[0] = al[1] = al[2] = 0.0f;
+	for (int q = 0; q < 3; q++) {
+		n = n + Vec3d(m.direction[cc[q]][0], m.direction[cc[q]][1], m.direction[cc[q]][2]) * (1.0 / 3.0);
+		for (int w = 0; w < 3; w++) al[w] += m.albedo[cc[q]][w] / 3.0f;
+	}
+	double ln = n.length();
+	double cs = n.dot(s) / ln;
+	// Même loi que planete.gdshader : la lumière moyenne d'un cône de petites faces.
+	double cb = std::clamp(2.0 * ln - 1.0, -1.0, 1.0);
+	double sb = std::sqrt(std::max(1.0 - cb * cb, 0.0));
+	double direct = cs > sb ? cs : (cs < -sb ? 0.0 : (cs + sb) * (cs + sb) / (4.0 * sb + 1e-6));
+	if (direct > 0.0) {
+		// Étape 6 : l'astre lui-même cache l'étoile quand elle est sous l'horizon (côté nuit, même
+		// sur une pente tournée vers elle). Boule au niveau 0 (ou juste sous le point, s'il est plus bas).
+		double dp = p.length();
+		double haut = p.dot(s) / dp;
+		if (haut < 0.3) {
+			direct *= part_soleil_visible(p, Vec3d(), std::min(rayon, dp * 0.9999), s, angle);
+		}
+	}
+	if (direct > 0.0) {
+		// Étape 7 : l'ombre du relief proche et des cailloux (horizon des 3 coins du rayon, tel que
+		// la carte graphique le reçoit : codé sur 8 bits).
+		float hz[NB_AZIMUTS] = { 0, 0, 0, 0 };
+		for (int q = 0; q < 3; q++) {
+			for (int w = 0; w < NB_AZIMUTS; w++) {
+				hz[w] += (float)(decode_horizon(octet(code_horizon(m.horizon[cc[q]][w])) / 255.0) / 3.0);
+			}
+		}
+		Vec3d up = p.normalized(), e1, e2;
+		repere_lieu(up, e1, e2);
+		direct *= part_sous_horizon(up, e1, e2, hz, s, angle);
+	}
+	if (avec_occ && direct > 0.0) {
+		direct *= part_soleil_visible(p, occ_c, occ_r, s, angle);
+	}
+	return direct;
+}
+
+// Étape 9 : la carte du ciel (voir arbre_lumiere.h).
+PackedFloat32Array ArbreLumiere::carte_ciel(const PackedFloat64Array &p_camera, const Basis &p_rotation, int p_largeur,
+		int p_hauteur, const Vector3 &p_soleil, double p_eclairement, const PackedFloat64Array &p_occulteur,
+		double p_soleil_angle) const {
+	const double PI_ = 3.14159265358979323846;
+	const int W = std::clamp(p_largeur, 4, 512), H = std::clamp(p_hauteur, 2, 256);
+	const bool avec_occulteur = p_occulteur.size() >= 4 && p_occulteur[3] > 0.0;
+	Vec3d occ_c = avec_occulteur ? Vec3d(p_occulteur[0], p_occulteur[1], p_occulteur[2]) : Vec3d();
+	double occ_r = avec_occulteur ? p_occulteur[3] : 0.0;
+	Vec3d c(p_camera[0], p_camera[1], p_camera[2]);
+	Vec3d s = Vec3d(p_soleil.x, p_soleil.y, p_soleil.z).normalized();
+	// Lignes de la rotation (astre → affichage) : d_aff = R d_astre.
+	Vec3d r0(p_rotation[0][0], p_rotation[0][1], p_rotation[0][2]);
+	Vec3d r1(p_rotation[1][0], p_rotation[1][1], p_rotation[1][2]);
+	Vec3d r2(p_rotation[2][0], p_rotation[2][1], p_rotation[2][2]);
+	std::vector<double> somme(W * H * 3, 0.0), aire(W * H, 0.0);
+	// Une carte de quelques milliers de cases n'a pas besoin de tous les rayons : au-delà de ~6 000,
+	// on en prend un sur 2, 4, 8 ou 16 dans chaque morceau (répartis sur tout le morceau), chacun
+	// comptant pour les autres. Coût mesuré : environ 2 ms au pire.
+	int pas = 1;
+	while (pas < 16 && (int)affiches.size() * NB_RAYONS / pas > 6000) pas *= 2;
+	for (const Morceau *m : affiches) {
+		double a_rayon = (double)m->taille_rayon * m->taille_rayon * 0.433 * pas;
+		for (int t = (int)(m->adresse % pas); t < NB_RAYONS; t += pas) {
+			Vec3d v = m->centre + Vec3d(m->centres[t][0], m->centres[t][1], m->centres[t][2]) - c;
+			double dv = v.length();
+			if (dv <= 0) continue;
+			const int *cc = TABLE.coins[t];
+			Vec3d nn;
+			for (int q = 0; q < 3; q++) {
+				nn = nn + Vec3d(m->direction[cc[q]][0], m->direction[cc[q]][1], m->direction[cc[q]][2]);
+			}
+			double vers_oeil = -nn.dot(v) / (nn.length() * dv);
+			if (vers_oeil <= 0) continue; // face cachée
+			Vec3d n;
+			float al[3];
+			double direct = eclairage_rayon(*m, t, c + v, s, avec_occulteur, occ_c, occ_r, p_soleil_angle, n, al);
+			Vec3d d(r0.dot(v) / dv, r1.dot(v) / dv, r2.dot(v) / dv);
+			double u = std::atan2(d.x, -d.z) / (2.0 * PI_) + 0.5;
+			double w = std::acos(std::clamp(d.y, -1.0, 1.0)) / PI_;
+			int i = std::clamp((int)(u * W), 0, W - 1);
+			int j = std::clamp((int)(w * H), 0, H - 1);
+			double ap = a_rayon * vers_oeil / (dv * dv);
+			double k = p_eclairement * direct / PI_ * ap;
+			for (int q = 0; q < 3; q++) somme[(j * W + i) * 3 + q] += al[q] * k;
+			aire[j * W + i] += ap;
+		}
+	}
+	// Part de chaque case couverte par la boule (3 × 3 directions par case), et loi de Lambert de
+	// secours (albédo moyen des rayons affichés).
+	double dc = c.length();
+	double alb_moy[3] = { 0.12, 0.12, 0.12 };
+	{
+		double sa[3] = { 0, 0, 0 }, sp = 0;
+		for (const Morceau *m : affiches) {
+			for (int q = 0; q < 3; q++) sa[q] += m->albedo[0][q];
+			sp += 1.0;
+		}
+		if (sp > 0) for (int q = 0; q < 3; q++) alb_moy[q] = sa[q] / sp;
+	}
+	std::vector<float> cov(W * H, 0.0f);
+	std::vector<double> lam(W * H * 3, 0.0);
+	for (int j = 0; j < H; j++) {
+		for (int i = 0; i < W; i++) {
+			int touche = 0;
+			double sl = 0;
+			for (int b = 0; b < 3; b++) {
+				for (int a = 0; a < 3; a++) {
+					double u = (i + (a + 0.5) / 3.0) / W, w = (j + (b + 0.5) / 3.0) / H;
+					double lon = (u - 0.5) * 2.0 * PI_, th = w * PI_;
+					Vec3d da(std::sin(th) * std::sin(lon), std::cos(th), -std::sin(th) * std::cos(lon));
+					// Affichage → astre : transposée (colonnes de R).
+					Vec3d d(r0.x * da.x + r1.x * da.y + r2.x * da.z, r0.y * da.x + r1.y * da.y + r2.y * da.z,
+							r0.z * da.x + r1.z * da.y + r2.z * da.z);
+					double bb = c.dot(d);
+					double disc = bb * bb - (dc * dc - rayon * rayon);
+					if (disc < 0) continue;
+					double tt = -bb - std::sqrt(disc);
+					if (tt <= 0) continue;
+					touche++;
+					Vec3d p = c + d * tt;
+					double cs = p.dot(s) / p.length();
+					if (cs > 0) {
+						double vis = avec_occulteur ? part_soleil_visible(p, occ_c, occ_r, s, p_soleil_angle) : 1.0;
+						sl += cs * vis;
+					}
+				}
+			}
+			cov[j * W + i] = touche / 9.0f;
+			if (touche > 0) {
+				for (int q = 0; q < 3; q++) lam[(j * W + i) * 3 + q] = alb_moy[q] * p_eclairement * (sl / touche) / PI_;
+			}
+		}
+	}
+	// Moyennes des cases, puis les cases de l'astre sans rayon prennent la moyenne de leurs voisines.
+	std::vector<double> moy(W * H * 3, 0.0);
+	std::vector<char> plein(W * H, 0);
+	for (int k = 0; k < W * H; k++) {
+		if (aire[k] > 0) {
+			for (int q = 0; q < 3; q++) moy[k * 3 + q] = somme[k * 3 + q] / aire[k];
+			plein[k] = 1;
+		}
+	}
+	for (int passe = 0; passe < 6; passe++) {
+		std::vector<char> nouveau = plein;
+		bool reste = false;
+		for (int j = 0; j < H; j++) {
+			for (int i = 0; i < W; i++) {
+				int k = j * W + i;
+				if (plein[k] || cov[k] <= 0) continue;
+				double sv[3] = { 0, 0, 0 };
+				int nb = 0;
+				for (int dj = -1; dj <= 1; dj++) {
+					for (int di = -1; di <= 1; di++) {
+						int jj = j + dj;
+						if (jj < 0 || jj >= H) continue;
+						int ii = (i + di + W) % W;
+						int kk = jj * W + ii;
+						if (!plein[kk]) continue;
+						for (int q = 0; q < 3; q++) sv[q] += moy[kk * 3 + q];
+						nb++;
+					}
+				}
+				if (nb > 0) {
+					for (int q = 0; q < 3; q++) moy[k * 3 + q] = sv[q] / nb;
+					nouveau[k] = 1;
+				} else {
+					reste = true;
+				}
+			}
+		}
+		plein.swap(nouveau);
+		if (!reste) break;
+	}
+	PackedFloat32Array out;
+	out.resize(W * H * 4);
+	for (int k = 0; k < W * H; k++) {
+		for (int q = 0; q < 3; q++) {
+			double l = cov[k] <= 0 ? 0.0 : (plein[k] ? moy[k * 3 + q] : lam[k * 3 + q]);
+			out[k * 4 + q] = (float)l;
+		}
+		out[k * 4 + 3] = cov[k];
 	}
 	return out;
 }
@@ -1154,6 +1318,8 @@ void ArbreLumiere::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("posemetre", "camera", "axes", "tan_h", "tan_v", "soleil", "eclairement", "fond",
 			"occulteur", "soleil_angle"), &ArbreLumiere::posemetre, DEFVAL(PackedFloat64Array()), DEFVAL(0.004652));
 	ClassDB::bind_method(D_METHOD("couverture"), &ArbreLumiere::couverture);
+	ClassDB::bind_method(D_METHOD("carte_ciel", "camera", "rotation", "largeur", "hauteur", "soleil", "eclairement",
+			"occulteur", "soleil_angle"), &ArbreLumiere::carte_ciel, DEFVAL(PackedFloat64Array()), DEFVAL(0.004652));
 	ClassDB::bind_method(D_METHOD("part_visible", "point", "occulteur", "soleil", "soleil_angle"), &ArbreLumiere::part_visible);
 	ClassDB::bind_method(D_METHOD("hauteur_sol", "direction"), &ArbreLumiere::hauteur_sol);
 	ClassDB::bind_method(D_METHOD("nb_morceaux"), &ArbreLumiere::nb_morceaux);

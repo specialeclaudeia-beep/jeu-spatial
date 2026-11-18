@@ -22,6 +22,8 @@ global uniform vec3 soleil_direction_vue;    // direction où l'œil VOIT le Sol
                                               // à très grande vitesse : aberration, étape 6)
 global uniform vec3 oeil_filtre;             // étape 8 : part de la lumière que laisse passer la visière du
                                               // casque, par couleur (1 = pas de visière)
+global uniform vec3 oeil_reflet_visiere;     // étape 9 : voile (cd/m²) renvoyé à l'œil par la face intérieure
+                                              // de la visière (le visage du pilote, très flou)
 
 // Bruit fixe par pixel, entre 0 et 1.
 float oeil_hasard(vec2 p) {
@@ -57,8 +59,9 @@ vec3 oeil_voile(vec3 d, float temps) {
 // Luminance réelle (cd/m², lumière linéaire) → couleur d'écran, comme l'œil la voit.
 // pixel = coordonnées du pixel (pour le tramage), temps = secondes (pour le grain de la nuit).
 vec3 oeil_vers_ecran(vec3 l, vec2 pixel, float temps) {
-	// Étape 8 : toute la lumière traverse la visière avant d'entrer dans l'œil.
-	l = max(l, vec3(0.0)) * oeil_filtre;
+	// Étape 8 : toute la lumière traverse la visière avant d'entrer dans l'œil. Étape 9 : la face
+	// intérieure y ajoute le reflet du visage.
+	l = max(l, vec3(0.0)) * oeil_filtre + oeil_reflet_visiere;
 	// Jour : réponse des cônes (loi de Naka-Rushton), un canal par couleur.
 	vec3 x = l * oeil_gain;
 	vec3 jour = x / (x + 1.0);

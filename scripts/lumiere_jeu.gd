@@ -24,6 +24,7 @@ const EtoileProche = preload("res://scripts/lumiere/etoile_proche.gd")
 const ShaderEtoiles = preload("res://scripts/lumiere/etoiles.gdshader")
 const Objets = preload("res://scripts/lumiere/objets.gd")
 const ChronoBoucle = preload("res://scripts/lumiere/chrono_boucle.gd")
+const Reflets = preload("res://scripts/lumiere/reflets.gd")
 
 const GRAINE := 7                         # la même planète que dans le labo
 const VERS_SOLEIL := Vector3(1.0, 0.25, 0.2)
@@ -64,6 +65,7 @@ var mat_ciel: ShaderMaterial
 var lumiere_soleil: DirectionalLight3D
 var objets = Objets.new()
 var chrono = ChronoBoucle.new()
+var reflets = Reflets.new()
 var temps := 0.0
 
 ## État visible (instruments, tests).
@@ -77,6 +79,10 @@ var visiere := 1                     # 0 sans casque, 1 claire, 2 solaire
 var projecteur := false
 var lampe_cockpit := false
 var _premier := true
+var _e_autre := 0.0                  # lux venus d'ailleurs que du Soleil sur le cockpit (dernier posemètre)
+var _soleil_cache := false           # Soleil caché par la coque, vu de l'œil
+var reflet_visiere := Vector3.ZERO   # étape 9 : voile renvoyé par la visière (cd/m²)
+var ms_reflets := 0.0                # temps de calcul des reflets (ms, dernière image)
 
 
 ## Prépare tout. Faux si la partie C++ manque (le jeu garde alors son ancien affichage).
@@ -131,6 +137,8 @@ func preparer(p_camera: Camera3D, p_rayon: float) -> bool:
 	lumiere_soleil.shadow_bias = 0.03
 	lumiere_soleil.shadow_normal_bias = 1.0
 	add_child(lumiere_soleil)
+
+	reflets.preparer()
 
 	camera.near = CAMERA_PRES
 	camera.far = CAMERA_LOIN
@@ -230,6 +238,7 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 
 	# L'œil : posemètre (planète, ciel, cockpit), puis adaptation.
 	luminance_vue = _poser(rel, s, e, alpha, vis, ec * vis_c, sc, base, oeil_local)
+	_mettre_a_jour_reflets(s, e, alpha, vis, base, oeil_local, filtre)
 	if _premier:
 		oeil.equilibrer(luminance_vue)
 		_premier = false
@@ -313,8 +322,10 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis
 	var a := acos(cos_phase)
 	var e_planete := ALBEDO_PLANETE * e * vis * (2.0 / 3.0) * (sin(a) + (PI - a) * cos_phase) / PI * sb * sb
 	var e_autre := 0.5 * (e_planete + ec_vis) + (0.5 * LAMPE_COCKPIT_INTENSITE / 0.36 if lampe_cockpit else 0.0)
+	_e_autre = e_autre
 	# Le Soleil est-il caché par la coque (vu de l'œil) ? Alors pas de halo ni de disque dans l'œil.
 	var soleil_cache: bool = objets.nb_faces > 0 and not objets.toucher(oeil_local, s_local).is_empty()
+	_soleil_cache = soleil_cache
 	var e_oeil := 0.0
 	if oeil.halo and not soleil_cache:
 		var devant := -camera.global_transform.basis.z
@@ -350,16 +361,38 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis
 	return Oeil.luminance_scene(echantillons, poids, en_plus_disque) * t
 
 
+## Étape 9 : les reflets. Carte du ciel (la planète vue de l'œil, tirée des rayons), sonde du cockpit
+## (rayons lancés sur les formes du vaisseau, quelques cases par image) et voile de la visière.
+func _mettre_a_jour_reflets(s: Vector3, e: float, alpha: float, vis: float, base: Basis, oeil_local: Vector3,
+		filtre: Vector3) -> void:
+	var t0 := Time.get_ticks_usec()
+	Reflets.regler_base(base)
+	reflets.mettre_a_jour_ciel([{"planete": planete, "oeil": pos_oeil, "soleil": s, "eclairement": e, "angle": alpha}])
+	var s_local := base.inverse() * s
+	reflets.mettre_a_jour_cockpit(objets, oeil_local, s_local, e * vis, _e_autre)
+	# Le visage du pilote : Soleil (s'il n'est pas caché par la coque), lumière venue d'ailleurs et
+	# lumière renvoyée par le cockpit, sur une demi-boule tournée vers l'avant.
+	var devant := -camera.global_transform.basis.z
+	var e_visage := 0.5 * _e_autre + 0.5 * PI * reflets.luminance_cockpit()
+	if not _soleil_cache:
+		e_visage += Reflets.eclairement_visage(devant, s, e * vis)
+	reflet_visiere = Reflets.reflet_visiere(visiere, filtre, e_visage)
+	RenderingServer.global_shader_parameter_set("oeil_reflet_visiere", reflet_visiere)
+	# L'œil voit aussi ce voile : il s'y habitue.
+	luminance_vue += 0.2126 * reflet_visiere.x + 0.7152 * reflet_visiere.y + 0.0722 * reflet_visiere.z
+	ms_reflets = (Time.get_ticks_usec() - t0) / 1000.0
+
+
 ## Visière suivante : claire → solaire → sans casque → claire.
 func changer_visiere() -> void:
 	visiere = [1, 2, 0][visiere]
 
 
 func infos() -> String:
-	return "LUMIÈRE       Soleil %s lux sur le vaisseau (%d %% visible)   œil : pupille %.1f mm, nuit %d %%\n              %s   projecteur %s   lampe cockpit %s" % [
+	return "LUMIÈRE       Soleil %s lux sur le vaisseau (%d %% visible)   œil : pupille %.1f mm, nuit %d %%\n              %s (reflet %s cd/m²)   projecteur %s   lampe cockpit %s   reflets %.1f ms" % [
 		_nombre(eclairement_vaisseau), roundi(part_visible * ombre_relief * 100.0), oeil.pupille_mm,
-		roundi(oeil.nuit() * 100.0), NOMS_VISIERES[visiere], "allumé" if projecteur else "éteint",
-		"allumée" if lampe_cockpit else "éteinte"]
+		roundi(oeil.nuit() * 100.0), NOMS_VISIERES[visiere], _nombre(reflet_visiere.y),
+		"allumé" if projecteur else "éteint", "allumée" if lampe_cockpit else "éteinte", ms_reflets]
 
 
 static func _nombre(x: float) -> String:

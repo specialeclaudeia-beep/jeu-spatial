@@ -2,7 +2,7 @@
 
 Ce dossier est un petit projet Godot à part, rangé dans le dépôt du jeu
 (`specialeclaudeia-beep/jeu-spatial`, dossier `labo-lumiere/`). On y construit le
-« système de décomposition fractale de la lumière » de Gwenaël (étapes 2 à 7 du programme (étape 7 faite)),
+« système de décomposition fractale de la lumière » de Gwenaël (étapes 2 à 9 du programme, toutes faites),
 avant de le brancher dans le jeu à l'étape 8.
 
 Référence unique : le programme du système de lumière, https://claude.ai/artifact/XLupfWSmbU7wjncyd5Vkpa
@@ -208,6 +208,37 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
 - Coût mesuré dans le cloud : environ 8 ms par image pour la lumière (planète 1-7 ms, posemètre 2-5 ms).
 - Pas encore : ombre du vaisseau sur le sol, ombres de la planète et de la compagne dans le cockpit,
   lune absente du jeu, planète qui ne tourne pas, rebonds.
+
+## Reflets (étape 9)
+- `scripts/lumiere/reflets.gd` + `reflets.gdshaderinc`. Trois sources, toutes tirées des rayons :
+  1. **Carte du ciel** `ArbreLumiere.carte_ciel(camera, rotation, w, h, soleil, e, occulteur, angle)` (C++) :
+     tous les rayons affichés rangés par direction vue de l'œil (longitude-latitude 64 × 32, repère
+     d'affichage, u = atan2(x, −z)/2π + 0,5, v = acos(y)/π), rgb = luminance, a = part couverte (boule,
+     3 × 3 directions par case) ; cases vides de l'astre = moyenne des voisines, sinon Lambert. Au-delà
+     de 6 000 rayons, un sur 2…16 par morceau. Lumière d'un rayon = `eclairage_rayon` (commun avec le
+     posemètre, refactorisé sans changer les résultats). Refaite une image sur 6 (`CIEL_TOUTES_LES`),
+     ≈ 1-2,5 ms. `reflets.mettre_a_jour_ciel([astres du plus proche au plus lointain])` : le plus proche
+     cache l'autre. Texture prémultipliée RGBAH avec mipmaps (flou des surfaces rugueuses).
+  2. **Sonde du cockpit** (32 × 16, repère du vaisseau, depuis l'œil) : `objets.luminance_vue_couleur`
+     (rayons PhysicsServer3D, ombre du Soleil comprise), 48 cases par image (tout refait en 11 images,
+     0,3 ms). Lue avec correction de parallaxe sur une boule de 0,9 m (`reflets_rayon_sonde`).
+  3. **Visière** : global `oeil_reflet_visiere` ajouté APRÈS le filtre dans `oeil_vers_ecran` : voile =
+     reflet de la face intérieure (claire 9,8 %, or ≈ 55/46/28 %) × visage (albédo moyen 0,2) éclairé
+     à travers la visière ((1 + devant·s)/4 du Soleil si la coque ne le cache pas + la moitié du reste).
+- **Verrière** (`vitre.gdshader`) : lame d'acrylique n = 1,49, R1 de Schlick, renvoyé 2R/(1+R), transmis
+  (1−R)/(1+R). Elle lit l'écran derrière elle (`hint_screen_texture`), le ramène en luminance
+  (`reflets_ecran_vers_luminance`, inverse de la vision de jour), applique la transmission, ajoute le reflet,
+  et renvoie `fond + œil(après) − œil(avant)` (les erreurs d'inversion s'annulent). Attention : ne pas
+  nommer un uniform `ecran` (conflit avec la variable de `oeil_vers_ecran`).
+- **Objets** (`objet_commun.gdshaderinc`) : reflet de l'entourage (cockpit + planète, sans les disques :
+  le Soleil est déjà dans `light()`) × approximation de Karis 2014 (Fresnel moyenné GGX), flou = mipmap
+  selon la rugosité ; **rebond** dans le cockpit = π × sonde très floue vue selon la normale (nul au-delà de 4 m).
+- Globals ajoutés (labo ET jeu) : `oeil_reflet_visiere`, `reflets_ciel`, `reflets_cockpit` (sampler2D),
+  `reflets_base` (mat3), `reflets_rayon_sonde`, `reflets_actifs`.
+- Pas encore : reflets des étoiles une à une (trop faibles : Sirius reflété ≈ magnitude 2), image fantôme du
+  Soleil dans la visière (reflet du disque par la face intérieure), éblouissement (halo) causé par le Soleil
+  reflété dans la verrière, sonde en vue extérieure (elle se refait depuis la caméra, 11 images de retard),
+  rebonds sur la planète (Q38 : ombres du sol encore noires), lune absente du jeu.
 
 ## Organisation
 | Chemin | Contenu |
