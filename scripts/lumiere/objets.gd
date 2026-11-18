@@ -111,6 +111,7 @@ static func _transformation(n: Node3D, reference: Node3D) -> Transform3D:
 
 
 func _ranger_faces(mesh: Mesh, surface: int, t: Transform3D, m: BaseMaterial3D, faces: PackedVector3Array) -> void:
+	_emissions_reglees.clear()   # nouvelles faces : regler_emission doit tout refaire
 	var tableaux := mesh.surface_get_arrays(surface)
 	var sommets: PackedVector3Array = tableaux[Mesh.ARRAY_VERTEX]
 	var indices: PackedInt32Array = tableaux[Mesh.ARRAY_INDEX] if tableaux[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
@@ -168,7 +169,14 @@ static func boite(mi: MeshInstance3D, reference: Node3D) -> AABB:
 
 
 ## Change la luminance émise par une matière (nom du modèle) : lampe allumée, tuyère qui pousse…
+var _emissions_reglees := {}   # dernière luminance donnée à chaque matière (regler_emission)
+
+
 func regler_emission(nom: String, luminance: float) -> void:
+	# Appelée à chaque image : on ne parcourt les faces que si la valeur change (sinon ~1 ms perdue).
+	if _emissions_reglees.get(nom, -1.0) == luminance:
+		return
+	_emissions_reglees[nom] = luminance
 	for m in par_nom.get(nom, []):
 		(m as ShaderMaterial).set_shader_parameter("emission_luminance", luminance)
 	for f in nb_faces:

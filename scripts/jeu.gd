@@ -183,14 +183,21 @@ func _mesurer(delta: float) -> void:
 	_mesure.somme += delta
 	_mesure.pire = maxf(_mesure.pire, delta)
 	_mesure.lumiere += temps_lumiere_ms
+	if avec_lumiere:
+		for k in lumiere.ms_parties:
+			_mesure.parties[k] = _mesure.parties.get(k, 0.0) + lumiere.ms_parties[k]
 	if _mesure.t >= 13.0:
 		var nom: String = ["vue cockpit", "vue extérieure"][phase]
 		var ligne := "MESURE %s : %.0f images/s en moyenne, pire image %.1f ms, lumière %.1f ms par image" % [
 			nom, _mesure.n / _mesure.somme, _mesure.pire * 1000.0, _mesure.lumiere / _mesure.n]
+		var detail := PackedStringArray()
+		for k in _mesure.parties:
+			detail.append("%s %.1f" % [k, _mesure.parties[k] / _mesure.n])
+		ligne += "\n   détail (ms) : " + ", ".join(detail)
 		print(ligne)
 		_mesure.texte += ligne + "\n"
 		if phase == 0:
-			_mesure.merge({"phase": 1, "t": 0.0, "n": 0, "somme": 0.0, "pire": 0.0, "lumiere": 0.0}, true)
+			_mesure.merge({"phase": 1, "t": 0.0, "n": 0, "somme": 0.0, "pire": 0.0, "lumiere": 0.0, "parties": {}}, true)
 			vue_interieure = false
 			_appliquer_vue()
 		else:
@@ -203,7 +210,7 @@ func _mesurer(delta: float) -> void:
 func _ready() -> void:
 	if "--mesure" in OS.get_cmdline_user_args():
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
-		_mesure = {"phase": 0, "t": 0.0, "n": 0, "somme": 0.0, "pire": 0.0, "lumiere": 0.0, "texte": ""}
+		_mesure = {"phase": 0, "t": 0.0, "n": 0, "somme": 0.0, "pire": 0.0, "lumiere": 0.0, "parties": {}, "texte": ""}
 		call_deferred("_debut_mesure")
 	commandes = Commandes.new()
 	commandes.charger()      # réglages de la dernière partie (sinon : disposition par défaut)
