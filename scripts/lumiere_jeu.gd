@@ -28,6 +28,7 @@ const Objets = preload("res://scripts/lumiere/objets.gd")
 const ChronoBoucle = preload("res://scripts/lumiere/chrono_boucle.gd")
 const Reflets = preload("res://scripts/lumiere/reflets.gd")
 const Orbite = preload("res://scripts/lumiere/orbite.gd")
+const Lentille = preload("res://scripts/physique/lentille.gd")
 
 const GRAINE := 7                         # la même planète que dans le labo
 const VERS_SOLEIL := Vector3(1.0, 0.25, 0.2)
@@ -73,6 +74,13 @@ var compagne = EtoileProche.new()
 var oeil = Oeil.new()
 var etoiles = Etoiles.new()
 var noeud_etoiles: MultiMeshInstance3D
+## Einstein B : lumière courbée par un trou noir. Le 2e nœud d'étoiles dessine les images « de l'autre
+## côté » (mêmes étoiles, même MultiMesh) ; il n'est visible que près d'un trou noir.
+var noeud_etoiles_2: MultiMeshInstance3D
+var lentille = Lentille.new()
+var lentille_active := false
+var lentille_autorisee := true       # faux : la lumière va tout droit (pour comparer)
+var lentille_ms := 0.0
 var mat_ciel: ShaderMaterial
 var lumiere_soleil: DirectionalLight3D
 var objets = Objets.new()
@@ -163,6 +171,16 @@ func preparer(p_camera: Camera3D, p_rayon: float, gm_planete := 0.0) -> bool:
 	if etoiles.charger():
 		noeud_etoiles = etoiles.creer_noeud(ShaderEtoiles, table)
 		add_child(noeud_etoiles)
+		noeud_etoiles_2 = MultiMeshInstance3D.new()
+		noeud_etoiles_2.name = "Etoiles_images_secondaires"
+		noeud_etoiles_2.multimesh = noeud_etoiles.multimesh
+		noeud_etoiles_2.custom_aabb = noeud_etoiles.custom_aabb
+		noeud_etoiles_2.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var m2 := (noeud_etoiles.material_override as ShaderMaterial).duplicate() as ShaderMaterial
+		m2.set_shader_parameter("image_secondaire", true)
+		noeud_etoiles_2.material_override = m2
+		noeud_etoiles_2.visible = false
+		add_child(noeud_etoiles_2)
 
 	# La seule lumière de Godot : le Soleil, pour les ombres du vaisseau sur lui-même ET sur le sol
 	# (planete.gdshader). Son intensité ne sert pas (objet.gdshader et planete.gdshader calculent la vraie
@@ -335,9 +353,10 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	var vu: Array = Etoiles.aberration(s, beta)
 	rs.global_shader_parameter_set("soleil_direction_vue", vu[0])
 	if noeud_etoiles:
-		var m := noeud_etoiles.material_override as ShaderMaterial
-		m.set_shader_parameter("halo", 1.0 if oeil.halo else 0.0)
-		m.set_shader_parameter("distance_dessin", sqrt(camera.near * camera.far))
+		for nd in [noeud_etoiles, noeud_etoiles_2]:
+			var m := nd.material_override as ShaderMaterial
+			m.set_shader_parameter("halo", 1.0 if oeil.halo else 0.0)
+			m.set_shader_parameter("distance_dessin", sqrt(camera.near * camera.far))
 
 	# La lumière de Godot suit le Soleil (seulement pour l'ombre).
 	lumiere_soleil.basis = Basis.looking_at(-s, Vector3.UP if absf(s.y) < 0.99 else Vector3.RIGHT)
@@ -533,6 +552,29 @@ func visiere_portee() -> int:
 
 func changer_visiere() -> void:
 	visiere = [1, 2, 0][visiere]
+
+
+## Einstein B : trou noir dans la direction dir (repère du monde, longueur 1), d'horizon rs (m), vu
+## depuis la distance r_o (rayon de Schwarzschild, m). rs = 0 : pas de trou noir, la lumière va droit.
+func regler_lentille(dir: Vector3, rs: float, r_o: float) -> void:
+	lentille_active = lentille_autorisee and rs > 0.0 and r_o > rs
+	var mats := [mat_ciel]
+	if noeud_etoiles:
+		mats.append(noeud_etoiles.material_override)
+		mats.append(noeud_etoiles_2.material_override)
+		noeud_etoiles_2.visible = lentille_active
+	if not lentille_active:
+		for m in mats:
+			(m as ShaderMaterial).set_shader_parameter("lentille", Vector4(0.0, 0.0, -1.0, 0.0))
+		return
+	var t0 := Time.get_ticks_usec()
+	if lentille.calculer(r_o, rs):
+		lentille_ms = (Time.get_ticks_usec() - t0) / 1000.0
+	for m in mats:
+		var sm := m as ShaderMaterial
+		sm.set_shader_parameter("lentille", Vector4(dir.x, dir.y, dir.z, 1.0))
+		sm.set_shader_parameter("lentille_ombre", lentille.ombre)
+		sm.set_shader_parameter("lentille_table", lentille.table)
 
 
 func infos() -> String:

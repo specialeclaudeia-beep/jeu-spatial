@@ -11,9 +11,11 @@ render_mode unshaded, blend_add, depth_draw_never, cull_disabled, skip_vertex_tr
 
 #include "res://scripts/lumiere/oeil.gdshaderinc"
 #include "res://scripts/lumiere/etoiles.gdshaderinc"
+#include "res://scripts/lumiere/lentille.gdshaderinc"
 
 uniform float halo = 1.0;              // 1 = halo dans l'œil (touche H du labo), 0 = sans
 uniform float distance_dessin = 1.0e5; // m : entre le plan proche et le plan lointain de la caméra
+uniform bool image_secondaire = false; // Einstein B : ce nœud dessine la 2e image (de l'autre côté du trou noir)
 const float TACHE = 0.6;               // pixels : taille de la tache d'une étoile
 
 varying vec3 lumiere_v;                // lux × couleur
@@ -24,6 +26,11 @@ void vertex() {
 	vec3 n = normalize(MODEL_MATRIX[3].xyz);
 	float t = INSTANCE_CUSTOM.y * 10000.0;
 	float e = pow(10.0, INSTANCE_CUSTOM.x);
+	// Einstein B : où le trou noir montre cette étoile, et combien plus (ou moins) brillante
+	vec4 li = lentille_image(n, image_secondaire);
+	vec3 n_source = n;   // le fond du ciel derrière l'image vient, lui aussi, de là
+	n = li.xyz;
+	e *= li.w;
 	vec4 repos = corps_noir_lire(t);
 	vec3 couleur = repos.rgb;
 	vec4 ab = aberration(n, oeil_vitesse);
@@ -41,13 +48,13 @@ void vertex() {
 	// Taille du carré : la tache, plus le halo des étoiles brillantes (jusqu'où il dépasse 1e-5 cd/m²).
 	float r_halo = halo > 0.5 ? pow(1.0e6 * e, 1.0 / 3.0) / pix_deg : 0.0;
 	float rayon = clamp(r_halo, 2.5, 24.0);
-	fond_v = vec3(fond_galaxie(n)) + oeil_voile(dir, TIME);
+	fond_v = vec3(fond_galaxie(n_source)) + oeil_voile(dir, TIME);
 	vec4 vue = VIEW_MATRIX * vec4(dir * distance_dessin, 1.0);
 	vec4 clip = PROJECTION_MATRIX * vue;
 	px_v = VERTEX.xy * rayon;
 	clip.xy += VERTEX.xy * rayon * 2.0 / VIEWPORT_SIZE * clip.w;
 	POSITION = clip;
-	if (pic * oeil_gain < 2e-4 || vue.z > 0.0) {
+	if (pic * oeil_gain < 2e-4 || vue.z > 0.0 || li.w <= 0.0) {
 		POSITION = vec4(2.0, 2.0, 2.0, 1.0);   // hors de l'écran
 	}
 }

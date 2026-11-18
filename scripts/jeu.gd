@@ -16,6 +16,7 @@ const Cockpit = preload("res://scripts/cockpit.gd")
 const EcransCockpit = preload("res://scripts/ecrans_cockpit.gd")
 const Droide = preload("res://scripts/droide.gd")
 const Reperes = preload("res://scripts/physique/reperes.gd")
+const Toile = preload("res://scripts/einstein/toile.gd")
 
 # =====================================================================
 # CONSTANTES
@@ -64,6 +65,10 @@ var vaisseau
 var gaz := 0.0
 var stabilisateur := false
 var reperes = Reperes.new()          # Einstein A3 : un repère par système d'étoile
+var toile = null                     # Einstein B : la « toile de l'espace » (touche Y)
+## Einstein B : distance (centre du trou noir) du saut d'essai vers Gaia BH1 : 50 000 km, une orbite
+## d'une minute. L'ombre y fait 0,08° (5 pixels) et les étoiles derrière lui bougent de façon visible.
+const DISTANCE_TROU_NOIR := 5.0e7
 var ordinateur = PiloteAuto.new()    # ordinateur de bord (pilote automatique)
 var droide = null                    # droïde R-7 (petite IA, ordres calmes) : droide.gd
 var modele_droide: Node = null
@@ -202,6 +207,8 @@ func _brancher_lumiere() -> void:
 		return
 	lumiere.ajouter_objets(exterieur, pilote)
 	lumiere.ajouter_objets(cockpit, pilote)
+	toile = Toile.new()
+	lumiere.add_child(toile)
 	_brillances_dans_lumiere()
 	# La coque passe au-dessus du cockpit, sous la verrière : elle ne doit pas lui faire d'ombre.
 	var vitre := cockpit.find_child("Cockpit_verriere", true, false) as MeshInstance3D
@@ -666,6 +673,7 @@ func _ecrire_aide() -> void:
 		+ "%s : ailes   %s : train d'atterrissage   %s : vol vertical   %s : vue cockpit / extérieure\n" % [c.resume("ailes"), c.resume("train"), c.resume("vol_vertical"), c.resume("vue")]
 		+ "Tourner la tête (ou la caméra) : %s   %s : regarder droit devant   %s (maintenir) : zoom\n" % [_aide_tete(), c.resume("regard_centre"), c.resume("zoom")]
 		+ "%s : projecteur   %s : casque et visière   %s : tête qui bouge avec les G\n" % [c.resume("phares"), c.resume("visiere"), c.resume("tete_g")]
+		+ "Einstein : %s toile de l'espace (courbure)   %s saut d'essai vers le trou noir Gaia BH1\n" % [c.resume("toile"), c.resume("trou_noir")]
 		+ "Dans le cockpit, on peut aussi cliquer sur les boutons et les interrupteurs\n"
 		+ "Entrée : parler au droïde R-7 (ordres calmes : train, ailes, pilote auto, questions)\n"
 		+ "%s : configurer les commandes (clavier et manette)" % c.resume("ecran_touches"))
@@ -738,6 +746,13 @@ func _lire_boutons() -> void:
 	if _appui("pause"): en_pause = not en_pause
 	if _appui("tete_g"):
 		tete_g = not tete_g
+	if toile != null and _appui("toile"):
+		toile.visible = not toile.visible
+	if _appui("trou_noir"):
+		ordinateur.activer(PiloteAuto.AUCUN, vaisseau)
+		gaz = 0.0
+		acc_temps = 1
+		reperes.aller_trou_noir(vaisseau, DISTANCE_TROU_NOIR)
 	if avec_lumiere and _appui("phares"):
 		lumiere.projecteur = not lumiere.projecteur
 	if avec_lumiere and _appui("visiere"):
@@ -957,6 +972,7 @@ func _placer_lumiere(delta: float) -> void:
 		vaisseau.pz + float(decalage.z)])
 	# Einstein A3 : la lumière compte depuis la maison (la planète, sa lune, le Soleil y sont). Loin
 	# d'elle, l'œil y est placé à quelques mètres près : seules des étoiles lointaines en dépendent.
+	var oeil_sys := oeil64.duplicate()
 	var ev: Array = reperes.vers_maison(reperes.courant, vaisseau.temps_univers, oeil64)
 	var vm := reperes.vitesse_maison(vaisseau)
 	oeil64 = ev[1]
@@ -970,7 +986,24 @@ func _placer_lumiere(delta: float) -> void:
 	lumiere.temps_astres = ev[0]
 	lumiere.mettre_a_jour(delta, oeil64, Vector3(vm[0], vm[1], vm[2]), pilote.basis,
 		oeil_local, gaz_moteurs)
+	# Einstein B : lumière courbée près d'un trou noir, et la toile de l'espace
+	reperes.regler_lentille(lumiere, oeil_sys)
+	if toile != null and toile.visible:
+		var l := Vector3(vaisseau.py * vaisseau.vz - vaisseau.pz * vaisseau.vy, vaisseau.pz * vaisseau.vx - vaisseau.px * vaisseau.vz,
+			vaisseau.px * vaisseau.vy - vaisseau.py * vaisseau.vx)
+		if l.length() < 1e-6 * vaisseau.distance_centre() * maxf(vaisseau.vitesse(), 1e-3) or l.length() == 0.0:
+			l = Vector3.UP
+		toile.mettre_a_jour(Vector3(-oeil_sys[0], -oeil_sys[1], -oeil_sys[2]), PackedFloat64Array([vaisseau.px, vaisseau.py, vaisseau.pz]),
+			vaisseau.gm, _rayon_astre_principal(), l)
 	temps_lumiere_ms = lerpf(temps_lumiere_ms, (Time.get_ticks_usec() - t0) / 1000.0, 0.05)
+## Rayon de l'astre au centre du système (0 pour un trou noir : toute sa masse est en un point).
+func _rayon_astre_principal() -> float:
+	if reperes.a_la_maison():
+		return vaisseau.rayon_planete
+	var e0: Dictionary = reperes.systemes[reperes.courant]["etoiles"][0]
+	return 0.0 if e0.get("trou_noir", false) else float(e0["rayon"])
+
+
 ## Les pièces du cockpit suivent les commandes, et les écrans affichent l'état du vol.
 func _mettre_a_jour_cockpit(delta: float) -> void:
 	pieces_cockpit.mettre_a_jour({
@@ -1196,6 +1229,7 @@ func _mettre_a_jour_hud() -> void:
 	lignes.append("RELATIVITÉ    %s c   γ = %s   rapidité %.4f" % [_fraction_c(vaisseau.beta()), _gamma_txt(vaisseau.gamma()), vaisseau.rapidite()])
 	lignes.append("HORLOGES      pilote %s   univers %s   (le pilote a %s de moins)" % [_duree(vaisseau.temps_pilote), _duree(vaisseau.temps_univers), _duree_courte(vaisseau.temps_univers - vaisseau.temps_pilote)])
 	lignes.append(_ligne_repere())
+	lignes.append(_ligne_einstein())
 	lignes.append("ALTITUDE      %s" % _distance(vaisseau.altitude()))
 	lignes.append("ORBITE        %s" % orbite_txt)
 	lignes.append("RESSENTI      %.2f g" % (vaisseau.acceleration_ressentie.length() / VaisseauPhysique.G0))
@@ -1217,7 +1251,9 @@ func _mettre_a_jour_hud() -> void:
 		lignes.append(lumiere.infos())
 		lignes.append("TÊTE          %s (déplacement %.1f cm)      calcul de la lumière %.1f ms par image" % ["bouge avec les G" if tete_g else "fixe", tete_g_pos.length() * 100.0, temps_lumiere_ms])
 	hud.text = "\n".join(lignes)
-	if vaisseau.ecrase:
+	if vaisseau.avale:
+		message.text = "TOMBÉ DANS LE TROU NOIR\n(l'horizon est franchi : rien n'en ressort, pas même la lumière)\nR pour recommencer"
+	elif vaisseau.ecrase:
 		message.text = "ÉCRASÉ (impact à %.0f m/s)\nR pour recommencer" % vaisseau.vitesse_impact
 	elif vaisseau.au_sol:
 		message.text = "Posé (impact à %.1f m/s)" % vaisseau.vitesse_impact
@@ -1233,6 +1269,32 @@ func _ligne_repere() -> String:
 	if not reperes.a_la_maison():
 		txt += "   heure de la maison %s   (vitesse vue du Soleil %s)" % [_duree(t_m), _vitesse_txt(_norme(reperes.vitesse_maison(vaisseau)))]
 	return txt
+
+
+## Einstein B : de combien le temps ralentit ici (gravité seule), la marée, la toile, le trou noir.
+func _ligne_einstein() -> String:
+	var n: float = vaisseau.rythme_gravite()
+	var ralenti := 1.0 - n
+	var txt := "EINSTEIN      temps ici : "
+	if ralenti < 0.01:
+		txt += "%s par jour de moins que loin de tout" % _duree_courte(ralenti * 86400.0)
+	else:
+		txt += "%s fois plus lent que loin de tout" % _nombre(1.0 / maxf(n, 1e-9), 3 if n > 0.01 else 0)
+	txt += "   marée %s m/s² par mètre" % _petit(vaisseau.maree())
+	if toile != null and toile.visible:
+		txt += "   toile : courbure %s" % ("à sa vraie grandeur" if toile.exageration <= 1.0 else "exagérée x%s" % _nombre(toile.exageration))
+	if lumiere != null and lumiere.lentille_active:
+		txt += "\n              trou noir : ombre de %s° vue d'ici (lumière courbée, table %.1f ms)" % [_petit(rad_to_deg(lumiere.lentille.ombre)), lumiere.lentille_ms]
+	return txt
+
+
+static func _petit(x: float) -> String:
+	if x == 0.0:
+		return "0"
+	if absf(x) >= 0.01 and absf(x) < 100000.0:
+		return ("%.3f" % x) if absf(x) < 10.0 else (("%.1f" % x) if absf(x) < 1000.0 else ("%.0f" % x))
+	var e := floori(log(absf(x)) / log(10.0))
+	return "%.2f·10^%d" % [x / pow(10.0, e), e]
 
 
 static func _norme(p: PackedFloat64Array) -> float:
