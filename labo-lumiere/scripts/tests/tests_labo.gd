@@ -127,6 +127,10 @@ func _lancer() -> void:
 	# Suite du programme : rebonds de la lumière sur le sol (Q38).
 	_test_rebonds()
 	_test_light_sans_double_srgb()
+	# Einstein A2 : planète et lune vues à grande vitesse.
+	await _test_champ_repos()
+	await _test_planete_vitesse()
+	await _test_image_planete_vitesse()
 
 
 func _test_reglages() -> void:
@@ -1399,3 +1403,135 @@ func _test_light_sans_double_srgb() -> void:
 		pire = maxf(pire, absf(godot - e))
 	_resultat(fautifs.is_empty() and pire < 1e-5, "Lumière dans light() : pas de double conversion sRGB",
 		"programmes fautifs : %s ; écart après la conversion de Godot %.7f" % [", ".join(fautifs) if fautifs.size() else "aucun", pire])
+# ---------------------------------------------------------------------------------------------
+# Einstein A2 : planète et lune vues à grande vitesse (aberration, Doppler, éclat vers l'avant)
+# ---------------------------------------------------------------------------------------------
+
+## Le champ « au repos » donné à la partie C++ : le même que la caméra sans vitesse ; à 0,9 c, il
+## contient bien les directions d'où vient la lumière des bords de l'écran.
+func _test_champ_repos() -> void:
+	var labo: Node = load("res://scenes/labo.tscn").instantiate()
+	add_child(labo)
+	await get_tree().process_frame
+	labo.set_process(false)
+	labo.aller_a(1)
+	labo._process(0.05)
+	var pl = labo.planete
+	var cam: Camera3D = labo.camera
+	var vc := PackedFloat64Array([-labo.pos_oeil[0], -labo.pos_oeil[1], -labo.pos_oeil[2]])
+	pl.vitesse_oeil = Vector3.ZERO
+	var c0: Array = pl.champ_repos(cam, vc)
+	var taille := cam.get_viewport().get_visible_rect().size
+	var tv := tan(deg_to_rad(cam.fov) * 0.5)
+	var ok0: bool = is_equal_approx(c0[2], tv) and is_equal_approx(c0[3], taille.y) and pl.doppler_centre == 1.0
+	var b := cam.global_transform.basis
+	var detail := ""
+	var ok := ok0
+	for vitesse in [b.x * 0.9, -b.z * 0.9, b.z * 0.9]:
+		pl.vitesse_oeil = vitesse
+		var c: Array = pl.champ_repos(cam, vc)
+		var ax: PackedFloat32Array = c[0]
+		var devant := Vector3(ax[0], ax[1], ax[2]).normalized()
+		var droite := Vector3(ax[3], ax[4], ax[5]).normalized()
+		var haut := Vector3(ax[6], ax[7], ax[8]).normalized()
+		var tn: float = c[1]
+		# Chaque coin et le centre de l'écran, ramenés « au repos », doivent passer le test des 4 bords
+		# de la partie C++ (avec 1 % de marge).
+		var dedans := 0
+		var vers := Vector3(vc[0], vc[1], vc[2]).normalized()
+		# Champ trop large (> 80°) : seule la moitié du ciel tournée vers la planète est gardée (on ne voit
+		# jamais plus d'une planète de l'extérieur).
+		var moitie := devant.dot(droite) > 0.999 and devant.dot(haut) > 0.999
+		if moitie:
+			dedans = 5 if devant.dot(vers) > 0.999 else 0
+		for d in ([] if moitie else  [Vector3(-1, -1, 0), Vector3(1, -1, 0), Vector3(-1, 1, 0), Vector3(1, 1, 0), Vector3.ZERO]):
+			var vue := (b * Vector3(d.x * tv * taille.x / taille.y, d.y * tv, -1.0)).normalized()
+			var repos: Vector3 = Etoiles.aberration(vue, -vitesse)[0]
+			var bon := true
+			for n in [devant * tn - droite, devant * tn + droite, devant * tn - haut, devant * tn + haut]:
+				if (n as Vector3).normalized().dot(repos) < -0.01:
+					bon = false
+			if bon:
+				dedans += 1
+		var d_attendu: float = (1.0 + (vitesse as Vector3).dot(vers)) / sqrt(1.0 - 0.81)
+		ok = ok and dedans == 5 and absf(pl.doppler_centre - d_attendu) < 1e-4 and c[3] > 0.0
+		detail += "%d/5 dans le champ%s, D = %.3f ; " % [dedans, " (moitié du ciel)" if moitie else "", pl.doppler_centre]
+	pl.vitesse_oeil = Vector3.ZERO
+	labo.queue_free()
+	_resultat(ok, "Grande vitesse : champ de vision « au repos » pour la partie C++",
+		("sans vitesse : champ de la caméra (%s) ; 0,9 c à droite, devant, derrière : " % ("oui" if ok0 else "NON")) + detail)
+
+
+## À 0,5 c vers la planète, l'œil reçoit plus de lumière (chaque point brille D⁴ fois plus, mais la planète
+## paraît D² fois plus petite : en tout ≈ D², moins l'œil moins sensible au bleu) ; en s'éloignant, bien moins. Elle reste dessinée (des milliers de rayons) dans les deux cas.
+func _test_planete_vitesse() -> void:
+	var labo: Node = load("res://scenes/labo.tscn").instantiate()
+	add_child(labo)
+	labo.compagne.allumee = false
+	await get_tree().process_frame
+	labo.set_process(false)
+	var mesures := []
+	var rayons := []
+	for sens in [0.0, 1.0, -1.0]:
+		labo.aller_a(1)
+		labo.vitesse_essai = 0.5 * absf(sens)
+		labo.direction_essai = -labo.camera.global_transform.basis.z * (sens if sens != 0.0 else 1.0)
+		for i in 40:
+			labo._process(0.05)
+		mesures.append(labo.luminance_vue)
+		rayons.append(labo.planete.arbre.nb_rayons())
+	labo.queue_free()
+	var repos: float = mesures[0]
+	var vers: float = mesures[1]
+	var loin: float = mesures[2]
+	var ok: bool = vers > repos * 1.1 and loin < repos / 4.0 and rayons.min() > 1000
+	_resultat(ok, "Grande vitesse : planète plus brillante en y allant, plus sombre en s'éloignant",
+		"au repos %.1f cd/m², 0,5 c vers elle %.1f, 0,5 c en s'éloignant %.2f ; rayons %s" % [repos, vers, loin, str(rayons)])
+
+
+## Image : à 0,6 c vers la droite de l'écran, la planète est vue décalée vers la droite (l'aberration
+## penche la lumière vers l'avant du mouvement), plus bleue que rouge comparé au repos.
+func _test_image_planete_vitesse() -> void:
+	if DisplayServer.get_name() == "headless":
+		_resultat(true, "Image : planète déplacée et teintée à grande vitesse", "sauté : pas d'écran ici (il passe sur le PC et dans le cloud avec écran virtuel)")
+		return
+	var labo: Node = load("res://scenes/labo.tscn").instantiate()
+	add_child(labo)
+	labo.compagne.allumee = false
+	texte.visible = false
+	fond.visible = false
+	labo.compteur.visible = false
+	await get_tree().process_frame
+	var centres := []
+	var bleus := []
+	for v in [0.0, 0.6]:
+		labo.aller_a(1)
+		labo.vitesse_essai = v
+		labo.direction_essai = labo.camera.global_transform.basis.x
+		for i in 40:
+			await get_tree().process_frame
+		labo.oeil.equilibrer(labo.luminance_vue)
+		for i in 4:
+			await get_tree().process_frame
+		await RenderingServer.frame_post_draw
+		var img := get_viewport().get_texture().get_image()
+		var sx := 0.0
+		var n := 0.0
+		var r := 0.0
+		var bl := 0.0
+		for y in range(0, img.get_height(), 8):
+			for x in range(0, img.get_width(), 8):
+				var c := img.get_pixel(x, y)
+				if c.get_luminance() > 0.15:
+					sx += x
+					n += 1.0
+					r += c.r
+					bl += c.b
+		centres.append(sx / maxf(n, 1.0))
+		bleus.append(bl / maxf(r, 1e-6))
+	labo.queue_free()
+	texte.visible = true
+	fond.visible = true
+	var ok: bool = centres[1] > centres[0] + 20.0 and bleus[1] > bleus[0]
+	_resultat(ok, "Image : planète déplacée et teintée à grande vitesse",
+		"centre des points clairs x = %.0f px au repos, %.0f px à 0,6 c vers la droite ; bleu/rouge %.2f → %.2f" % [centres[0], centres[1], bleus[0], bleus[1]])

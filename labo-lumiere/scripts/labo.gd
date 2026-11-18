@@ -582,6 +582,20 @@ func _mettre_a_jour_monde() -> void:
 		planete.profondeur_pres = pres
 		if lune:
 			lune.profondeur_pres = pres
+	# Einstein A2 : la planète et la lune sont vues déformées à grande vitesse (aberration, Doppler).
+	beta = vitesse_oeil / Etoiles.C + direction_essai * vitesse_essai
+	if beta.length() < 0.1 * deg_to_rad(camera.fov) / maxf(get_viewport().get_visible_rect().size.y, 1.0):
+		beta = Vector3.ZERO
+	if beta.length() > 0.999999:
+		beta = beta.normalized() * 0.999999
+	if avec_planete:
+		planete.vitesse_oeil = beta
+		if lune:
+			lune.vitesse_oeil = beta
+		if beta != Vector3.ZERO:
+			# La lumière vue est partie jusqu'à γ(1 + β) fois plus loin : la profondeur doit aller jusque-là.
+			var bb := beta.length()
+			camera.far *= (1.0 + bb) / sqrt(1.0 - bb * bb)
 	if avec_planete:
 		chrono_planete.nb_rayons = 0
 		if lune:

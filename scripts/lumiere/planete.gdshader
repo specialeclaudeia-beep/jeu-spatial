@@ -12,6 +12,12 @@
 // - Étape 7 : 2 texels de plus par coin, la hauteur de l'HORIZON (départ et visée) vers l'est, le nord,
 //   l'ouest et le sud. Elle ne dépend pas du Soleil : on compare ici la hauteur de l'étoile à celle de
 //   l'horizon dans sa direction → ombres du relief proche et des cailloux, qui suivent le Soleil.
+// - Einstein A2 : à très grande vitesse (oeil_vitesse, fraction de c), chaque coin est vu là où sa lumière
+//   arrive vraiment dans l'œil qui bouge (aberration : tout se resserre vers l'avant), à la distance où
+//   cette lumière est partie (× D), avec sa couleur et son éclat changés par l'effet Doppler (vers le
+//   bleu et plus brillant devant, vers le rouge et plus sombre derrière : l'éclat vers l'avant).
+//   L'éclairage (Soleil, ombres, éclipses) reste calculé là où la planète est vraiment : c'est la lumière
+//   déjà renvoyée par le sol qui change en chemin vers l'œil. Vitesse nulle : rien ne change.
 // Données par copie (INSTANCE_CUSTOM) : x = heure d'arrivée, y = profondeur des jupes, z = taille d'un rayon.
 // Suite du programme : l'OMBRE DU VAISSEAU sur le sol. La partie « Soleil direct » de la lumière est
 // ajoutée dans light(), où Godot donne l'ombre de sa seule lumière (le Soleil, qui ne sert qu'aux ombres,
@@ -25,6 +31,7 @@ render_mode cull_disabled, skip_vertex_transform, ambient_light_disabled, fog_di
 #include "res://scripts/lumiere/oeil.gdshaderinc"
 #include "res://scripts/lumiere/compagnon.gdshaderinc"
 #include "res://scripts/lumiere/lampes.gdshaderinc"
+#include "res://scripts/lumiere/etoiles.gdshaderinc"
 
 uniform sampler2D coins : filter_nearest;      // RGBA 32 bits flottants, 90 × places
 uniform sampler2D rayons : filter_nearest;     // RGBA 8 bits, 225 × places (5 texels par coin)
@@ -51,6 +58,7 @@ varying float compagnon_visible;
 varying vec4 horizon_v;          // hauteur de l'horizon (rad) vers l'est, le nord, l'ouest, le sud
 varying vec3 soleil_lieu;        // Soleil dans le repère du lieu : (sinus de sa hauteur, vers l'est, vers le nord)
 varying vec3 compagnon_lieu;
+varying vec3 doppler_v;          // Einstein A2 : facteur Doppler sur la lumière renvoyée (rouge, vert, bleu)
 varying vec3 reste_v;           // luminance sans le Soleil direct (cd/m²), de fragment() à light()
 varying vec3 soleil_direct_v;   // luminance due au Soleil direct, avant l'ombre du vaisseau
 
@@ -162,16 +170,30 @@ void vertex() {
 	vec3 t2 = cross(up, t1);
 	soleil_lieu = vers_lieu(soleil_direction, up, t1, t2);
 	compagnon_lieu = vers_lieu(compagnon_direction, up, t1, t2);
-	// Halo de l'œil calculé aux coins (il varie lentement à l'échelle d'un rayon de 8 pixels) :
-	// beaucoup moins de calcul par pixel pour la petite carte graphique du PC.
-	voile_v = oeil_voile(normalize(p - CAMERA_POSITION_WORLD), TIME);
 	// L'ombre d'une éclipse varie lentement à l'échelle d'un rayon : calculée aux coins.
 	soleil_visible = part_etoile(p, soleil_direction, soleil_rayon_angle);
 	compagnon_visible = compagnon_eclairement > 0.0 ? part_etoile(p, compagnon_direction, compagnon_rayon_angle) : 0.0;
-	vec4 vue = VIEW_MATRIX * vec4(p, 1.0);
+	// Einstein A2 : où l'œil qui va très vite voit ce coin, et le Doppler de sa lumière (reflet du Soleil,
+	// corps noir à 5 772 K).
+	vec3 vu = p;
+	doppler_v = vec3(1.0);
+	if (dot(oeil_vitesse, oeil_vitesse) > 0.0) {
+		vec3 r = p - CAMERA_POSITION_WORLD;
+		float dist = length(r);
+		if (dist > 0.0) {
+			vec4 ab = aberration(r / dist, oeil_vitesse);
+			vu = CAMERA_POSITION_WORLD + ab.xyz * (dist * ab.w);
+			doppler_v = doppler_surface(vec3(1.0), T_SOLEIL, ab.w);
+		}
+	}
+	// Halo de l'œil calculé aux coins (il varie lentement à l'échelle d'un rayon de 8 pixels) :
+	// beaucoup moins de calcul par pixel pour la petite carte graphique du PC.
+	voile_v = oeil_voile(normalize(vu - CAMERA_POSITION_WORLD), TIME);
+	vec4 vue = VIEW_MATRIX * vec4(vu, 1.0);
 	profondeur = -vue.z;
-	// Pour l'ombre du vaisseau (Godot la cherche à partir de VERTEX et NORMAL, repère de la vue).
-	VERTEX = vue.xyz;
+	// Pour l'ombre du vaisseau (Godot la cherche à partir de VERTEX et NORMAL, repère de la vue). L'ombre
+	// tombe sur le vrai sol : on donne la vraie position (sans l'aberration).
+	VERTEX = (VIEW_MATRIX * vec4(p, 1.0)).xyz;
 	NORMAL = mat3(VIEW_MATRIX) * up;
 	POSITION = PROJECTION_MATRIX * vue;
 	// Étape 7 : la profondeur est écrite par le fragment (logarithmique) ; ici on met chaque point au
@@ -232,8 +254,9 @@ void fragment() {
 	}
 	// Étape 8 : les lampes du vaisseau (projecteur) éclairent aussi le sol.
 	e += lampes_eclairement(pos_monde, n);
-	reste_v = albedo * (e + lux_fond) / PI + voile_v;
-	soleil_direct_v = albedo * direct / PI;
+	// Einstein A2 : toute la lumière renvoyée par le sol passe par l'effet Doppler (pas le halo de l'œil).
+	reste_v = albedo * (e + lux_fond) / PI * doppler_v + voile_v;
+	soleil_direct_v = albedo * direct / PI * doppler_v;
 	// Godot multiplie la lumière par ALBEDO : on lui donne 1, la vraie couleur est dans notre calcul.
 	ALBEDO = vec3(1.0);
 	ROUGHNESS = 1.0;
