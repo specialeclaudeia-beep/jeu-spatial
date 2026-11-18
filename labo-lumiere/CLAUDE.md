@@ -2,7 +2,7 @@
 
 Ce dossier est un petit projet Godot à part, rangé dans le dépôt du jeu
 (`specialeclaudeia-beep/jeu-spatial`, dossier `labo-lumiere/`). On y construit le
-« système de décomposition fractale de la lumière » de Gwenaël (étapes 2 à 7 du programme),
+« système de décomposition fractale de la lumière » de Gwenaël (étapes 2 à 7 du programme (étape 7 faite)),
 avant de le brancher dans le jeu à l'étape 8.
 
 Référence unique : le programme du système de lumière, https://claude.ai/artifact/XLupfWSmbU7wjncyd5Vkpa
@@ -161,6 +161,36 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
   luminance × D⁴ × eff(D·T)/eff(T), couleur du corps noir à D·T. Les étoiles : direction penchée, éclat
   × D² × eff(D·T)/eff(T). Le halo du Soleil suit `soleil_direction_vue` (oeil.gdshaderinc).
   PAS ENCORE : planète et lune non déformées à grande vitesse (et leur lumière pas décalée).
+
+## Petite échelle jusqu'au millimètre (étape 7)
+- **64 bits partout** dans `labo.gd` : le centre de la planète vu de l'œil (`rel64`, donné à
+  `tampon_instances`), l'altitude (`_sol64`), le sol infranchissable, les points de vue (`_placer64`).
+  Un `Vector3` de Godot est en 32 bits : à 600 km du centre, 4 cm d'erreur. À reprendre au branchement.
+- **Œil jusqu'à 5 mm** (`ALTITUDE_MIN`), vitesse min 5 mm/s × molette. `NIVEAU_MAX` = 26 (rayons ≈ 1,2 mm).
+- **Caméra de Godot** : elle ne supporte pas 0,2 mm → 300 km (plus rien ne s'affichait sous 3 m : culling
+  faux). Son plan proche reste ≥ far × 1e-5 ; la vraie distance proche (`planete.profondeur_pres`) sert
+  seulement à la profondeur logarithmique, et `planete.gdshader` met `POSITION.z = 0` (le sol n'est jamais
+  coupé par les plans proche / lointain, seulement derrière l'œil). À reprendre pour tout objet dessiné
+  près de l'œil au branchement (cockpit : profondeur logarithmique avec la même formule).
+- **Relief** (`ArbreLumiere::octave`) : octaves 17 à 25 = cailloux (au plus un par cellule, 8 cellules
+  voisines, bosse aux bords raides, `caillou()`), teinte par caillou dans `couleur_sol` ; au-delà, le grain
+  du sable. Bornes : valeur entre −1,5 et 1,5 × amplitude (rayon englobant et `relief_max` × 1,5).
+- **Horizon de chaque coin** (`lumiere_coin`) : 4 azimuts (est = Y × verticale, nord, ouest, sud,
+  `repere_lieu`, le même dans le shader), marche à 2, 4, 8, 16 fois l'écart des coins puis ×4 jusqu'à
+  60 km. À chaque pas, 6 octaves (taille de la distance) calculées pour de vrai, les plus grandes suivent
+  leur pente au coin (différences finies déjà faites pour la normale), les plus petites ignorées ; courbure
+  −D²/2R. Ne dépend pas du Soleil. Rangé sur 2 texels de plus par coin (5 au lieu de 3 : départ + visé,
+  code 0,5 + 0,5 signe(x)√|x|, x = h/90°), glisse comme les couleurs. Shader et posemètre :
+  `part_horizon` / `part_sous_horizon` = mélange des 4 valeurs (cos², sin²), bord adouci sur
+  2 × (rayon apparent + 0,005 rad).
+- **Coût** : éclairer ≈ 3× plus cher par morceau (cloud, 4 fils : 0,06 → 0,14-0,24 ms). Le budget de
+  3 ms par image ne change pas : la planète s'affine plus lentement après un saut. Si trop lent sur le PC :
+  bande de 5 octaves au lieu de 6, ou 3 pas ×2 au lieu de 4.
+- `project.godot` : rien à changer (le tri des ombres de Godot râlait seulement quand le plan proche
+  était minuscule ; corrigé par la règle ci-dessus).
+- Points de vue : L (10) loupe 3 cm, Soleil à 12° ; G (11) descente exponentielle 1 500 km → 3 cm en 40 s.
+- Pas encore : rebonds (ombres noires), ombres projetées plus fines que 4 azimuts, lune : sa rotation est
+  un `Basis` 32 bits (≈ 1 cm d'erreur au sol de la lune).
 
 ## Organisation
 | Chemin | Contenu |

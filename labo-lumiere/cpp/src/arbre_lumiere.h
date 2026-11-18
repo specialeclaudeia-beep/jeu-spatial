@@ -33,8 +33,13 @@ namespace lumiere {
 constexpr int COUPES = 8;              // 8 petits triangles par côté du morceau
 constexpr int NB_COINS = 45;           // (8+1)(8+2)/2
 constexpr int NB_RAYONS = 64;          // 8 × 8
-constexpr int NIVEAU_MAX = 26;         // morceau de niveau 26 : rayons d'environ 1 cm sur la planète d'essai
-constexpr int TEXELS_PAR_COIN_LUMIERE = 3; // couleur de départ, couleur visée, direction
+constexpr int NIVEAU_MAX = 26;         // morceau de niveau 26 : côté ≈ 9 mm, rayons ≈ 1,2 mm sur la planète d'essai
+// Étape 7 : couleur de départ, couleur visée, direction, horizon de départ, horizon visé.
+constexpr int TEXELS_PAR_COIN_LUMIERE = 5;
+constexpr int NB_AZIMUTS = 4;          // horizon mesuré vers l'est, le nord, l'ouest et le sud du coin
+// Étape 7 : cailloux (des blocs de 1,5 m aux graviers de 1 cm) pour ces détails du relief.
+constexpr int OCTAVE_CAILLOUX_MIN = 17;
+constexpr int OCTAVE_CAILLOUX_MAX = 25;
 constexpr int TEXELS_PAR_COIN = 2;     // position de départ, position visée
 
 struct Vec3d {
@@ -70,6 +75,12 @@ struct Morceau {
 	float albedo[NB_COINS][3];    // couleur du sol (part de lumière renvoyée), lumière linéaire
 	float albedo_depart[NB_COINS][3];
 	float direction[NB_COINS][3]; // direction moyenne de la surface, longueur = (1 + cos b) / 2
+	// Étape 7 : hauteur de l'horizon (rad au-dessus de l'horizontale du lieu) vers l'est, le nord,
+	// l'ouest et le sud. Ne dépend pas du Soleil : la carte graphique compare seulement la hauteur de
+	// l'étoile à celle de l'horizon dans sa direction → ombres du relief proche et des cailloux,
+	// qui suivent le Soleil sans rien recalculer.
+	float horizon[NB_COINS][NB_AZIMUTS];
+	float horizon_depart[NB_COINS][NB_AZIMUTS];
 	uint64_t derniere_image = 0;  // pour oublier les morceaux inutiles les plus anciens
 };
 
@@ -148,6 +159,15 @@ public:
 	PackedFloat64Array coins_depart_morceau(int64_t p_adresse); // 45 × 3, positions de départ
 	PackedFloat32Array couleurs_morceau(int64_t p_adresse);    // 64 × 3, albédo
 	PackedFloat32Array directions_morceau(int64_t p_adresse);  // 64 × 3
+	PackedFloat32Array horizons_morceau(int64_t p_adresse);    // 45 × 4 (rad)
+	// Étape 7 : part du disque d'une étoile (direction s, rayon apparent a) au-dessus de l'horizon du
+	// relief proche, au coin de direction d né au niveau nais (même loi que planete.gdshader).
+	double part_horizon(const PackedFloat64Array &p_direction, int p_naissance, const Vector3 &p_etoile, double p_a) const;
+	PackedFloat32Array horizon_point(const PackedFloat64Array &p_direction, int p_naissance) const;
+	// Repère du lieu : t1 = « est », t2 = « nord » (le même dans le shader).
+	static void repere_lieu(const lumiere::Vec3d &d, lumiere::Vec3d &t1, lumiere::Vec3d &t2);
+	static double part_sous_horizon(const lumiere::Vec3d &up, const lumiere::Vec3d &t1, const lumiere::Vec3d &t2,
+			const float h[lumiere::NB_AZIMUTS], const lumiere::Vec3d &s, double a);
 	PackedFloat64Array centre_morceau(int64_t p_adresse);      // 3 nombres + rayon englobant
 
 protected:
@@ -205,9 +225,16 @@ private:
 public:
 	// Relief et couleurs (fonctions déterministes de la position et de la graine).
 	double hauteur(const lumiere::Vec3d &dir, int octaves) const;
+	// Un seul détail (octave n) du relief au point p (m, repère de la planète), en m.
+	double octave(const lumiere::Vec3d &p, int n) const;
+	// Cailloux de l'octave n autour de q (coordonnées en tailles de cellule) : 0 hors d'un caillou,
+	// jusqu'à 1 au sommet ; teinte = de -1 à 1 (pierre plus claire ou plus sombre).
+	double caillou(const lumiere::Vec3d &q, int n, double *teinte) const;
 	void couleur_sol(const lumiere::Vec3d &dir, int octaves, float out[3]) const;
 	double amplitude(int octave) const;
-	void lumiere_coin(const lumiere::Vec3d &dir, int naissance, float albedo[3], float direction[3]) const;
+	// Renvoie la hauteur du coin (m) ; remplit couleur, direction moyenne et horizon (4 azimuts).
+	double lumiere_coin(const lumiere::Vec3d &dir, int naissance, float albedo[3], float direction[3],
+			float horizon[lumiere::NB_AZIMUTS]) const;
 	double longueur_onde(int octave) const;
 
 	// Pour la tâche des fils de calcul.
