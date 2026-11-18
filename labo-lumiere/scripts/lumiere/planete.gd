@@ -64,6 +64,7 @@ func preparer(p_rayon: float, graine: int, p_places := PLACES) -> bool:
 	materiau.shader = ShaderPlanete
 	materiau.set_shader_parameter("rayons", tex_rayons)
 	materiau.set_shader_parameter("coins", tex_coins)
+	materiau.set_shader_parameter("rayon_corps", p_rayon)
 	material_override = materiau
 	return true
 

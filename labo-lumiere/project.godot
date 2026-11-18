@@ -74,3 +74,43 @@ oeil_haut={
 "type": "vec3",
 "value": Vector3(0, 1, 0)
 }
+soleil_direction_vue={
+"type": "vec3",
+"value": Vector3(0.6247, 0.3123, 0.7704)
+}
+oeil_vitesse={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+ciel_pole_galaxie={
+"type": "vec3",
+"value": Vector3(-0.8676, 0.456, 0.1981)
+}
+ciel_centre_galaxie={
+"type": "vec3",
+"value": Vector3(-0.0549, -0.4840, 0.8734)
+}
+compagnon_direction={
+"type": "vec3",
+"value": Vector3(-0.55, 0.35, -0.75)
+}
+compagnon_eclairement={
+"type": "float",
+"value": 0.0
+}
+compagnon_luminance={
+"type": "float",
+"value": 0.0
+}
+compagnon_rayon_angle={
+"type": "float",
+"value": 0.00065
+}
+compagnon_temperature={
+"type": "float",
+"value": 4400.0
+}
+compagnon_couleur={
+"type": "vec3",
+"value": Vector3(1.2, 0.95, 0.7)
+}
