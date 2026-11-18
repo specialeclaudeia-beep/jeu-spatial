@@ -167,7 +167,44 @@ var couche_hud: CanvasLayer
 # =====================================================================
 # DÉMARRAGE
 # =====================================================================
+## Mesure de vitesse (lancer avec « -- --mesure ») : sans synchro écran, 10 s en vue cockpit puis 10 s
+## en vue extérieure ; écrit les images par seconde (moyenne et pire) et le temps de la lumière, puis quitte.
+var _mesure := {}
+
+
+func _mesurer(delta: float) -> void:
+	if _mesure.is_empty():
+		return
+	_mesure.t += delta
+	var phase: int = _mesure.phase
+	if _mesure.t < 3.0:
+		return    # on laisse l'œil et le jeu se stabiliser
+	_mesure.n += 1
+	_mesure.somme += delta
+	_mesure.pire = maxf(_mesure.pire, delta)
+	_mesure.lumiere += temps_lumiere_ms
+	if _mesure.t >= 13.0:
+		var nom: String = ["vue cockpit", "vue extérieure"][phase]
+		var ligne := "MESURE %s : %.0f images/s en moyenne, pire image %.1f ms, lumière %.1f ms par image" % [
+			nom, _mesure.n / _mesure.somme, _mesure.pire * 1000.0, _mesure.lumiere / _mesure.n]
+		print(ligne)
+		_mesure.texte += ligne + "\n"
+		if phase == 0:
+			_mesure.merge({"phase": 1, "t": 0.0, "n": 0, "somme": 0.0, "pire": 0.0, "lumiere": 0.0}, true)
+			vue_interieure = false
+			_appliquer_vue()
+		else:
+			var f := FileAccess.open("user://mesure.txt", FileAccess.WRITE)
+			if f:
+				f.store_string(_mesure.texte)
+			get_tree().quit()
+
+
 func _ready() -> void:
+	if "--mesure" in OS.get_cmdline_user_args():
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+		_mesure = {"phase": 0, "t": 0.0, "n": 0, "somme": 0.0, "pire": 0.0, "lumiere": 0.0, "texte": ""}
+		call_deferred("_debut_mesure")
 	commandes = Commandes.new()
 	commandes.charger()      # réglages de la dernière partie (sinon : disposition par défaut)
 	commandes.appliquer()
@@ -904,7 +941,13 @@ func _physics_process(delta: float) -> void:
 # =====================================================================
 # AFFICHAGE
 # =====================================================================
+func _debut_mesure() -> void:
+	vue_interieure = true
+	_appliquer_vue()
+
+
 func _process(delta: float) -> void:
+	_mesurer(delta)
 	_lire_boutons()
 	pilote.basis = Basis(vaisseau.orientation)
 	_suivre_g(delta)
@@ -1192,6 +1235,7 @@ func _mettre_a_jour_hud() -> void:
 	var w: Vector3 = vaisseau.omega * (180.0 / PI)
 	var m: Array = vaisseau.moteurs
 	var lignes := PackedStringArray()
+	lignes.append("IMAGES/S      %d   (%.1f ms par image)" % [roundi(Engine.get_frames_per_second()), 1000.0 / maxf(Engine.get_frames_per_second(), 1.0)])
 	lignes.append("VITESSE       %s   (verticale %s   horizontale %s)   par rapport au sol %s (horizontale %s)" % [_vitesse_txt(vaisseau.vitesse()), _vitesse_txt(vaisseau.vitesse_verticale(), true), _vitesse_txt(vaisseau.vitesse_horizontale()), _vitesse_txt(vaisseau.vitesse_par_rapport_au_sol().length()), _vitesse_txt(vaisseau.vitesse_horizontale_sol())])
 	lignes.append("RELATIVITÉ    %s c   γ = %s   rapidité %.4f" % [_fraction_c(vaisseau.beta()), _gamma_txt(vaisseau.gamma()), vaisseau.rapidite()])
 	lignes.append("HORLOGES      pilote %s   univers %s   (le pilote a %s de moins)" % [_duree(vaisseau.temps_pilote), _duree(vaisseau.temps_univers), _duree_courte(vaisseau.temps_univers - vaisseau.temps_pilote)])
