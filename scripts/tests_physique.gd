@@ -1207,6 +1207,75 @@ func _tests_train_ressorts() -> void:
 	_resultat(_valide(w) and w.au_sol and not w.ecrase and w.vitesse() < 0.05 and h_w > 1.5 and h_w < 1.58,
 		"Posé en temps accéléré x1000",
 		"Après 250 s en x1000 : %.3f m du sol, vitesse %.4f m/s, écrasé : %s." % [h_w, w.vitesse(), "oui" if w.ecrase else "non"])
+	_tests_pente()
+
+
+## Un vaisseau posé (train sorti) sur un sol en pente : angle en degrés, sens « avant » (nez vers le
+## haut de la pente) ou « cote » (pente de côté). Renvoie le vaisseau après duree s.
+func _pose_sur_pente(angle_deg: float, sens: String, duree: float, omega_p := 0.0):
+	var v = _nouveau(true)
+	var t := tan(deg_to_rad(angle_deg))
+	if sens == "avant":
+		v.relief = func(x: float, _y: float, z: float) -> float: return t * R * z / x
+	else:
+		v.relief = func(x: float, y: float, _z: float) -> float: return t * R * y / x
+	v.omega_planete = omega_p
+	v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)
+	v.sortir_train(true)
+	v.train = 1.0
+	v.px = R + 1.75
+	if omega_p != 0.0:
+		v.vz = -omega_p * v.px   # posé : il tourne avec le sol
+	v.set_meta("depart", Vector3(v.px, v.py, v.pz))
+	for i in int(duree * 120.0):
+		v.pas(1.0 / 120.0)
+	return v
+
+
+func _tests_pente() -> void:
+	# 36. Pente de 12° nez vers le haut, 2° de côté : le frottement tient le vaisseau immobile ;
+	#     le sol pousse perpendiculairement à la pente, et le total des forces du sol compense le poids.
+	#     De côté, le train arrière n'a que 84 cm de large, ses ressorts sont souples, et le centre de
+	#     gravité est à 1,55 m du sol : le vaisseau penche deux fois plus que la pente, et dès 3,5° de
+	#     côté il se couche sur le flanc (test 37).
+	var lignes := PackedStringArray()
+	var ok := true
+	for sens in ["avant", "cote"]:
+		var v = _pose_sur_pente(12.0 if sens == "avant" else 2.0, sens, 25.0)
+		var p1 := Vector3(v.px, v.py, v.pz)
+		for i in 120 * 5:
+			v.pas(1.0 / 120.0)
+		var glisse := (Vector3(v.px, v.py, v.pz) - p1).length()
+		var ressenti: float = v.acceleration_ressentie.length()
+		var bon: bool = _valide(v) and v.au_sol and not v.ecrase and glisse < 0.005 and v.vitesse() < 0.002 \
+			and absf(ressenti - 9.81) < 0.05
+		ok = ok and bon
+		lignes.append("%s : glisse %.4f m en 5 s, vitesse %.4f m/s, sol %.2f m/s² (poids 9,81)" % [
+			"12° nez vers le haut" if sens == "avant" else "2° de côté", glisse, v.vitesse(), ressenti])
+	_resultat(ok, "Posé sur une pente", "; ".join(lignes) + ". Attendu : immobile (frottement 0,5 > tan 12° = 0,21).")
+
+	# 37. Trop de pente : 35° nez vers le haut (tan 35° = 0,70 > frottement 0,5), il glisse ;
+	#     4° de côté, il se couche sur le flanc (sans glisser ni exploser : le calcul reste propre).
+	var w = _pose_sur_pente(35.0, "avant", 6.0)
+	var depart: Vector3 = w.get_meta("depart")
+	var parcouru := (Vector3(w.px, w.py, w.pz) - depart).length()
+	var c = _pose_sur_pente(4.0, "cote", 20.0)
+	var haut_c: Vector3 = Basis(c.orientation).y
+	var couche := haut_c.dot(Vector3(1, 0, 0)) < 0.5
+	_resultat(_valide(w) and _valide(c) and parcouru > 3.0 and couche, "Une pente trop forte : il glisse ou se couche",
+		"35° nez vers le haut : %.1f m parcourus en 6 s (il glisse). 4° de côté : penché de %.0f° (il se couche sur le flanc)." % [
+			parcouru, rad_to_deg(acos(clampf(haut_c.dot(Vector3(1, 0, 0)), -1.0, 1.0)))])
+
+	# 38. Le sol tourne avec la planète (jour de 2 h) : posé, le vaisseau tourne avec lui, sans glisser
+	#     par rapport au sol. Sa vitesse dans l'espace = celle du sol (ω × r).
+	var om := TAU / 7200.0
+	var u = _pose_sur_pente(0.0, "avant", 20.0, om)
+	var v_sol := Vector3(om * u.pz, 0.0, -om * u.px)
+	var relative := (Vector3(u.vx, u.vy, u.vz) - v_sol).length()
+	_resultat(_valide(u) and u.au_sol and not u.ecrase and relative < 0.01,
+		"Posé sur une planète qui tourne",
+		"Sol à %.1f m/s (jour de 2 h, à l'équateur) ; vaisseau à %.1f m/s dans l'espace, %.4f m/s par rapport au sol (attendu ≈ 0)." % [
+			v_sol.length(), u.vitesse(), relative])
 
 
 # =====================================================================
