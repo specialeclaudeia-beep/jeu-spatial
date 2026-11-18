@@ -126,15 +126,21 @@ func preparer(p_camera: Camera3D, p_rayon: float) -> bool:
 		noeud_etoiles = etoiles.creer_noeud(ShaderEtoiles, table)
 		add_child(noeud_etoiles)
 
-	# La seule lumière de Godot : le Soleil, pour les ombres du vaisseau sur lui-même. Son intensité
-	# ne sert pas (objet.gdshader calcule la vraie lumière) ; seules sa direction et son ombre comptent.
+	# La seule lumière de Godot : le Soleil, pour les ombres du vaisseau sur lui-même ET sur le sol
+	# (planete.gdshader). Son intensité ne sert pas (objet.gdshader et planete.gdshader calculent la vraie
+	# lumière) ; seules sa direction et son ombre comptent. Deux zones : 0-20 m, fine, pour le cockpit ;
+	# 20-200 m pour l'ombre sur le sol. Au-delà de ~170 m, l'ombre d'un fuselage de 1,6 m de large n'a
+	# plus de cœur noir (le disque du Soleil, 0,53°, déborde de chaque côté) : elle s'efface doucement de
+	# 160 à 200 m, à peu près comme la vraie.
 	lumiere_soleil = DirectionalLight3D.new()
 	lumiere_soleil.name = "OmbresSoleil"
 	lumiere_soleil.light_energy = 1.0
 	lumiere_soleil.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY
 	lumiere_soleil.shadow_enabled = true
-	lumiere_soleil.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
-	lumiere_soleil.directional_shadow_max_distance = 40.0
+	lumiere_soleil.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	lumiere_soleil.directional_shadow_max_distance = 200.0
+	lumiere_soleil.directional_shadow_split_1 = 0.1
+	lumiere_soleil.directional_shadow_fade_start = 0.8
 	lumiere_soleil.shadow_bias = 0.03
 	lumiere_soleil.shadow_normal_bias = 1.0
 	add_child(lumiere_soleil)

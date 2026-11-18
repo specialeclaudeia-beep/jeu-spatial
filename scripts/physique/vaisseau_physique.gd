@@ -79,6 +79,12 @@ var rayon_planete := 0.0   # m (0 = pas de sol)
 ## rayon_planete dans cette direction. Vide = sol lisse (sphère). Le jeu y branche le relief de la planète
 ## dessinée (partie C++), pour que le vaisseau se pose sur le sol qu'on voit.
 var relief := Callable()
+## Rotation de la planète sur elle-même autour de l'axe Y (rad/s, sens direct : l'est est vers -Z
+## vu du pôle nord… peu importe ici) et angle déjà tourné (rad). Le repère de la physique, lui, ne tourne
+## pas (pas de force « fictive » à inventer) : c'est le sol qui bouge sous le vaisseau. Le relief
+## (fonction ci-dessus) est donné dans le repère de la planète.
+var omega_planete := 0.0
+var angle_planete := 0.0
 
 # autres astres (lunes, étoiles…) : chacun = { nom, gm, x, y, z } (position en m, double précision).
 # Pour l'instant ils restent immobiles : leur propre mouvement viendra plus tard.
@@ -571,6 +577,7 @@ func pas(dt: float) -> void:
 
 
 func _pas_un(dt: float) -> void:
+	angle_planete = fposmod(angle_planete + omega_planete * dt, TAU)
 	# 1. Les moteurs suivent leur consigne avec un petit temps de réponse
 	var k := clampf(dt / maxf(reactivite_moteurs, 1e-9), 0.0, 1.0)
 	for m in moteurs:
@@ -719,18 +726,30 @@ var _touchait := {}              # points qui touchaient déjà le sol au pas pr
 var compression_roues := PackedFloat64Array([0.0, 0.0, 0.0])   # m, écrasement de chaque amortisseur (pour le dessin)
 
 
+## Frottement « accroché » : un point posé reste accroché au sol par un petit ressort de côté
+## (raideur RAIDEUR_COTE) tant que la force demandée ne dépasse pas frottement × poussée du sol.
+## Au-delà, il glisse (l'accroche suit). Sans cela, un vaisseau posé sur une pente glissait tout
+## doucement, sans jamais s'arrêter. La roue avant roule librement dans l'axe du vaisseau (avec une
+## petite résistance au roulement) ; les patins arrière frottent dans tous les sens.
+const RAIDEUR_COTE := 100000.0   # N/m (assez souple pour rester stable avec des pas de 1/240 s)
+const RESISTANCE_ROULEMENT := 0.02
+const PAS_PENTE := 0.25          # m : écart pour mesurer la pente du sol sous un point
+var _accroches := {}             # point → position de son accroche au sol (repère de la planète)
+
+
 ## Renvoie [force (repère monde), couple (repère du vaisseau)].
+## Chaque point qui touche prend le sol sous LUI (pas au centre du vaisseau) et sa vraie pente :
+## sur un sol en pente, le sol pousse perpendiculairement à la pente.
 func _forces_sol(base: Basis) -> Array:
 	var f_monde := Vector3.ZERO
 	var couple := Vector3.ZERO
-	var pos := Vector3(px, py, pz)   # (simple précision suffit ici : on ne garde que des écarts)
 	var r_c := sqrt(px * px + py * py + pz * pz)
-	# relief du sol sous le vaisseau (étape 8 de la lumière), pris une fois au centre
+	# relief du sol sous le vaisseau : s'il est loin, rien à calculer
 	var r_sol := rayon_planete + hauteur_sol(px, py, pz)
 	if r_c - r_sol > 15.0:
 		_touchait.clear()
+		_accroches.clear()
 		return [f_monde, couple]
-	var n := Vector3(px, py, pz) / r_c
 	var vit := Vector3(vx, vy, vz)
 	var points := []
 	compression_roues.fill(0.0)
@@ -741,16 +760,29 @@ func _forces_sol(base: Basis) -> Array:
 		points.append([r, -1])
 	var deja := _touchait
 	_touchait = {}
+	var accroches := _accroches
+	_accroches = {}
+	var avant: Vector3 = base * Vector3(0.0, 0.0, -1.0)
 	for pt in points:
 		var r_corps: Vector3 = (pt[0] as Vector3) - CENTRE_GRAVITE   # vu du centre de gravité
 		var k_roue: int = pt[1]
 		var roue := k_roue >= 0
 		var r_monde: Vector3 = base * r_corps
-		# hauteur du point au-dessus du sol (calculée en double à partir du centre)
-		var h := r_c + r_monde.dot(n) - r_sol
+		# position du point (double précision) et sol juste sous lui
+		var qx := px + r_monde.x
+		var qy := py + r_monde.y
+		var qz := pz + r_monde.z
+		var dq := sqrt(qx * qx + qy * qy + qz * qz)
+		var h := dq - rayon_planete - hauteur_sol(qx, qy, qz)
 		if h >= 0.0:
 			continue
-		var v_point: Vector3 = vit + base * omega.cross(r_corps)
+		var up := Vector3(qx / dq, qy / dq, qz / dq)
+		var n := normale_sol(qx, qy, qz)
+		# enfoncement mesuré perpendiculairement à la pente
+		var c := -h * up.dot(n)
+		# vitesse du point par rapport au sol (le sol tourne avec la planète)
+		var v_sol := Vector3(omega_planete * qz, 0.0, -omega_planete * qx)
+		var v_point: Vector3 = vit + base * omega.cross(r_corps) - v_sol
 		var vn := v_point.dot(n)
 		var cle := str(pt[0])
 		if not deja.has(cle) and vn < 0.0:
@@ -760,7 +792,6 @@ func _forces_sol(base: Basis) -> Array:
 			if not roue and -vn > CHOC_MAX_COQUE:
 				ecrase = true
 		_touchait[cle] = true
-		var c := -h
 		var fn := 0.0
 		if roue:
 			var course: float = COURSE_TRAIN[k_roue]
@@ -777,14 +808,67 @@ func _forces_sol(base: Basis) -> Array:
 		if fn <= 0.0:
 			continue
 		au_sol = true
+		# frottement : ressort d'accroche + amortisseur, limité à frottement × fn
+		var ici := _vers_planete(qx, qy, qz)
+		var accroche: Vector3 = accroches.get(cle, ici)
+		var ecart := _depuis_planete(ici - accroche)
+		ecart -= n * ecart.dot(n)
 		var vt := v_point - n * vn
-		var ft := -vt * VISCOSITE_SOL
-		if ft.length() > FROTTEMENT * fn:
-			ft = ft.normalized() * FROTTEMENT * fn
+		var axe_roule := Vector3.ZERO
+		if k_roue == 0:
+			# la roue avant roule dans l'axe du vaisseau (projeté sur le sol)
+			axe_roule = avant - n * avant.dot(n)
+			if axe_roule.length() > 1e-6:
+				axe_roule = axe_roule.normalized()
+				ecart -= axe_roule * ecart.dot(axe_roule)
+				vt -= axe_roule * vt.dot(axe_roule)
+		var ft := -ecart * RAIDEUR_COTE - vt * VISCOSITE_SOL
+		var ft_max := FROTTEMENT * fn
+		if ft.length() > ft_max:
+			# ça glisse : la force est limitée et l'accroche suit le point
+			ft = ft.normalized() * ft_max
+			var e_ok := ecart.normalized() * minf(ecart.length(), ft_max / RAIDEUR_COTE)
+			accroche = ici - _vers_planete_dir(e_ok)
+		_accroches[cle] = accroche
+		if axe_roule != Vector3.ZERO:
+			var v_roule := v_point.dot(axe_roule)
+			if absf(v_roule) > 1e-4:
+				ft -= axe_roule * signf(v_roule) * RESISTANCE_ROULEMENT * fn
 		var f: Vector3 = n * fn + ft
 		f_monde += f
 		couple += r_corps.cross(base.inverse() * f)
 	return [f_monde, couple]
+
+
+## Direction perpendiculaire au sol (pente comprise) au point (x, y, z), repère monde.
+func normale_sol(x: float, y: float, z: float) -> Vector3:
+	var d := sqrt(x * x + y * y + z * z)
+	var up := Vector3(x / d, y / d, z / d)
+	if not relief.is_valid():
+		return up
+	var t1 := up.cross(Vector3.UP if absf(up.y) < 0.9 else Vector3.RIGHT).normalized()
+	var t2 := up.cross(t1)
+	var e := PAS_PENTE
+	var g1 := (hauteur_sol(x + t1.x * e, y + t1.y * e, z + t1.z * e) - hauteur_sol(x - t1.x * e, y - t1.y * e, z - t1.z * e)) / (2.0 * e)
+	var g2 := (hauteur_sol(x + t2.x * e, y + t2.y * e, z + t2.z * e) - hauteur_sol(x - t2.x * e, y - t2.y * e, z - t2.z * e)) / (2.0 * e)
+	return (up - t1 * g1 - t2 * g2).normalized()
+
+
+## Repère de la planète (qui tourne de angle_planete autour de Y) ↔ repère de la physique (fixe).
+func _vers_planete(x: float, y: float, z: float) -> Vector3:
+	var c := cos(angle_planete)
+	var s := sin(angle_planete)
+	return Vector3(c * x - s * z, y, s * x + c * z)
+
+
+func _vers_planete_dir(v: Vector3) -> Vector3:
+	return _vers_planete(v.x, v.y, v.z)
+
+
+func _depuis_planete(v: Vector3) -> Vector3:
+	var c := cos(angle_planete)
+	var s := sin(angle_planete)
+	return Vector3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z)
 
 
 # =====================================================================
@@ -902,7 +986,11 @@ func altitude() -> float:
 ## Hauteur du sol (m au-dessus de rayon_planete) sous la direction (x, y, z) ; 0 sans relief.
 func hauteur_sol(x: float, y: float, z: float) -> float:
 	if relief.is_valid():
-		return float(relief.call(x, y, z))
+		if angle_planete == 0.0:
+			return float(relief.call(x, y, z))
+		var c := cos(angle_planete)
+		var s := sin(angle_planete)
+		return float(relief.call(c * x - s * z, y, s * x + c * z))
 	return 0.0
 
 
@@ -963,6 +1051,7 @@ func placer_en_orbite(altitude_m: float) -> void:
 	ecrase = false
 	vitesse_impact = 0.0
 	_touchait.clear()
+	_accroches.clear()
 	for m in moteurs:
 		m["consigne"] = 0.0
 		m["actuel"] = 0.0

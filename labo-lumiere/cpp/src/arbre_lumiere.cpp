@@ -948,32 +948,69 @@ double ArbreLumiere::eclairage_rayon(const Morceau &m, int t, const Vec3d &p, co
 	double cb = std::clamp(2.0 * ln - 1.0, -1.0, 1.0);
 	double sb = std::sqrt(std::max(1.0 - cb * cb, 0.0));
 	double direct = cs > sb ? cs : (cs < -sb ? 0.0 : (cs + sb) * (cs + sb) / (4.0 * sb + 1e-6));
-	if (direct > 0.0) {
+	Vec3d up = p.normalized();
+	double haut_soleil = up.dot(s);
+	// Part du Soleil vue par le lieu (astre lui-même sous l'horizon, éclipse), sans le relief proche :
+	// elle sert à la lumière directe ET à celle des alentours (rebonds).
+	double vis = 1.0;
+	if (haut_soleil < 0.3) {
 		// Étape 6 : l'astre lui-même cache l'étoile quand elle est sous l'horizon (côté nuit, même
 		// sur une pente tournée vers elle). Boule au niveau 0 (ou juste sous le point, s'il est plus bas).
-		double dp = p.length();
-		double haut = p.dot(s) / dp;
-		if (haut < 0.3) {
-			direct *= part_soleil_visible(p, Vec3d(), std::min(rayon, dp * 0.9999), s, angle);
+		vis = part_soleil_visible(p, Vec3d(), std::min(rayon, p.length() * 0.9999), s, angle);
+	}
+	if (avec_occ && vis > 0.0) {
+		vis *= part_soleil_visible(p, occ_c, occ_r, s, angle);
+	}
+	if (vis <= 0.0) return 0.0;
+	// Étape 7 : horizon des 3 coins du rayon, tel que la carte graphique le reçoit (codé sur 8 bits).
+	float hz[NB_AZIMUTS] = { 0, 0, 0, 0 };
+	for (int q = 0; q < 3; q++) {
+		for (int w = 0; w < NB_AZIMUTS; w++) {
+			hz[w] += (float)(decode_horizon(octet(code_horizon(m.horizon[cc[q]][w])) / 255.0) / 3.0);
 		}
 	}
+	direct *= vis;
 	if (direct > 0.0) {
-		// Étape 7 : l'ombre du relief proche et des cailloux (horizon des 3 coins du rayon, tel que
-		// la carte graphique le reçoit : codé sur 8 bits).
-		float hz[NB_AZIMUTS] = { 0, 0, 0, 0 };
-		for (int q = 0; q < 3; q++) {
-			for (int w = 0; w < NB_AZIMUTS; w++) {
-				hz[w] += (float)(decode_horizon(octet(code_horizon(m.horizon[cc[q]][w])) / 255.0) / 3.0);
-			}
-		}
-		Vec3d up = p.normalized(), e1, e2;
+		// l'ombre du relief proche et des cailloux
+		Vec3d e1, e2;
 		repere_lieu(up, e1, e2);
 		direct *= part_sous_horizon(up, e1, e2, hz, s, angle);
 	}
-	if (avec_occ && direct > 0.0) {
-		direct *= part_soleil_visible(p, occ_c, occ_r, s, angle);
+	// Rebonds (Q38) : même loi que planete.gdshader (fonction rebond).
+	double y_al = 0.2126 * al[0] + 0.7152 * al[1] + 0.0722 * al[2];
+	return direct + rebond_lieu(n.dot(up) / ln, ln, hz, haut_soleil, y_al) * vis;
+}
+
+
+// Pour les tests : rebond_lieu avec les 4 horizons dans un tableau.
+double ArbreLumiere::rebond_test(double p_cos_penche, double p_longueur, const PackedFloat32Array &p_horizons,
+		double p_haut_soleil, double p_albedo) {
+	float hz[NB_AZIMUTS] = { 0, 0, 0, 0 };
+	for (int w = 0; w < NB_AZIMUTS && w < p_horizons.size(); w++) hz[w] = p_horizons[w];
+	return rebond_lieu(p_cos_penche, p_longueur, hz, p_haut_soleil, p_albedo);
+}
+
+
+// Rebonds de la lumière sur le sol (Q38), loi simple et partagée avec planete.gdshader :
+// le lieu reçoit la lumière renvoyée par le sol qui l'entoure. Ce sol, plat et éclairé, reçoit
+// E × sin(hauteur du Soleil) ; il renvoie la part albédo. Le lieu en voit une part F de son ciel :
+// - le sol plus bas que lui quand il est penché (pente, falaise) : (1 − cos penchée) / 2 ;
+// - ses propres petites faces, quand il est rugueux (cône d'étalement) : 1 − longueur ;
+// - les montagnes au-dessus de son horizon (4 azimuts), à moitié éclairées en moyenne.
+// Les rebonds suivants ajoutent ρF, (ρF)², … : somme 1 / (1 − ρF).
+// Renvoie la lumière reçue en part de E (comme la lumière directe).
+double ArbreLumiere::rebond_lieu(double cos_penche, double longueur, const float hz[NB_AZIMUTS], double haut_soleil,
+		double albedo) {
+	if (haut_soleil <= 0.0) return 0.0;
+	double f = std::clamp((1.0 - cos_penche) * 0.5, 0.0, 1.0) + std::clamp(1.0 - longueur, 0.0, 0.5);
+	double m = 0.0;
+	for (int w = 0; w < NB_AZIMUTS; w++) {
+		double sh = std::sin(std::max((double)hz[w], 0.0));
+		m += sh * sh;
 	}
-	return direct;
+	f = std::min(f + 0.5 * m / NB_AZIMUTS, 1.0);
+	double rf = albedo * f;
+	return haut_soleil * rf / (1.0 - rf);
 }
 
 // Étape 9 : la carte du ciel (voir arbre_lumiere.h).
@@ -1322,6 +1359,8 @@ void ArbreLumiere::_bind_methods() {
 			"occulteur", "soleil_angle"), &ArbreLumiere::carte_ciel, DEFVAL(PackedFloat64Array()), DEFVAL(0.004652));
 	ClassDB::bind_method(D_METHOD("part_visible", "point", "occulteur", "soleil", "soleil_angle"), &ArbreLumiere::part_visible);
 	ClassDB::bind_method(D_METHOD("hauteur_sol", "direction"), &ArbreLumiere::hauteur_sol);
+	ClassDB::bind_static_method("ArbreLumiere", D_METHOD("rebond", "cos_penche", "longueur", "horizons", "haut_soleil", "albedo"),
+			&ArbreLumiere::rebond_test);
 	ClassDB::bind_method(D_METHOD("nb_morceaux"), &ArbreLumiere::nb_morceaux);
 	ClassDB::bind_method(D_METHOD("nb_rayons"), &ArbreLumiere::nb_rayons);
 	ClassDB::bind_method(D_METHOD("nb_en_cache"), &ArbreLumiere::nb_en_cache);

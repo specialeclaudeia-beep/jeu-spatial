@@ -240,6 +240,32 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
   reflété dans la verrière, sonde en vue extérieure (elle se refait depuis la caméra, 11 images de retard),
   rebonds sur la planète (Q38 : ombres du sol encore noires), lune absente du jeu.
 
+## Suite du programme (après l'étape 9) : rebonds, ombre du vaisseau au sol, sol en pente
+- **Double conversion sRGB (correctif)** : dans `light()`, Godot (Compatibilité) reconvertit DIFFUSE_LIGHT en
+  sRGB à la fin (`linear_to_srgb` de drivers/gles3/shaders/scene.glsl : 1,055 v^(1/2,4) − 0,055), alors
+  qu'il ne le fait pas pour ALBEDO d'un « unshaded » (il le défait d'abord). Vérifié : DIFFUSE_LIGHT 0,5 →
+  0,737 à l'écran. Tout ce qui passait par `light()` (vaisseau, cockpit depuis l'étape 8) était donc délavé,
+  ombres grises. Toujours écrire `DIFFUSE_LIGHT = oeil_vers_lumiere_godot(...)` (oeil.gdshaderinc), jamais
+  `oeil_vers_ecran` dans `light()`. Un test du labo le vérifie.
+- **Rebonds (Q38)** : `rebond()` dans planete.gdshader = `ArbreLumiere::rebond_lieu` en C++ (posemètre et carte
+  du ciel, via `eclairage_rayon` qui rend direct + rebond). Le sol autour, plat et éclairé, reçoit
+  E × sin(hauteur de l'étoile) ; le lieu en voit F = (1 − cos penché)/2 + (1 − longueur) + ½ × moyenne
+  des sin²(horizon) ; somme des rebonds 1/(1 − ρF). Pas d'ombre de relief sur le rebond. Test : `ArbreLumiere.rebond(...)`
+  (méthode statique pour les tests).
+- **Ombre du vaisseau sur le sol** : planete.gdshader n'est plus « unshaded » : le Soleil direct est ajouté
+  dans `light()` × ATTENUATION (ombre de la seule lumière de Godot). VERTEX/NORMAL posés en fin de vertex
+  (repère de la vue) : Godot y cherche l'ombre. Coût : la planète est dessinée deux fois (Godot dessine une
+  lumière avec ombre dans une passe de plus). Le labo a un DirectionalLight SANS ombre (sinon light() n'est
+  jamais appelée → planète noire). Jeu : ombres en 2 zones (0-20 m, 20-200 m), effacement de 160 à 200 m
+  (au-delà de ~170 m, le cœur de l'ombre d'un fuselage de 1,6 m disparaît : Soleil de 0,53°). Les pièces
+  « cacher_en_vue_cockpit » passent en SHADOWS_ONLY en vue cockpit (leur ombre reste au sol).
+- **Sol en pente (physique du jeu)** : chaque point du train prend le sol sous lui et sa pente
+  (`normale_sol`, différences de ±25 cm) ; frottement « accroché » (ressort de côté 100 kN/m, limité à
+  0,5 × la poussée du sol) : le vaisseau ne glisse plus doucement sur une pente ; la roue avant roule
+  librement dans l'axe. Le sol peut tourner (`omega_planete`, `angle_planete`, relief donné dans le repère
+  de la planète). Constat : train arrière étroit (84 cm), ressorts souples, centre de gravité à 1,55 m :
+  le vaisseau se couche dès ~3,5° de pente de côté.
+
 ## Organisation
 | Chemin | Contenu |
 |---|---|

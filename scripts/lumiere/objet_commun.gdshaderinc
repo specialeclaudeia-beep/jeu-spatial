@@ -78,6 +78,6 @@ void light() {
 	vec3 f0 = mix(vec3(0.04), alb, metal);
 	vec3 f = f0 + (1.0 - f0) * pow(1.0 - max(dot(h, VIEW), 0.0), 5.0);
 	vec3 reflet = f * ((m + 8.0) / (8.0 * PI)) * pow(nh, m) * e;
-	DIFFUSE_LIGHT = oeil_vers_ecran(reste + diffus + reflet, FRAGCOORD.xy, TIME);
+	DIFFUSE_LIGHT = oeil_vers_lumiere_godot(reste + diffus + reflet, FRAGCOORD.xy, TIME);
 	SPECULAR_LIGHT = vec3(0.0);
 }
