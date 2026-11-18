@@ -1,0 +1,17 @@
+#!/usr/bin/env python
+# Compile la partie C++ du système de lumière (voir LISEZMOI-cpp.md).
+# Exemple : scons godot_cpp=/chemin/vers/godot-cpp platform=windows use_mingw=yes target=template_release
+import os
+
+godot_cpp = ARGUMENTS.get("godot_cpp", os.environ.get("GODOT_CPP", "../../../godot-cpp"))
+env = SConscript(os.path.join(godot_cpp, "SConstruct"))
+env.Append(CPPPATH=["src/"])
+if env["platform"] == "windows":
+    # Tout dans la DLL : rien à installer sur le PC.
+    env.Append(LINKFLAGS=["-static", "-static-libgcc", "-static-libstdc++"])
+sources = Glob("src/*.cpp")
+library = env.SharedLibrary(
+    "../scripts/lumiere/bin/liblumiere{}{}".format(env["suffix"], env["SHLIBSUFFIX"]),
+    source=sources,
+)
+Default(library)

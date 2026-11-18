@@ -66,6 +66,17 @@ func _lancer() -> void:
 	_test_halo_cie()
 	await _test_labo_oeil()
 	await _test_image_soleil()
+	# Étape 4 : la planète en rayons (partie C++).
+	_test_cpp_charge()
+	if not ClassDB.class_exists("ArbreLumiere"):
+		return
+	_test_arbre_adresses()
+	_test_sans_fente()
+	_test_glissement()
+	_test_couleurs_stables()
+	_test_choisir_survol()
+	await _test_labo_planete()
+	await _test_image_planete()
 
 
 func _test_reglages() -> void:
@@ -388,3 +399,231 @@ func _test_image_soleil() -> void:
 	var ok := centre > 0.95 and halo > 0.1 and halo < 0.95 and loin < halo and sans < 0.05
 	_resultat(ok, "Image du Soleil : disque blanc, halo autour, rien sans halo",
 		"centre %.2f, à 40 px %.2f, à 330 px %.2f ; halo coupé (H) : %.2f" % [centre, halo, loin, sans])
+
+
+# --- Étape 4 : planète en rayons -------------------------------------------------------------
+
+func _nouvel_arbre() -> Object:
+	var a: Object = ClassDB.instantiate("ArbreLumiere")
+	a.configurer(600000.0, 7, 1024)
+	return a
+
+
+func _point(t: PackedFloat64Array, i: int) -> Vector3:
+	return Vector3(t[i * 3], t[i * 3 + 1], t[i * 3 + 2])
+
+
+## Numéro d'un coin du morceau (a le long de A→B, b le long de A→C), comme en C++.
+func _coin(a: int, b: int) -> int:
+	return MorceauType.numero_coin(a, b)
+
+
+func _test_cpp_charge() -> void:
+	var ok := ClassDB.class_exists("ArbreLumiere")
+	var fichiers := DirAccess.get_files_at("res://scripts/lumiere/bin/")
+	var dll := "liblumiere.windows.template_release.x86_64.dll" in fichiers \
+		and "liblumiere.windows.template_debug.x86_64.dll" in fichiers
+	_resultat(ok and dll, "Partie C++ chargée (GDExtension), DLL Windows présentes",
+		"classe ArbreLumiere %s ; DLL pour le PC %s" % ["trouvée" if ok else "ABSENTE", "présentes" if dll else "ABSENTES"])
+
+
+func _test_arbre_adresses() -> void:
+	var a := _nouvel_arbre()
+	var r: PackedInt64Array = a.racines()
+	var enfant: int = _enfant(r[5], 3)
+	var petit: int = enfant
+	for i in 24:
+		petit = _enfant(petit, i % 4)
+	var ok: bool = r.size() == 20 and a.niveau_de(r[0]) == 0 and a.niveau_de(enfant) == 1 \
+		and a.niveau_de(petit) == 25 and (petit >> 50) == r[5]
+	_resultat(ok, "Arbre : 20 faces de départ, adresses de 64 bits, niveaux",
+		"%d faces, niveau d'un enfant %d, d'un descendant %d (attendu 25), face retrouvée %s" % [
+			r.size(), a.niveau_de(enfant), a.niveau_de(petit), (petit >> 50) == r[5]])
+
+
+func _test_sans_fente() -> void:
+	# 1. Deux faces voisines de l'icosaèdre ont exactement les mêmes coins sur leur bord commun.
+	# 2. Les coins d'un parent se retrouvent à l'identique chez ses enfants (le relief ne change pas).
+	var a := _nouvel_arbre()
+	var r: PackedInt64Array = a.racines()
+	var p0: PackedFloat64Array = a.coins_morceau(r[0])
+	var p1: PackedFloat64Array = a.coins_morceau(r[1])
+	var pire_bord := INF
+	var communs := 0
+	for i in 45:
+		var meilleur := INF
+		for j in 45:
+			meilleur = minf(meilleur, _point(p0, i).distance_to(_point(p1, j)))
+		if meilleur < 100.0:
+			communs += 1
+			pire_bord = meilleur if pire_bord == INF else maxf(pire_bord, meilleur)
+	var parent: int = _enfant(_enfant(r[7], 1), 2)
+	var pp: PackedFloat64Array = a.coins_morceau(parent)
+	var pire_enfant := 0.0
+	var e0: PackedFloat64Array = a.coins_morceau(_enfant(parent, 0))
+	for b in range(0, 5):
+		for c in range(0, 5 - b):
+			# Le coin (2c, 2b) de l'enfant 0 est le coin (c, b) du parent.
+			pire_enfant = maxf(pire_enfant, _point(e0, _coin(2 * c, 2 * b)).distance_to(_point(pp, _coin(c, b))))
+	var ok := communs == 9 and pire_bord < 0.2 and pire_enfant < 0.05
+	_resultat(ok, "Pas de fente : bords communs et coins du parent identiques",
+		"%d coins communs entre 2 faces (attendu 9), écart %.3f m ; parent/enfant : écart %.3f m" % [communs, pire_bord, pire_enfant])
+
+
+func _test_glissement() -> void:
+	# Un enfant part de la forme de son parent (glissement doux) et arrive sur son vrai relief.
+	var a := _nouvel_arbre()
+	var parent: int = _enfant(_enfant(a.racines()[2], 0), 3)
+	for i in 6:
+		parent = _enfant(parent, 3 if i % 2 else 1)
+	var pp: PackedFloat64Array = a.coins_morceau(parent)
+	var enfant: int = _enfant(parent, 0)
+	var dep: PackedFloat64Array = a.coins_depart_morceau(enfant)
+	var cib: PackedFloat64Array = a.coins_morceau(enfant)
+	var pire_pair := 0.0
+	var pire_milieu := 0.0
+	var bouge := 0.0
+	for b in 9:
+		for c in 9 - b:
+			var k := _coin(c, b)
+			if c % 2 == 0 and b % 2 == 0:
+				pire_pair = maxf(pire_pair, _point(dep, k).distance_to(_point(cib, k)))
+			elif b % 2 == 0:
+				var m := (_point(pp, _coin((c - 1) / 2, b / 2)) + _point(pp, _coin((c + 1) / 2, b / 2))) * 0.5
+				pire_milieu = maxf(pire_milieu, _point(dep, k).distance_to(m))
+				bouge = maxf(bouge, _point(dep, k).distance_to(_point(cib, k)))
+	var ok := pire_pair < 0.05 and pire_milieu < 0.05 and bouge > 0.01
+	_resultat(ok, "Glissement : un nouveau triangle part de la forme de son parent",
+		"coins déjà là : écart %.3f m ; nouveaux coins au départ sur le parent : écart %.3f m ; ils bougent ensuite de %.2f m" % [pire_pair, pire_milieu, bouge])
+
+
+func _test_couleurs_stables() -> void:
+	# Couleurs stables : la couleur d'un rayon du parent ≈ la moyenne des rayons de ses enfants
+	# qui couvrent la même surface (pas de saut de teinte quand un triangle se coupe).
+	var a := _nouvel_arbre()
+	var pires := PackedFloat64Array()
+	var r: PackedInt64Array = a.racines()
+	for essai in 4:
+		var parent: int = r[essai * 5]
+		for i in 3 + essai * 2:
+			parent = _enfant(parent, (i + essai) % 4)
+		var cp: PackedFloat32Array = a.couleurs_morceau(parent)
+		var moy_p := 0.0
+		for v in cp:
+			moy_p += v
+		var moy_e := 0.0
+		for k in 4:
+			var ce: PackedFloat32Array = a.couleurs_morceau(_enfant(parent, k))
+			for v in ce:
+				moy_e += v
+		moy_p /= cp.size()
+		moy_e /= cp.size() * 4
+		pires.append(absf(moy_e - moy_p) / maxf(moy_p, 1e-6))
+	var pire := 0.0
+	for v in pires:
+		pire = maxf(pire, v)
+	_resultat(pire < 0.08, "Couleurs stables : parent = moyenne de ses enfants",
+		"plus grand écart sur 4 essais : %.1f %% (attendu moins de 8 %%)" % (pire * 100.0))
+
+
+func _test_choisir_survol() -> void:
+	# Survol à 300 m d'altitude puis montée en orbite : les morceaux suivent, jamais plus que les
+	# places, et le calcul C++ reste dans le budget (choisir 2 ms + éclairer 3 ms par image).
+	var a := _nouvel_arbre()
+	var axes := PackedFloat32Array([1, 0, 0, 0, 0, 1, 0, -1, 0])   # regarde vers l'horizon
+	var tan_v := tan(deg_to_rad(37.5))
+	var tan_h := tan_v * 16.0 / 9.0
+	var r := 600000.0
+	var pire_ms := 0.0
+	var total_ms := 0.0
+	var max_morceaux := 0
+	var niveau_bas := 0
+	var nb := 0
+	for i in 240:
+		var ang := i * 0.00005                       # on avance de 30 m par image
+		var alt: float = 300.0 + a.hauteur_sol(PackedFloat64Array([sin(ang), cos(ang), 0.0])) if i < 180 else 300.0 + (i - 180) * 20000.0
+		var cam := PackedFloat64Array([sin(ang) * (r + alt), cos(ang) * (r + alt), 0.0])
+		axes = PackedFloat32Array([cos(ang), -sin(ang), 0, 0, 0, 1, sin(ang), cos(ang), 0])
+		var t0 := Time.get_ticks_usec()
+		var n: int = a.choisir(cam, axes, tan_h, tan_v, 720.0, i / 60.0)
+		a.eclairer(96, 3.0)
+		var ms := (Time.get_ticks_usec() - t0) / 1000.0
+		if i >= 30:
+			pire_ms = maxf(pire_ms, ms)
+			total_ms += ms
+			nb += 1
+		max_morceaux = maxi(max_morceaux, n)
+		if i == 170:
+			niveau_bas = a.niveau_max_affiche()
+	var niveau_haut: int = a.niveau_max_affiche()
+	var moyen := total_ms / nb
+	var ok := max_morceaux <= 1024 and max_morceaux > 150 and niveau_bas >= 12 and niveau_haut < niveau_bas and moyen < 5.0
+	_resultat(ok, "Choisir + éclairer en C++ : survol à 300 m puis montée en orbite",
+		"%d morceaux au plus (places 1024), niveau le plus fin %d au ras du sol, %d en orbite ; calcul %.2f ms par image en moyenne (pire %.1f ms, budget 5)" % [
+			max_morceaux, niveau_bas, niveau_haut, moyen, pire_ms])
+
+
+func _test_labo_planete() -> void:
+	var labo: Node = load("res://scenes/labo.tscn").instantiate()
+	add_child(labo)
+	await get_tree().process_frame
+	labo.set_process(false)
+	var ok: bool = labo.avec_planete
+	labo.aller_a(5)                                  # rase-mottes, en plein jour
+	for i in 60:
+		labo._process(0.05)
+	var jour: float = labo.luminance_vue
+	var rayons: int = labo.planete.arbre.nb_rayons()
+	labo.aller_a(3)                                  # côté nuit
+	for i in 20:
+		labo._process(0.05)
+	var nuit: float = labo.luminance_vue
+	# On fonce vers le sol : l'œil s'arrête au-dessus.
+	labo.pos_oeil = PackedFloat64Array([0.0, 600000.0 - 50000.0, 0.0])
+	labo._process(0.016)
+	var alt: float = labo.altitude
+	labo.queue_free()
+	ok = ok and jour > 100.0 and nuit < 0.01 and rayons > 2000 and alt >= 1.5 and alt < 3.0
+	_resultat(ok, "Labo : planète en rayons, jour, nuit, sol infranchissable",
+		"jour %.0f cd/m² avec %d rayons ; nuit %.5f cd/m² (rayons + fond du ciel) ; sous le sol → remis à %.1f m" % [jour, rayons, nuit, alt])
+
+
+func _test_image_planete() -> void:
+	if DisplayServer.get_name() == "headless":
+		_resultat(true, "Image de la planète à l'écran", "sauté : pas d'écran ici (il passe sur le PC et dans le cloud avec écran virtuel)")
+		return
+	var labo: Node = load("res://scenes/labo.tscn").instantiate()
+	add_child(labo)
+	texte.visible = false
+	fond.visible = false
+	await get_tree().process_frame
+	labo.aller_a(1)                                  # vue d'orbite, planète à moitié éclairée
+	for i in 30:
+		await get_tree().process_frame
+	labo.oeil.equilibrer(labo.luminance_vue)
+	for i in 4:
+		await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var img := get_viewport().get_texture().get_image()
+	labo.queue_free()
+	texte.visible = true
+	fond.visible = true
+	# Côté jour (gauche de l'écran ou droite) : des pixels clairs ; côté nuit : très sombres ; bords : ciel noir.
+	var clairs := 0
+	var sombres := 0
+	for y in range(100, 620, 20):
+		for x in range(200, 1080, 20):
+			var l := img.get_pixel(x, y).get_luminance()
+			if l > 0.25:
+				clairs += 1
+			elif l < 0.04:
+				sombres += 1
+	var ok := clairs > 150 and sombres > 150
+	_resultat(ok, "Image de la planète : moitié jour, moitié nuit",
+		"%d points clairs, %d points sombres sur 1 144" % [clairs, sombres])
+
+
+## Adresse d'un enfant (comme ArbreLumiere.adresse_enfant), sans nommer la classe C++ : les tests
+## doivent se charger même si la partie C++ manque.
+func _enfant(adresse: int, i: int) -> int:
+	return (adresse << 2) | (i & 3)

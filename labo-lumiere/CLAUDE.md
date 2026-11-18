@@ -59,6 +59,46 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
 - `scripts/lumiere/ciel.gdshader` : ciel (lueur de fond 2e-4 cd/m², disque solaire, couronne de Baumbach).
   Les étoiles arrivent à l'étape 6.
 
+## Planète en rayons et partie C++ (étape 4)
+- **Partie C++** (GDExtension) : classe `ArbreLumiere`, sources dans `cpp/src/` (dossier ignoré par Godot,
+  `.gdignore`), bibliothèques compilées dans `scripts/lumiere/bin/` (`lumiere.gdextension` + .dll Windows
+  + .so Linux, debug ET release : l'éditeur et F5 prennent la version debug). godot-cpp = branche
+  **master** (api_version=4.7), pas le tag 4.5. Compilation dans le cloud :
+  `git clone --depth 1 https://github.com/godotengine/godot-cpp` puis, dans `cpp/` :
+  `scons godot_cpp=<chemin> api_version=4.7 platform=windows use_mingw=yes target=template_debug`
+  (et `template_release`, et `platform=linux` pour les tests du cloud ; mingw : paquet
+  `g++-mingw-w64-x86-64-posix`, scons par pip). La DLL est liée en statique : rien à installer sur le PC.
+- **Dans le cloud** : la première importation sans écran (`--headless --import` sur un `.godot` vide)
+  plante à la FERMETURE dès qu'une classe C++ est enregistrée (bug de Godot en mode sans écran ;
+  l'éditeur normal s'ouvre bien, vérifié avec un écran virtuel). Lancer l'importation deux fois.
+- **Arbre** : 20 faces d'icosaèdre, ×4 par niveau, adresse 64 bits (1 de tête + 5 bits + 2 bits/niveau).
+  Un morceau = triangle coupé 3 fois (64 rayons, 45 coins). Coins par milieux successifs ramenés sur la
+  sphère (mêmes opérations chez les voisins → mêmes nombres). Relief : un coin a les détails de son
+  niveau de NAISSANCE (−2) → un coin ne change jamais de hauteur. Couper à 8 px par rayon, fusionner à 6.
+- **Choisir** : file de priorité (le plus gros à l'écran est coupé d'abord, avec un facteur de vue en biais
+  sqrt(max(|cos|, 0,2))), budget = places − 24 ; tri par l'horizon et le champ de vue. Un parent reste
+  affiché tant que ses 4 enfants ne sont pas calculés. Cache : 12 000 morceaux, on garde les 9 000 plus récents.
+- **Éclairer** : par paquets de 8 sur les fils de calcul, au plus 96 morceaux et 3 ms par image
+  (`budget_eclairer_ms` dans `planete.gd`) ; le reste attend l'image suivante.
+- **Lumière sur les COINS partagés** (pas par rayon) : albédo, direction moyenne et couleur de départ rangés
+  sur les 45 coins, calculés seulement à partir de la direction du coin et de son niveau de naissance →
+  deux morceaux voisins ont les mêmes nombres sur leur bord, et la carte graphique fond d'un coin à l'autre.
+- **Glissement** : un enfant né d'une coupe part de la forme et des couleurs de son parent
+  (`depart`) et glisse en 0,5 s vers les siennes (`cible`) ; le shader mélange selon l'heure d'arrivée
+  (INSTANCE_CUSTOM.x). **Jupes** : petits murs sous les bords des morceaux, contre les fentes entre niveaux.
+- **Étalement** : la direction moyenne (longueur L) = cône de petites faces de demi-angle b,
+  cos b = 2L − 1 ; lumière = moyenne de max(cos, 0) sur le cône (jamais de lumière côté nuit).
+  Même loi dans `planete.gdshader` et dans le posemètre C++.
+- **Profondeur logarithmique** dans `planete.gdshader` (DEPTH) : à reprendre pour tout objet dessiné avec
+  la planète au branchement (étape 8). ATTENTION : Godot 4.7 en Compatibilité utilise une profondeur
+  INVERSÉE (1 = près, 0 = loin) : `DEPTH = 1.0 - log(...)`, sinon la face cachée passe devant.
+- **Posemètre** : `ArbreLumiere.posemetre()` range la lumière des rayons affichés dans 16 × 9 cases.
+- **Rotation** (jour 2 h) : faite en faisant tourner le Soleil autour de la planète (l'œil tourne avec le sol).
+  `tampon_instances()` accepte déjà une vraie rotation pour l'étape 8.
+- **Mesure sur le PC** : `Godot_v4.7.2-stable_win64_console.exe --path labo-lumiere -- --mesure`
+  → `mesures/resultats-planete-pc.md`.
+- Pas encore fait : rebonds de lumière (Q38), retard de la lumière, éclipses par une lune (étape 5).
+
 ## Organisation
 | Chemin | Contenu |
 |---|---|
@@ -70,7 +110,9 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
 | `scripts/lumiere/` | Le système lui-même. Ne charge RIEN en dehors de ce dossier (un test le vérifie) : il sera copié tel quel dans le jeu à l'étape 8 |
 | `scripts/outils/` | Outils du labo (compteur…) |
 | `scripts/tests/` | Les tests |
-| `shaders/` | Programmes de la carte graphique propres au labo (`astre_essai.gdshader`) |
+| `shaders/` | Programmes de la carte graphique propres au labo (`astre_essai.gdshader` = boule de secours sans C++) |
+| `cpp/` | Sources C++ de `ArbreLumiere` (étape 4), ignorées par Godot |
+| `scripts/lumiere/bin/` | Partie C++ compilée (Windows + Linux) |
 | `addons/godot_ai/` | Copié depuis le jeu sur le PC, pas dans le dépôt (`.gitignore`) |
 
 ## Tests automatiques
