@@ -8,6 +8,7 @@ const MorceauType = preload("res://scripts/lumiere/morceau_type.gd")
 const BlocFactice = preload("res://scripts/mesure/bloc_factice.gd")
 const Soleil = preload("res://scripts/lumiere/soleil.gd")
 const Oeil = preload("res://scripts/lumiere/oeil.gd")
+const Orbite = preload("res://scripts/lumiere/orbite.gd")
 
 var texte: RichTextLabel
 var fond: ColorRect
@@ -77,6 +78,12 @@ func _lancer() -> void:
 	_test_choisir_survol()
 	await _test_labo_planete()
 	await _test_image_planete()
+	# Étape 5 : retard de la lumière, petite lune, éclipses avec pénombre.
+	_test_orbite_kepler()
+	_test_retard_lumiere()
+	_test_eclipse_cpp()
+	await _test_labo_lune()
+	await _test_image_eclipse()
 
 
 func _test_reglages() -> void:
@@ -627,3 +634,167 @@ func _test_image_planete() -> void:
 ## doivent se charger même si la partie C++ manque.
 func _enfant(adresse: int, i: int) -> int:
 	return (adresse << 2) | (i & 3)
+
+
+# --- Étape 5 : retard de la lumière, lune, éclipses ------------------------------------------
+
+func _test_orbite_kepler() -> void:
+	var o = Orbite.new()
+	var gm: float = Orbite.gm_boule(600000.0, 3000.0)
+	o.configurer(gm, 6.0e6, Vector3.RIGHT, Vector3.FORWARD)
+	var t: float = o.periode()
+	var attendu := TAU * sqrt(pow(6.0e6, 3.0) / gm)
+	var p0: PackedFloat64Array = o.position(0.0)
+	var p4: PackedFloat64Array = o.position(t / 4.0)
+	var p1: PackedFloat64Array = o.position(t)
+	var rayon := sqrt(p4[0] * p4[0] + p4[1] * p4[1] + p4[2] * p4[2])
+	# Un quart de tour : l'astre est passé de la direction u à la direction v.
+	var quart := Vector3(p4[0], p4[1], p4[2]).normalized().dot(Vector3.FORWARD)
+	var boucle := absf(p1[0] - p0[0]) + absf(p1[2] - p0[2])
+	var ok := absf(t - attendu) < 1e-6 * attendu and absf(rayon - 6.0e6) < 1e-3 and quart > 0.999999 and boucle < 1e-3
+	# Vitesse sur l'orbite = 2 π r / période.
+	ok = ok and absf(o.vitesse() - TAU * 6.0e6 / t) < 1e-6
+	_resultat(ok, "Lune : vraie gravité (loi de Kepler)",
+		"masse de la planète %s kg, un tour en %.1f h, vitesse %.0f m/s, rayon gardé %.3f m près" % [
+			String.num_scientific(gm / Orbite.G), t / 3600.0, o.vitesse(), absf(rayon - 6.0e6)])
+
+
+func _test_retard_lumiere() -> void:
+	# Œil au centre de l'orbite : la lumière met exactement rayon / c.
+	var o = Orbite.new()
+	o.configurer(Orbite.gm_boule(600000.0, 3000.0), 6.0e6, Vector3.RIGHT, Vector3.FORWARD)
+	var centre := PackedFloat64Array([0.0, 0.0, 0.0])
+	var r1: float = o.retard(100.0, centre)
+	var ok := absf(r1 - 6.0e6 / Orbite.C) < 1e-12
+	# Astre très rapide (planète énorme, pour voir l'effet) : on le voit là où il ÉTAIT, et la distance
+	# de ce point à l'œil est bien c × retard.
+	var rapide = Orbite.new()
+	rapide.configurer(1.0e21, 1.0e8, Vector3.RIGHT, Vector3.FORWARD)   # ~3 000 km/s
+	var oeil := PackedFloat64Array([-2.0e8, 0.0, 0.0])
+	var r2: float = rapide.retard(0.0, oeil)
+	var vu: PackedFloat64Array = rapide.position_vue(0.0, oeil)
+	var vrai: PackedFloat64Array = rapide.position(0.0)
+	var d := sqrt(pow(vu[0] - oeil[0], 2.0) + pow(vu[1] - oeil[1], 2.0) + pow(vu[2] - oeil[2], 2.0))
+	var ecart := sqrt(pow(vu[0] - vrai[0], 2.0) + pow(vu[2] - vrai[2], 2.0))
+	ok = ok and absf(d - Orbite.C * r2) < 1.0 and absf(ecart - rapide.vitesse() * r2) < 0.01 * ecart
+	var s = Soleil.new()
+	var r_soleil: float = s.retard(centre)
+	ok = ok and absf(r_soleil - 499.0) < 1.0
+	_resultat(ok, "Retard de la lumière",
+		"lune vue du centre : %.2f ms ; astre rapide vu %.0f km en arrière (%.2f s de retard) ; Soleil : %.1f s" % [
+			r1 * 1000.0, ecart / 1000.0, r2, r_soleil])
+
+
+func _test_eclipse_cpp() -> void:
+	var a := _nouvel_arbre()
+	var s := Soleil.new()   # Soleil sur l'axe x, à 1 UA
+	var alpha: float = s.rayon_angle(PackedFloat64Array([0.0, 0.0, 0.0]))
+	var occ := PackedFloat64Array([1.0e6, 0.0, 0.0, 1000.0])
+	var accord := true
+	for y in [0.0, 900.0, 990.0, 1000.0, 1010.0, 1100.0, 5000.0]:
+		var p := PackedFloat64Array([0.0, y, 0.0])
+		var cpp: float = a.part_visible(p, occ, Vector3.RIGHT, alpha)
+		var gd: float = s.part_visible(p, PackedFloat64Array([1.0e6, 0.0, 0.0]), 1000.0)
+		accord = accord and absf(cpp - gd) < 1e-3
+	# Posemètre : une grosse lune entre le Soleil et la face éclairée assombrit ce que l'œil voit.
+	a.choisir(PackedFloat64Array([2.0e6, 0.0, 0.0]), PackedFloat32Array([-1, 0, 0, 0, 0, -1, 0, 1, 0]), 1.0, 0.6, 720.0, 0.0)
+	for i in 30:
+		a.eclairer(400, 50.0)
+		a.choisir(PackedFloat64Array([2.0e6, 0.0, 0.0]), PackedFloat32Array([-1, 0, 0, 0, 0, -1, 0, 1, 0]), 1.0, 0.6, 720.0, 0.0)
+	var axes := PackedFloat32Array([-1, 0, 0, 0, 0, -1, 0, 1, 0])
+	var oeil := PackedFloat64Array([2.0e6, 0.0, 0.0])
+	var plein: PackedFloat32Array = a.posemetre(oeil, axes, 1.0, 0.6, Vector3.RIGHT, 126000.0, 2e-4)
+	var cache: PackedFloat32Array = a.posemetre(oeil, axes, 1.0, 0.6, Vector3.RIGHT, 126000.0, 2e-4,
+		PackedFloat64Array([3.0e6, 0.0, 0.0, 300000.0]), alpha)
+	var cov: PackedFloat32Array = a.couverture()
+	var milieu := 4 * 16 + 8
+	var ok := accord and cache[milieu] < 0.01 * plein[milieu] and plein[milieu] > 100.0 and cov.size() == 144 \
+		and cov[milieu] > 0.85 and cov[0] < 0.5
+	_resultat(ok, "Éclipse : ombre et pénombre dans la partie C++",
+		"même part du Soleil que soleil.gd : %s ; centre de l'écran %.0f cd/m² → %.2f dans l'ombre d'une lune ; couverture %.2f / %.2f" % [
+			accord, plein[milieu], cache[milieu], cov[milieu], cov[0]])
+
+
+func _test_labo_lune() -> void:
+	var labo: Node = load("res://scenes/labo.tscn").instantiate()
+	add_child(labo)
+	await get_tree().process_frame
+	labo.set_process(false)
+	var ok: bool = labo.lune != null
+	if not ok:
+		labo.queue_free()
+		_resultat(false, "Labo : petite lune et éclipses", "lune absente")
+		return
+	labo.aller_a(2)                                  # en plein jour, face au Soleil
+	for i in 30:
+		labo._process(0.05)
+	var jour: float = labo.luminance_vue
+	labo.aller_a(6)                                  # éclipse totale vue du sol
+	for i in 40:
+		labo._process(0.05)
+	var totale: float = labo.part_visible
+	var eclipse: float = labo.luminance_vue
+	var rayons_lune: int = labo.lune.arbre.nb_rayons()
+	# On avance le temps (×1000) : l'ombre de la lune s'en va, le Soleil revient.
+	labo.acceleration = 1000.0
+	for i in 30:
+		labo._process(0.05)
+	var apres: float = labo.part_visible
+	labo.acceleration = 1.0
+	labo.aller_a(8)                                  # éclipse de lune, près de la lune
+	for i in 40:
+		labo._process(0.05)
+	var d_lune: float = labo._distance_lune()
+	var loin_lune: int = labo.lune.arbre.nb_rayons()
+	# On descend à 20 km de son sol : les triangles de la lune se coupent.
+	var vers: Vector3 = Vector3(labo.pos_oeil[0] - labo.pos_lune[0], labo.pos_oeil[1] - labo.pos_lune[1],
+		labo.pos_oeil[2] - labo.pos_lune[2]).normalized() * (labo.RAYON_LUNE + 20000.0)
+	labo.pos_oeil = PackedFloat64Array([labo.pos_lune[0] + vers.x, labo.pos_lune[1] + vers.y, labo.pos_lune[2] + vers.z])
+	labo.camera.basis = Basis.looking_at(-vers, vers.cross(Vector3.RIGHT).normalized())
+	for i in 40:
+		labo._process(0.05)
+	var pres_lune: int = labo.lune.arbre.nb_rayons()
+	# On fonce dans la lune : l'œil s'arrête au-dessus de son sol.
+	labo.pos_oeil = labo.pos_lune.duplicate()
+	labo._process(0.016)
+	var alt: float = labo._altitude_lune()
+	var retard: float = labo.retard_lune
+	labo.queue_free()
+	ok = totale < 0.001 and eclipse < 0.01 * jour and apres > 0.999 and rayons_lune > 0 and pres_lune > maxi(2000, loin_lune) \
+		and d_lune < 700000.0 and alt >= 1.5 and alt < 3.0 and retard > 0.0
+	_resultat(ok, "Labo : petite lune, éclipse de Soleil totale, éclipse de lune",
+		"Soleil visible pendant l'éclipse %.3f, l'œil voit %.4f au lieu de %.0f cd/m², puis Soleil revenu %.2f ; lune à 500 km %d rayons, à 20 km %d ; sous son sol → %.1f m" % [
+			totale, eclipse, jour, apres, loin_lune, pres_lune, alt])
+
+
+func _test_image_eclipse() -> void:
+	if DisplayServer.get_name() == "headless":
+		_resultat(true, "Image : ombre de la lune sur la planète", "sauté : pas d'écran ici (il passe sur le PC et dans le cloud avec écran virtuel)")
+		return
+	var labo: Node = load("res://scenes/labo.tscn").instantiate()
+	add_child(labo)
+	texte.visible = false
+	fond.visible = false
+	await get_tree().process_frame
+	labo.aller_a(7)
+	for i in 30:
+		await get_tree().process_frame
+	labo.oeil.equilibrer(labo.luminance_vue)
+	for i in 4:
+		await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var img := get_viewport().get_texture().get_image()
+	var g: Vector3 = labo._vers_planete(labo._lieu_eclipse()) * 600000.0
+	var cam: Camera3D = labo.camera
+	var rel := g - Vector3(labo.pos_oeil[0], labo.pos_oeil[1], labo.pos_oeil[2])
+	var ombre_px := cam.unproject_position(rel)
+	var centre_px := cam.unproject_position(-Vector3(labo.pos_oeil[0], labo.pos_oeil[1], labo.pos_oeil[2]))
+	var lumiere_px := centre_px + (centre_px - ombre_px) * 0.5   # de l'autre côté du centre, en plein jour
+	var dans_ombre := img.get_pixelv(Vector2i(ombre_px)).get_luminance()
+	var au_soleil := img.get_pixelv(Vector2i(lumiere_px)).get_luminance()
+	labo.queue_free()
+	texte.visible = true
+	fond.visible = true
+	var ok := dans_ombre < 0.05 and au_soleil > 0.3
+	_resultat(ok, "Image : ombre de la lune sur la planète",
+		"dans l'ombre %.2f, au soleil %.2f (pixels %s et %s)" % [dans_ombre, au_soleil, Vector2i(ombre_px), Vector2i(lumiere_px)])

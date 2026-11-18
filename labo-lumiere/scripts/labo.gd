@@ -11,6 +11,10 @@ extends Node3D
 ## 1 vue d'orbite · 2 regarder le Soleil · 3 côté nuit · 4 coucher de Soleil (éclipse par la planète)
 ## 5 rase-mottes · H halo de l'œil oui / non · T adaptation au noir réelle ou accélérée
 ## R rotation de la planète oui / non
+## Étape 5 : une petite lune (150 km) tourne autour de la planète (vraie gravité de Newton), sa lumière
+## arrive avec retard (vitesse de la lumière), et elle fait des éclipses avec pénombre.
+## 6 éclipse de Soleil vue du sol · 7 l'ombre de la lune vue d'orbite · 8 éclipse de lune
+## V temps accéléré (×1, ×10, ×100, ×1000)
 
 const Compteur = preload("res://scripts/outils/compteur.gd")
 const Soleil = preload("res://scripts/lumiere/soleil.gd")
@@ -18,6 +22,8 @@ const Oeil = preload("res://scripts/lumiere/oeil.gd")
 const ShaderCiel = preload("res://scripts/lumiere/ciel.gdshader")
 const ShaderAstre = preload("res://shaders/astre_essai.gdshader")
 const Planete = preload("res://scripts/lumiere/planete.gd")
+const Orbite = preload("res://scripts/lumiere/orbite.gd")
+const ChronoBoucle = preload("res://scripts/lumiere/chrono_boucle.gd")
 
 const RAYON_ASTRE := 600000.0            # m : la planète d'essai (niveau 0 de l'arbre ≈ 630 km)
 const GRAINE := 7
@@ -30,12 +36,31 @@ const ALTITUDE_MIN := 1.8                # m : l'œil ne descend pas sous le sol
 ## (éblouissement). Il ne compte donc que très peu dans l'adaptation de tout l'œil.
 const PART_DISQUE_ADAPTATION := 0.03
 const VERS_SOLEIL := Vector3(1.0, 0.25, 0.2)
+## La petite lune (Q42) : 150 km de rayon, à 6 000 km du centre de la planète (10 rayons).
+## Vue du sol, elle paraît 6 fois plus grande que le Soleil : ses éclipses de Soleil sont totales.
+const RAYON_LUNE := 150000.0
+const GRAINE_LUNE := 23
+const PLACES_LUNE := 512
+const ORBITE_LUNE := 6.0e6
+## Masse volumique de la planète (roche, comme la Lune) : donne sa masse, donc la vitesse de la lune.
+const MASSE_VOLUMIQUE := 3000.0
+const ACCELERATIONS: PackedFloat64Array = [1.0, 10.0, 100.0, 1000.0]
 
 var camera: Camera3D
 var compteur: CanvasLayer
 var astre: MeshInstance3D               # boule de secours
 var planete: MultiMeshInstance3D         # planète en rayons (partie C++)
 var avec_planete := false
+var lune: MultiMeshInstance3D            # la petite lune en rayons (partie C++)
+var orbite = Orbite.new()
+var temps_astres := 0.0                  # horloge des astres (s), qui peut être accélérée (V)
+var acceleration := 1.0
+var pos_lune := PackedFloat64Array([ORBITE_LUNE, 0.0, 0.0])   # où l'œil VOIT la lune (repère de la planète)
+var rot_lune := Basis.IDENTITY           # orientation de la lune (elle montre toujours la même face)
+var retard_lune := 0.0                   # s : temps mis par la lumière de la lune pour arriver à l'œil
+var oeil_lune := PackedFloat64Array([0.0, 0.0, 0.0])   # l'œil dans le repère de la lune
+var chrono_planete = ChronoBoucle.new()
+var chrono_lune = ChronoBoucle.new()
 var rotation_on := true
 var temps := 0.0                         # horloge du labo (s)
 var angle_jour := 0.0                    # rad : de combien la planète a tourné
@@ -56,6 +81,9 @@ const PHASES_MESURE := [
 	["Face au Soleil (2)", 2, 4.0, false],
 	["Côté nuit (3)", 3, 4.0, false],
 	["Coucher de Soleil (4)", 4, 4.0, false],
+	["Éclipse de Soleil au sol (6)", 6, 4.0, false],
+	["Ombre de la lune vue d'orbite (7)", 7, 4.0, false],
+	["Éclipse de lune (8)", 8, 4.0, false],
 	["Orbite, planète cachée (ciel seul)", -1, 4.0, false],
 ]
 var mesure_auto := false
@@ -93,6 +121,22 @@ func _ready() -> void:
 		push_warning("Partie C++ du système de lumière absente : boule d'essai à la place de la planète.")
 		planete.free()
 		planete = null
+
+	# La lune : orbite dans le plan qui contient la direction du Soleil, pour qu'il y ait une éclipse
+	# de Soleil et une éclipse de lune à chaque tour.
+	var s0 := VERS_SOLEIL.normalized()
+	orbite.configurer(Orbite.gm_boule(RAYON_ASTRE, MASSE_VOLUMIQUE), ORBITE_LUNE, s0, Vector3.UP.cross(s0))
+	orbite.phase = 1.2
+	if avec_planete:
+		lune = Planete.new()
+		lune.name = "Lune"
+		if lune.preparer(RAYON_LUNE, GRAINE_LUNE, PLACES_LUNE):
+			lune.max_par_image = 48
+			lune.budget_eclairer_ms = 1.5
+			add_child(lune)
+		else:
+			lune.free()
+			lune = null
 
 	astre = MeshInstance3D.new()
 	astre.name = "Astre"
@@ -166,6 +210,73 @@ func aller_a(n: int) -> void:
 			var d := (s + cote * 1.6).normalized()
 			var avant := d.cross(Vector3.UP).normalized()
 			_placer(d * (r + _sol(d) + 200.0), (avant - d * 0.08).normalized())
+		6, 7:
+			# L'ombre de la lune tombe sur un lieu où le Soleil est à 35° au-dessus de l'horizon.
+			var g_fixe := _lieu_eclipse()
+			var g := _vers_planete(g_fixe)
+			if n == 6:
+				_placer(g * (r + _sol(g) + 30.0), (s - g * 0.25).normalized())
+			else:
+				var e := (g + s).normalized() * r * 3.0
+				_placer(e, -e)
+		8:
+			# La lune au bord de l'ombre de la planète : une moitié dans le noir, une bande de pénombre.
+			var s0 := VERS_SOLEIL.normalized()
+			var est: Vector3 = orbite.v
+			var bord := r - ORBITE_LUNE * soleil.rayon_angle(PackedFloat64Array([0.0, 0.0, 0.0]))
+			var m: Vector3 = -s0 * sqrt(ORBITE_LUNE * ORBITE_LUNE - bord * bord) + est * bord
+			orbite.placer(temps_astres, m)
+			_placer_lune()
+			var c := Vector3(pos_lune[0], pos_lune[1], pos_lune[2])
+			var e := c + s * 500000.0 + _vers_planete(est) * 200000.0
+			_placer(e, c - e)
+			_garder_au_dessus_du_sol()
+
+
+## Lieu (repère fixe, longueur 1) où tombe l'ombre de la lune aux points de vue 6 et 7 : à 55° du point
+## sous le Soleil, en matinée. La lune est placée sur la droite qui va de ce lieu vers le Soleil.
+func _lieu_eclipse() -> Vector3:
+	var s0 := VERS_SOLEIL.normalized()
+	# Le matin (côté où le sol tourne vers le Soleil) : après l'éclipse, il fait encore jour longtemps.
+	var g: Vector3 = (s0 * cos(deg_to_rad(55.0)) - orbite.v * sin(deg_to_rad(55.0))).normalized()
+	# m = R g + t s0, avec |m| = rayon de l'orbite.
+	var b: float = RAYON_ASTRE * g.dot(s0)
+	var t: float = -b + sqrt(b * b - RAYON_ASTRE * RAYON_ASTRE + ORBITE_LUNE * ORBITE_LUNE)
+	orbite.placer(temps_astres, g * RAYON_ASTRE + s0 * t)
+	_placer_lune()
+	return g
+
+
+## Repère fixe (qui ne tourne pas) → repère de la planète (qui tourne avec le jour).
+func _vers_planete(v: Vector3) -> Vector3:
+	return v.rotated(Vector3.UP, -angle_jour)
+
+
+## Position et orientation de la lune telles que l'œil les VOIT (retard de la lumière compris).
+func _placer_lune() -> void:
+	var o := Vector3(pos_oeil[0], pos_oeil[1], pos_oeil[2]).rotated(Vector3.UP, angle_jour)
+	var oeil_fixe := PackedFloat64Array([o.x, o.y, o.z])
+	retard_lune = orbite.retard(temps_astres, oeil_fixe)
+	var t_vu := temps_astres - retard_lune
+	var p_fixe: PackedFloat64Array = orbite.position(t_vu)
+	# Rotation en 64 bits (la lune est loin : une rotation en 32 bits la décalerait de plusieurs mètres).
+	var ca := cos(-angle_jour)
+	var sa := sin(-angle_jour)
+	pos_lune = PackedFloat64Array([ca * p_fixe[0] + sa * p_fixe[2], p_fixe[1], -sa * p_fixe[0] + ca * p_fixe[2]])
+	# Elle montre toujours la même face à la planète : elle tourne sur elle-même une fois par tour.
+	var normale: Vector3 = orbite.u.cross(orbite.v).normalized()
+	rot_lune = Basis(Vector3.UP, -angle_jour) * Basis(normale, orbite.angle(t_vu))
+	var dx := pos_oeil[0] - pos_lune[0]
+	var dy := pos_oeil[1] - pos_lune[1]
+	var dz := pos_oeil[2] - pos_lune[2]
+	oeil_lune = _vers_lune(dx, dy, dz)
+
+
+## Vecteur du repère de la planète → repère de la lune (en 64 bits).
+func _vers_lune(dx: float, dy: float, dz: float) -> PackedFloat64Array:
+	var b := rot_lune
+	return PackedFloat64Array([b.x.x * dx + b.x.y * dy + b.x.z * dz, b.y.x * dx + b.y.y * dy + b.y.z * dz,
+		b.z.x * dx + b.z.y * dy + b.z.z * dz])
 
 
 ## Direction vers le Soleil dans le repère de la planète, compte tenu de la rotation.
@@ -234,6 +345,12 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_3, KEY_KP_3: aller_a(3)
 			KEY_4, KEY_KP_4: aller_a(4)
 			KEY_5, KEY_KP_5: aller_a(5)
+			KEY_6, KEY_KP_6: aller_a(6)
+			KEY_7, KEY_KP_7: aller_a(7)
+			KEY_8, KEY_KP_8: aller_a(8)
+			KEY_V:
+				var i := ACCELERATIONS.find(acceleration)
+				acceleration = ACCELERATIONS[(i + 1) % ACCELERATIONS.size()]
 			KEY_R: rotation_on = not rotation_on
 			KEY_H: oeil.halo = not oeil.halo
 			KEY_T: oeil.temps_reel = not oeil.temps_reel
@@ -253,8 +370,9 @@ func _process(delta: float) -> void:
 		if _phase >= 0 and _phase < PHASES_MESURE.size() and PHASES_MESURE[_phase][3]:
 			dir.z -= 1
 	temps += delta
+	temps_astres += delta * acceleration
 	if rotation_on:
-		angle_jour = fmod(angle_jour + TAU * delta / DUREE_JOUR, TAU)
+		angle_jour = fmod(angle_jour + TAU * delta * acceleration / DUREE_JOUR, TAU)
 	_placer_soleil()
 	if dir != Vector3.ZERO:
 		# Vitesse proportionnelle à l'altitude : lent au ras du sol, rapide en orbite.
@@ -275,31 +393,57 @@ func _process(delta: float) -> void:
 			_distance(altitude), "%d %%" % roundi(angle_jour / TAU * 100.0) if rotation_on else "arrêté (R)"]
 	else:
 		infos_planete = "Planète : partie C++ absente, boule d'essai\n"
+	if lune:
+		infos_planete += "Lune : à %s · sa lumière met %s à arriver (celle du Soleil %s) · temps ×%d (V)\n" % [
+			_distance(_distance_lune()), _duree(retard_lune), _duree(soleil.retard(pos_oeil)), roundi(acceleration)]
 	compteur.infos = infos_planete + "Œil : pupille %.1f mm · habitué à %s cd/m² · vision de nuit %d %% · Soleil visible %d %%\n" % [
 		oeil.pupille_mm, _nombre(oeil.luminance_adaptation()), roundi(oeil.nuit() * 100.0), roundi(part_visible * 100.0)] \
-		+ "1-5 points de vue · R rotation · H halo %s · T adaptation au noir %s" % [
+		+ "1-8 points de vue · R rotation · H halo %s · T adaptation au noir %s" % [
 		"oui" if oeil.halo else "non", "réelle (lente)" if oeil.temps_reel else "accélérée"]
 
 
 ## Place le monde autour de la caméra, envoie le Soleil aux shaders et mesure la lumière vue.
 func _mettre_a_jour_monde() -> void:
 	camera.position = Vector3.ZERO
+	_placer_lune()
 	var rel := Vector3(pos_astre[0] - pos_oeil[0], pos_astre[1] - pos_oeil[1], pos_astre[2] - pos_oeil[2])
 	var d := rel.length()
 	altitude = d - RAYON_ASTRE - _sol(-rel / maxf(d, 1.0))
-	# Plan proche et plan lointain de la caméra : jusqu'aux montagnes derrière l'horizon.
+	var rel_lune := _rel_lune()
+	if lune:
+		altitude = minf(altitude, _altitude_lune())
+	# Plan proche et plan lointain de la caméra : jusqu'aux montagnes derrière l'horizon (et la lune).
 	var h := 12000.0
 	camera.near = clampf(altitude * 0.05, 0.05, 20000.0)
 	var bas := RAYON_ASTRE - h
 	camera.far = sqrt(maxf(d * d - bas * bas, 0.0)) + sqrt((RAYON_ASTRE + h) ** 2 - bas * bas) + 1000.0
+	if lune:
+		camera.far = maxf(camera.far, rel_lune.length() + RAYON_LUNE * 1.1)
 	if avec_planete:
-		planete.mettre_a_jour(camera, pos_oeil, PackedFloat64Array([rel.x, rel.y, rel.z]), temps, compteur.chrono)
+		chrono_planete.nb_rayons = 0
+		if lune:
+			planete.occulteur = PackedFloat64Array([pos_lune[0], pos_lune[1], pos_lune[2], RAYON_LUNE])
+		planete.mettre_a_jour(camera, pos_oeil, PackedFloat64Array([rel.x, rel.y, rel.z]), temps, chrono_planete,
+			Vector4(rel_lune.x, rel_lune.y, rel_lune.z, RAYON_LUNE if lune else 0.0))
+		if lune:
+			lune.rotation_astre = rot_lune
+			var c := _vers_lune(pos_astre[0] - pos_lune[0], pos_astre[1] - pos_lune[1], pos_astre[2] - pos_lune[2])
+			lune.occulteur = PackedFloat64Array([c[0], c[1], c[2], RAYON_ASTRE])
+			lune.mettre_a_jour(camera, oeil_lune, PackedFloat64Array([rel_lune.x, rel_lune.y, rel_lune.z]), temps,
+				chrono_lune, Vector4(rel.x, rel.y, rel.z, RAYON_ASTRE))
+		# Le compteur montre la somme des deux astres.
+		for i in 3:
+			compteur.chrono.enregistrer(i, chrono_planete.derniers_ms[i] + (chrono_lune.derniers_ms[i] if lune else 0.0))
+		compteur.chrono.nb_rayons = chrono_planete.nb_rayons + (chrono_lune.nb_rayons if lune else 0)
 	else:
 		astre.position = rel
 		astre.scale = Vector3.ONE * RAYON_ASTRE
 
 	var s: Vector3 = soleil.direction(pos_oeil)
 	part_visible = soleil.part_visible(pos_oeil, pos_astre, RAYON_ASTRE)
+	if lune:
+		# Deux astres peuvent cacher le Soleil : on retire la part cachée par chacun.
+		part_visible = clampf(part_visible + soleil.part_visible(pos_oeil, pos_lune, RAYON_LUNE) - 1.0, 0.0, 1.0)
 	var e: float = soleil.eclairement(pos_oeil)
 	var alpha: float = soleil.rayon_angle(pos_oeil)
 	var rs := RenderingServer
@@ -313,6 +457,29 @@ func _mettre_a_jour_monde() -> void:
 	luminance_vue = _poser(rel, s, e, alpha)
 
 
+## La lune par rapport à l'œil, dans le repère d'affichage.
+func _rel_lune() -> Vector3:
+	return Vector3(pos_lune[0] - pos_oeil[0], pos_lune[1] - pos_oeil[1], pos_lune[2] - pos_oeil[2])
+
+
+func _distance_lune() -> float:
+	return _rel_lune().length()
+
+
+## Altitude de l'œil au-dessus du sol de la lune.
+func _altitude_lune() -> float:
+	var d := sqrt(oeil_lune[0] * oeil_lune[0] + oeil_lune[1] * oeil_lune[1] + oeil_lune[2] * oeil_lune[2])
+	return d - RAYON_LUNE - lune.hauteur_sol(PackedFloat64Array([oeil_lune[0] / d, oeil_lune[1] / d, oeil_lune[2] / d]))
+
+
+static func _duree(s: float) -> String:
+	if s >= 60.0:
+		return "%d min %02d s" % [floori(s / 60.0), roundi(fmod(s, 60.0))]
+	if s >= 1.0:
+		return "%.1f s" % s
+	return "%.1f ms" % (s * 1000.0)
+
+
 ## L'œil ne passe pas sous le sol.
 func _garder_au_dessus_du_sol() -> void:
 	var p := Vector3(pos_oeil[0] - pos_astre[0], pos_oeil[1] - pos_astre[1], pos_oeil[2] - pos_astre[2])
@@ -321,6 +488,15 @@ func _garder_au_dessus_du_sol() -> void:
 	if d < mini:
 		var q := p / maxf(d, 1.0) * mini
 		pos_oeil = PackedFloat64Array([pos_astre[0] + q.x, pos_astre[1] + q.y, pos_astre[2] + q.z])
+	if lune:
+		_placer_lune()
+		var alt := _altitude_lune()
+		if alt < ALTITUDE_MIN:
+			var dl := sqrt(oeil_lune[0] ** 2 + oeil_lune[1] ** 2 + oeil_lune[2] ** 2)
+			var k := (dl + ALTITUDE_MIN - alt) / dl
+			var v := Vector3(pos_oeil[0] - pos_lune[0], pos_oeil[1] - pos_lune[1], pos_oeil[2] - pos_lune[2]) * (k - 1.0)
+			pos_oeil = PackedFloat64Array([pos_oeil[0] + v.x, pos_oeil[1] + v.y, pos_oeil[2] + v.z])
+			_placer_lune()
 
 
 static func _distance(m: float) -> String:
@@ -341,7 +517,18 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float) -> float:
 	var e_oeil := _eclairement_oeil(e, s)
 	var cases := PackedFloat32Array()
 	if avec_planete:
-		cases = planete.posemetre(camera, pos_oeil, s, e, FOND_CIEL)
+		cases = planete.posemetre(camera, pos_oeil, s, e, FOND_CIEL, alpha)
+		if lune:
+			# Deux astres : celui de devant cache celui de derrière, case par case.
+			var cov_p: PackedFloat32Array = planete.couverture()
+			var cases_l: PackedFloat32Array = lune.posemetre(camera, oeil_lune, s, e, FOND_CIEL, alpha)
+			var cov_l: PackedFloat32Array = lune.couverture()
+			var lune_devant := _distance_lune() < rel.length()
+			for k in cases.size():
+				if lune_devant:
+					cases[k] = cases_l[k] - FOND_CIEL * (1.0 - cov_l[k]) + (1.0 - cov_l[k]) * cases[k]
+				else:
+					cases[k] = cases[k] - FOND_CIEL * (1.0 - cov_p[k]) + (1.0 - cov_p[k]) * cases_l[k]
 	for j in 9:
 		for i in 16:
 			var u := (i + 0.5) / 16.0 * 2.0 - 1.0
@@ -439,12 +626,14 @@ func _avancer_mesure(delta: float) -> void:
 		aller_a(1)
 		if avec_planete:
 			planete.visible = false
+		if lune:
+			lune.visible = false
 	else:
 		aller_a(vue)
 
 
 func _ecrire_mesure() -> void:
-	var texte := "# Mesure de la planète en rayons (étape 4)\n\n"
+	var texte := "# Mesure de la planète en rayons et de sa lune (étapes 4 et 5)\n\n"
 	texte += "Date : %s · %s · %s\n\n" % [Time.get_datetime_string_from_system(), OS.get_processor_name(),
 		RenderingServer.get_video_adapter_name()]
 	texte += "Sans synchronisation avec l'écran (vsync coupée). Dessiner = processeur + carte graphique (Godot) ;\n"

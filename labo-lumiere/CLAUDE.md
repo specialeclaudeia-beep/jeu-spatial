@@ -97,7 +97,34 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
   `tampon_instances()` accepte déjà une vraie rotation pour l'étape 8.
 - **Mesure sur le PC** : `Godot_v4.7.2-stable_win64_console.exe --path labo-lumiere -- --mesure`
   → `mesures/resultats-planete-pc.md`.
-- Pas encore fait : rebonds de lumière (Q38), retard de la lumière, éclipses par une lune (étape 5).
+- Pas encore fait : rebonds de lumière (Q38).
+
+## Lune, éclipses et retard de la lumière (étape 5)
+- **Lune** (Q42) : 2e `Planete` (rayon 150 km, graine 23, 512 places, éclairer 48 morceaux / 1,5 ms),
+  à 6 000 km du centre. `preparer(rayon, graine, places)`. Elle a sa propre rotation
+  (`planete.rotation_astre`, envoyée à `tampon_instances` ; l'œil et les axes de la caméra passent dans
+  son repère avec la transposée). Elle montre toujours la même face à la planète.
+- **Orbite** (`scripts/lumiere/orbite.gd`) : vraie gravité de Newton, orbite circulaire de Kepler
+  (masse de la planète = boule de roche 3 000 kg/m³ → un tour en 60 h, 174 m/s). Repère FIXE (qui ne
+  tourne pas) ; le labo travaille dans le repère de la planète, qui tourne : passage par une rotation de
+  −angle_jour autour de Y (`_vers_planete`). Plan de l'orbite = contient la direction du Soleil
+  → une éclipse de Soleil et une de lune à chaque tour.
+- **Retard de la lumière** : `orbite.retard(t, oeil)` résout |p(t − r) − œil| = c r (6 tours) ;
+  la lune est dessinée là où elle ÉTAIT (`position_vue`). Le Soleil ne bouge pas dans le repère fixe :
+  sa lumière a 8 min 19 s de retard (affiché) mais sa direction ne change pas. Effets minuscules ici
+  (lune : 20 ms, 3,5 m), ils compteront pour les étoiles proches et les grandes vitesses (étape 6).
+- **Éclipses avec pénombre** : chaque astre a un « occulteur » (l'autre astre). Dans `planete.gdshader`,
+  la part visible du disque solaire est calculée AUX COINS (recouvrement de deux disques, même formule
+  que `soleil.gd` et la partie C++), uniform `occulteur` (centre par rapport à la caméra, rayon en w).
+  Dans la partie C++, `posemetre(..., occulteur, soleil_angle)` fait de même rayon par rayon, et
+  `couverture()` donne la part de chaque case couverte par l'astre (pour mettre la lune devant la planète
+  case par case dans `labo._poser`). Pour l'œil : part visible = vp + vl − 1 (deux occulteurs).
+- **Temps accéléré** : V (×1, ×10, ×100, ×1000) agit sur la rotation et l'orbite (`temps_astres`), PAS
+  sur l'œil ni sur le glissement (horloge `temps`).
+- Points de vue : 6 éclipse totale vue du sol (matin, Soleil à 35°), 7 ombre de la lune vue d'orbite,
+  8 éclipse de lune (la lune au bord de l'ombre de la planète, vue à 500 km).
+- Pas encore fait : lumière de la planète sur la lune (et inversement) = rebonds Q38 ; la lune côté nuit
+  est donc noire.
 
 ## Organisation
 | Chemin | Contenu |
@@ -107,7 +134,7 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
 | `scenes/labo.tscn` | Scène principale (planète, Soleil, caméra libre au fil des étapes) |
 | `scenes/mesure.tscn` | Mesure de vitesse (créée à l'étape 2) |
 | `scenes/tests.tscn` | Tests automatiques |
-| `scripts/lumiere/` | Le système lui-même. Ne charge RIEN en dehors de ce dossier (un test le vérifie) : il sera copié tel quel dans le jeu à l'étape 8 |
+| `scripts/lumiere/` | Le système lui-même (`orbite.gd` : lune et retard de la lumière, étape 5). Ne charge RIEN en dehors de ce dossier (un test le vérifie) : il sera copié tel quel dans le jeu à l'étape 8 |
 | `scripts/outils/` | Outils du labo (compteur…) |
 | `scripts/tests/` | Les tests |
 | `shaders/` | Programmes de la carte graphique propres au labo (`astre_essai.gdshader` = boule de secours sans C++) |
