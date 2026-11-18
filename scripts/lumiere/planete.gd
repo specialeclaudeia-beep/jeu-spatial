@@ -180,8 +180,8 @@ func mettre_a_jour(camera: Camera3D, oeil: PackedFloat64Array, vers_centre: Pack
 ## Le posemètre : luminance (cd/m²) de 16 × 9 cases de l'écran, tirée des rayons affichés.
 ## Le Soleil caché par l'occulteur (éclipse) est pris en compte rayon par rayon.
 ## soleil_dir est donné dans le repère d'affichage.
-## Einstein A2 : à grande vitesse, les cases couvrent le champ « au repos » (voir champ_repos) et leur
-## luminance est multipliée par l'effet Doppler au centre de la planète (approximation pour régler l'œil).
+## Einstein A2 : à grande vitesse, les cases sont mesurées dans le champ « au repos » (voir champ_repos),
+## puis chaque case est renvoyée là où l'œil la voit (_cases_vues).
 func posemetre(camera: Camera3D, oeil: PackedFloat64Array, soleil_dir: Vector3, eclairement: float,
 		fond: float, soleil_angle := 0.004652) -> PackedFloat32Array:
 	var vers_centre := PackedFloat64Array([-oeil[0], -oeil[1], -oeil[2]])
@@ -191,10 +191,8 @@ func posemetre(camera: Camera3D, oeil: PackedFloat64Array, soleil_dir: Vector3, 
 	var tv: float = champ[6] if champ.size() > 6 else champ[5]
 	var cases: PackedFloat32Array = arbre.posemetre(oeil, champ[4], champ[5], tv, s, eclairement, fond,
 		occulteur, soleil_angle)
-	if doppler_centre != 1.0:
-		var k := Etoiles.facteur_luminance(doppler_centre, Etoiles.T_SOLEIL)
-		for i in cases.size():
-			cases[i] *= k
+	if vitesse_oeil != Vector3.ZERO:
+		cases = _cases_vues(camera, cases, champ[4], champ[5])
 	return cases
 
 
@@ -205,6 +203,54 @@ func carte_ciel(oeil: PackedFloat64Array, soleil_dir: Vector3, eclairement: floa
 		soleil_angle := 0.004652) -> PackedFloat32Array:
 	var s := rotation_astre.transposed() * soleil_dir
 	return arbre.carte_ciel(oeil, rotation_astre, largeur, hauteur, s, eclairement, occulteur, soleil_angle)
+
+
+## Einstein A2 : les 16 × 9 cases mesurées « au repos » (axes en paquet, tangente tp), vues par l'œil qui
+## va vite : chaque case est vue ailleurs (aberration), plus petite ou plus grande (son angle solide
+## divisé par D²) et plus ou moins brillante (D⁴, couleur du corps noir à D × 5 772 K). On garde celles
+## qui tombent dans l'écran, et chaque case de l'écran reçoit la moyenne pondérée de celles qui y tombent
+## (ou, s'il n'y en a aucune, la moyenne de tout l'écran).
+func _cases_vues(camera: Camera3D, cases: PackedFloat32Array, axes: PackedFloat32Array, tp: float) -> PackedFloat32Array:
+	var taille := camera.get_viewport().get_visible_rect().size
+	var tv := tan(deg_to_rad(camera.fov) * 0.5)
+	var th := tv * taille.x / taille.y
+	var a := rotation_astre * Vector3(axes[0], axes[1], axes[2])
+	var dr := rotation_astre * Vector3(axes[3], axes[4], axes[5])
+	var hu := rotation_astre * Vector3(axes[6], axes[7], axes[8])
+	var inv := camera.global_transform.basis.inverse()
+	var somme := PackedFloat64Array()
+	var poids := PackedFloat64Array()
+	somme.resize(cases.size())
+	poids.resize(cases.size())
+	var total := 0.0
+	var total_poids := 0.0
+	for j in 9:
+		for i in 16:
+			var x := ((i + 0.5) / 16.0 * 2.0 - 1.0) * tp
+			var y := ((j + 0.5) / 9.0 * 2.0 - 1.0) * tp
+			var r := (a + dr * x - hu * y).normalized()
+			var ab: Array = Etoiles.aberration(r, vitesse_oeil)
+			var d: float = ab[1]
+			var vu: Vector3 = inv * (ab[0] as Vector3)
+			if vu.z >= 0.0:
+				continue
+			var sx := vu.x / (-vu.z * th)
+			var sy := -vu.y / (-vu.z * tv)
+			if absf(sx) >= 1.0 or absf(sy) >= 1.0:
+				continue
+			var w := 1.0 / (pow(1.0 + x * x + y * y, 1.5) * d * d)
+			var l := cases[j * 16 + i] * Etoiles.facteur_luminance(d, Etoiles.T_SOLEIL)
+			var k := mini(8, int((sy + 1.0) * 4.5)) * 16 + mini(15, int((sx + 1.0) * 8.0))
+			somme[k] += l * w
+			poids[k] += w
+			total += l * w
+			total_poids += w
+	var moyenne := total / total_poids if total_poids > 0.0 else 0.0
+	var sortie := PackedFloat32Array()
+	sortie.resize(cases.size())
+	for k in cases.size():
+		sortie[k] = somme[k] / poids[k] if poids[k] > 0.0 else moyenne
+	return sortie
 
 
 ## Part de chaque case (0 à 1) couverte par la planète au dernier posemètre.

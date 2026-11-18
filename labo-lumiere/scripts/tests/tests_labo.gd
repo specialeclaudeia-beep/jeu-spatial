@@ -124,6 +124,9 @@ func _lancer() -> void:
 	_test_fresnel_lames()
 	_test_carte_ciel_rayons()
 	_test_melange_cartes()
+	# Suite du programme : rebonds de la lumière sur le sol (Q38).
+	_test_rebonds()
+	_test_light_sans_double_srgb()
 	# Einstein A2 : planète et lune vues à grande vitesse.
 	await _test_champ_repos()
 	await _test_planete_vitesse()
@@ -1363,6 +1366,43 @@ func _test_melange_cartes() -> void:
 		"devant : %.1f cd/m², derrière seul : %.1f cd/m², flous (mipmaps) %s" % [c1.r, c2.r, "oui" if mip else "non"])
 
 
+## Rebonds de la lumière (Q38) : un sol plat et lisse ne voit pas d'autre sol (rien), une falaise à
+## l'ombre reçoit la lumière du sol éclairé à ses pieds (quelques %), un fond de cratère reçoit celle
+## de ses parois ; la nuit, rien. Valeurs en part de l'éclairement du Soleil (vue de face).
+func _test_rebonds() -> void:
+	var plat: float = ClassDB.class_call_static("ArbreLumiere", "rebond", 1.0, 1.0, PackedFloat32Array([0, 0, 0, 0]), 0.7, 0.12)
+	var falaise: float = ClassDB.class_call_static("ArbreLumiere", "rebond", 0.0, 1.0, PackedFloat32Array([0, 0, 0, 0]), 0.7, 0.12)
+	var h := deg_to_rad(30.0)
+	var cratere: float = ClassDB.class_call_static("ArbreLumiere", "rebond", 1.0, 1.0, PackedFloat32Array([h, h, h, h]), 0.7, 0.12)
+	var nuit: float = ClassDB.class_call_static("ArbreLumiere", "rebond", 0.0, 0.8, PackedFloat32Array([h, h, h, h]), -0.1, 0.12)
+	var attendu_falaise := 0.7 * 0.06 / 0.94
+	var ok := plat == 0.0 and absf(falaise - attendu_falaise) < 1e-6 and cratere > 0.005 and cratere < falaise and nuit == 0.0
+	_resultat(ok, "Rebonds : les ombres ne sont plus noires",
+		"sol plat lisse %.4f ; falaise à l'ombre %.4f (attendu %.4f : la moitié du ciel = sol éclairé, albédo 0,12) ; fond de cratère (parois à 30°) %.4f ; nuit %.4f" % [
+			plat, falaise, attendu_falaise, cratere, nuit])
+
+
+## Tout programme qui calcule sa lumière dans light() doit passer par oeil_vers_lumiere_godot (Godot
+## reconvertit DIFFUSE_LIGHT en sRGB ; oeil_vers_ecran seul donnait une image délavée, ombres grises).
+## Et la fonction inverse exactement la conversion de Godot.
+func _test_light_sans_double_srgb() -> void:
+	var fautifs := PackedStringArray()
+	var dossier := "res://scripts/lumiere/"
+	for f in DirAccess.get_files_at(dossier):
+		if not (f.ends_with(".gdshader") or f.ends_with(".gdshaderinc")):
+			continue
+		var texte := FileAccess.get_file_as_string(dossier + f)
+		var i := texte.find("void light()")
+		if i >= 0 and texte.substr(i).find("oeil_vers_lumiere_godot(") < 0:
+			fautifs.append(f)
+	var pire := 0.0
+	for k in 101:
+		var e := k / 100.0
+		var v := pow((e + 0.055) / 1.055, 2.4)
+		var godot := maxf(1.055 * pow(v, 0.416666667) - 0.055, 0.0)
+		pire = maxf(pire, absf(godot - e))
+	_resultat(fautifs.is_empty() and pire < 1e-5, "Lumière dans light() : pas de double conversion sRGB",
+		"programmes fautifs : %s ; écart après la conversion de Godot %.7f" % [", ".join(fautifs) if fautifs.size() else "aucun", pire])
 # ---------------------------------------------------------------------------------------------
 # Einstein A2 : planète et lune vues à grande vitesse (aberration, Doppler, éclat vers l'avant)
 # ---------------------------------------------------------------------------------------------

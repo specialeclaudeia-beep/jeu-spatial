@@ -86,3 +86,13 @@ vec3 oeil_vers_ecran(vec3 l, vec2 pixel, float temps) {
 	// Tramage : ±½ niveau contre les bandes des couleurs 8 bits.
 	return ecran + (oeil_hasard(pixel) - 0.5) / 255.0;
 }
+
+// Pour la lumière calculée dans light() (objets éclairés, planète) : là, Godot convertit ENCORE le
+// résultat en sRGB à la fin (linear_to_srgb de drivers/gles3, 1,055 v^(1/2,4) − 0,055), alors qu'il ne
+// le fait pas pour ALBEDO d'un programme « unshaded » (il le défait d'abord). Vérifié : DIFFUSE_LIGHT
+// = 0,5 sortait à 0,737 à l'écran → tout ce qui passait par light() était trop clair et délavé, et les
+// ombres grises. On lui donne donc la valeur qui, après sa conversion, redonne exactement notre couleur.
+vec3 oeil_vers_lumiere_godot(vec3 l, vec2 pixel, float temps) {
+	vec3 e = max(oeil_vers_ecran(l, pixel, temps), vec3(0.0));
+	return pow((e + 0.055) / 1.055, vec3(2.4));
+}

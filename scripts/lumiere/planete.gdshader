@@ -19,8 +19,14 @@
 //   L'éclairage (Soleil, ombres, éclipses) reste calculé là où la planète est vraiment : c'est la lumière
 //   déjà renvoyée par le sol qui change en chemin vers l'œil. Vitesse nulle : rien ne change.
 // Données par copie (INSTANCE_CUSTOM) : x = heure d'arrivée, y = profondeur des jupes, z = taille d'un rayon.
+// Suite du programme : l'OMBRE DU VAISSEAU sur le sol. La partie « Soleil direct » de la lumière est
+// ajoutée dans light(), où Godot donne l'ombre de sa seule lumière (le Soleil, qui ne sert qu'aux ombres,
+// comme pour objet.gdshader) : le vaisseau fait son ombre, à sa vraie forme, sur le sol proche. Tout le
+// reste (rebonds, compagne, lampes, fond du ciel) est calculé dans fragment(). Sans lumière de Godot
+// dans la scène, light() n'est jamais appelée : le labo a donc aussi son DirectionalLight (sans ombre).
+// La planète ne fait pas d'ombre elle-même (son relief a déjà ses ombres, par l'horizon des coins).
 shader_type spatial;
-render_mode unshaded, cull_disabled, skip_vertex_transform;
+render_mode cull_disabled, skip_vertex_transform, ambient_light_disabled, fog_disabled, specular_disabled;
 
 #include "res://scripts/lumiere/oeil.gdshaderinc"
 #include "res://scripts/lumiere/compagnon.gdshaderinc"
@@ -53,6 +59,8 @@ varying vec4 horizon_v;          // hauteur de l'horizon (rad) vers l'est, le no
 varying vec3 soleil_lieu;        // Soleil dans le repère du lieu : (sinus de sa hauteur, vers l'est, vers le nord)
 varying vec3 compagnon_lieu;
 varying vec3 doppler_v;          // Einstein A2 : facteur Doppler sur la lumière renvoyée (rouge, vert, bleu)
+varying vec3 reste_v;           // luminance sans le Soleil direct (cd/m²), de fragment() à light()
+varying vec3 soleil_direct_v;   // luminance due au Soleil direct, avant l'ombre du vaisseau
 
 // Part d'un disque de rayon a cachée par un disque de rayon b dont le centre est à e
 // (même formule que soleil.gd et la partie C++).
@@ -183,12 +191,30 @@ void vertex() {
 	voile_v = oeil_voile(normalize(vu - CAMERA_POSITION_WORLD), TIME);
 	vec4 vue = VIEW_MATRIX * vec4(vu, 1.0);
 	profondeur = -vue.z;
+	// Pour l'ombre du vaisseau (Godot la cherche à partir de VERTEX et NORMAL, repère de la vue). L'ombre
+	// tombe sur le vrai sol : on donne la vraie position (sans l'aberration).
+	VERTEX = (VIEW_MATRIX * vec4(p, 1.0)).xyz;
+	NORMAL = mat3(VIEW_MATRIX) * up;
 	POSITION = PROJECTION_MATRIX * vue;
 	// Étape 7 : la profondeur est écrite par le fragment (logarithmique) ; ici on met chaque point au
 	// milieu de la boîte de vue, pour que la carte graphique ne coupe jamais le sol aux plans proche et
 	// lointain de la caméra (l'œil peut être à 5 mm du sol et voir à 300 km). Seuls les points derrière
 	// l'œil sont coupés (w < 0).
 	POSITION.z = 0.0;
+}
+
+// Rebonds de la lumière sur le sol (Q38) : même loi que la partie C++ (ArbreLumiere::rebond_lieu).
+// Le sol qui entoure le lieu, plat et éclairé, reçoit E × sin(hauteur de l'étoile) et en renvoie la
+// part albédo. Le lieu en voit une part F : le sol plus bas quand il est penché ((1 − cos) / 2), ses
+// propres petites faces quand il est rugueux (1 − longueur), les montagnes au-dessus de son horizon
+// (à moitié éclairées). Rebonds suivants : somme 1 / (1 − ρF). Renvoie une part de E.
+float rebond(float cos_penche, float longueur, vec4 h, float haut_etoile, float albedo) {
+	if (haut_etoile <= 0.0) return 0.0;
+	float f = clamp((1.0 - cos_penche) * 0.5, 0.0, 1.0) + clamp(1.0 - longueur, 0.0, 0.5);
+	vec4 sh = sin(max(h, vec4(0.0)));
+	f = min(f + 0.5 * dot(sh, sh) * 0.25, 1.0);
+	float rf = albedo * f;
+	return haut_etoile * rf / (1.0 - rf);
 }
 
 // Lumière moyenne d'un cône de petites faces (direction moyenne n, sinus du demi-angle sb) éclairé par
@@ -213,15 +239,32 @@ void fragment() {
 	// lumières s'additionnent ; tout le reste du ciel (étoiles lointaines, Voie lactée) est regroupé
 	// dans lux_fond.
 	// Étape 7 : l'ombre du relief proche et des cailloux (horizon), à chaque pixel.
-	vec3 e = soleil_couleur * soleil_eclairement * eclairage(n, sb, soleil_direction) * soleil_visible
-		* part_horizon(horizon_v, soleil_lieu, soleil_rayon_angle);
+	// Rebonds (Q38) : la lumière renvoyée par le sol éclairé tout autour (pas d'ombre du relief : elle
+	// vient de partout). Les ombres ne sont plus noires, surtout sur les pentes et les falaises.
+	vec3 up = normalize(pos_monde - centre_planete);
+	float penche = dot(n, up);
+	float y_al = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
+	vec3 e_soleil = soleil_couleur * soleil_eclairement * soleil_visible;
+	vec3 direct = e_soleil * eclairage(n, sb, soleil_direction) * part_horizon(horizon_v, soleil_lieu, soleil_rayon_angle);
+	vec3 e = e_soleil * rebond(penche, longueur, horizon_v, soleil_lieu.x, y_al);
 	if (compagnon_eclairement > 0.0) {
-		e += compagnon_couleur * compagnon_eclairement * eclairage(n, sb, compagnon_direction) * compagnon_visible
-			* part_horizon(horizon_v, compagnon_lieu, compagnon_rayon_angle);
+		e += compagnon_couleur * compagnon_eclairement * compagnon_visible * (eclairage(n, sb, compagnon_direction)
+			* part_horizon(horizon_v, compagnon_lieu, compagnon_rayon_angle)
+			+ rebond(penche, longueur, horizon_v, compagnon_lieu.x, y_al));
 	}
 	// Étape 8 : les lampes du vaisseau (projecteur) éclairent aussi le sol.
 	e += lampes_eclairement(pos_monde, n);
-	vec3 l = albedo * (e + lux_fond) / PI * doppler_v;
-	ALBEDO = oeil_vers_ecran(l + voile_v, FRAGCOORD.xy, TIME);
+	// Einstein A2 : toute la lumière renvoyée par le sol passe par l'effet Doppler (pas le halo de l'œil).
+	reste_v = albedo * (e + lux_fond) / PI * doppler_v + voile_v;
+	soleil_direct_v = albedo * direct / PI * doppler_v;
+	// Godot multiplie la lumière par ALBEDO : on lui donne 1, la vraie couleur est dans notre calcul.
+	ALBEDO = vec3(1.0);
+	ROUGHNESS = 1.0;
 	DEPTH = 1.0 - clamp(log2(max(profondeur, profondeur_pres) / profondeur_pres) / log2(profondeur_loin / profondeur_pres), 0.0, 1.0);
+}
+
+void light() {
+	// ATTENUATION = ombre du vaisseau (1 hors de l'ombre, et au-delà de la distance des ombres).
+	DIFFUSE_LIGHT = oeil_vers_lumiere_godot(reste_v + soleil_direct_v * ATTENUATION, FRAGCOORD.xy, TIME);
+	SPECULAR_LIGHT = vec3(0.0);
 }
