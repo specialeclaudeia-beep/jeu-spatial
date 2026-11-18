@@ -27,6 +27,7 @@ varying vec3 direction_v;
 varying float glisse;
 varying vec3 pos_monde;
 varying float profondeur;
+varying vec3 voile_v;
 
 // Profondeur « logarithmique » : de 5 cm à des milliers de km sans que les montagnes lointaines se
 // mélangent (la profondeur normale n'a pas assez de précision si loin).
@@ -55,6 +56,9 @@ void vertex() {
 	vec3 c1 = texelFetch(rayons, ivec2(k * 3 + 1, place), 0).rgb;
 	albedo_v = mix(c0 * c0, c1 * c1, glisse);   // couleurs rangées par leur racine carrée
 	direction_v = rotation * (texelFetch(rayons, ivec2(k * 3 + 2, place), 0).xyz * 2.0 - 1.0);
+	// Halo de l'œil calculé aux coins (il varie lentement à l'échelle d'un rayon de 8 pixels) :
+	// beaucoup moins de calcul par pixel pour la petite carte graphique du PC.
+	voile_v = oeil_voile(normalize(p - CAMERA_POSITION_WORLD), TIME);
 	vec4 vue = VIEW_MATRIX * vec4(p, 1.0);
 	profondeur = -vue.z;
 	POSITION = PROJECTION_MATRIX * vue;
@@ -75,7 +79,6 @@ void fragment() {
 	float direct = cs > sb ? cs : (cs < -sb ? 0.0 : (cs + sb) * (cs + sb) / (4.0 * sb + 1e-6));
 	// Sol mat : luminance = albédo × éclairement × cos / π.
 	vec3 l = albedo * (soleil_couleur * soleil_eclairement * direct + lux_fond) / PI;
-	vec3 vue = normalize(pos_monde - CAMERA_POSITION_WORLD);
-	ALBEDO = oeil_vers_ecran(l + oeil_voile(vue, TIME), FRAGCOORD.xy, TIME);
+	ALBEDO = oeil_vers_ecran(l + voile_v, FRAGCOORD.xy, TIME);
 	DEPTH = 1.0 - clamp(log2(max(profondeur, profondeur_pres) / profondeur_pres) / log2(profondeur_loin / profondeur_pres), 0.0, 1.0);
 }

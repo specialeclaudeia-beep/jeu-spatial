@@ -56,6 +56,7 @@ const PHASES_MESURE := [
 	["Face au Soleil (2)", 2, 4.0, false],
 	["Côté nuit (3)", 3, 4.0, false],
 	["Coucher de Soleil (4)", 4, 4.0, false],
+	["Orbite, planète cachée (ciel seul)", -1, 4.0, false],
 ]
 var mesure_auto := false
 var _phase := -1
@@ -127,6 +128,11 @@ func _ready() -> void:
 	oeil.equilibrer(luminance_vue)
 	_mettre_a_jour_monde()
 	mesure_auto = "--mesure" in OS.get_cmdline_user_args()
+	if mesure_auto:
+		# Sans synchronisation avec l'écran : sinon une image un peu trop lente (17 ms) attend la
+		# suivante et la mesure tombe à 30 images/s, ce qui cache le vrai temps de calcul.
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+		Engine.max_fps = 0
 
 
 ## Téléportation vers un point de vue d'essai (1 à 5). L'œil n'est PAS remis à zéro :
@@ -244,7 +250,7 @@ func _process(delta: float) -> void:
 	if Input.is_physical_key_pressed(KEY_C): dir.y -= 1
 	if mesure_auto:
 		_avancer_mesure(delta)
-		if _phase >= 0 and PHASES_MESURE[_phase][3]:
+		if _phase >= 0 and _phase < PHASES_MESURE.size() and PHASES_MESURE[_phase][3]:
 			dir.z -= 1
 	temps += delta
 	if rotation_on:
@@ -408,12 +414,16 @@ func _avancer_mesure(delta: float) -> void:
 			for i in 4:
 				_sommes[1 + i] += compteur.chrono.derniers_ms[i]
 			_sommes[5] += compteur.chrono.nb_rayons
+			_sommes[6] += Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
+			var vp := get_viewport().get_viewport_rid()
+			_sommes[7] += RenderingServer.viewport_get_measured_render_time_cpu(vp)
+			_sommes[8] += RenderingServer.viewport_get_measured_render_time_gpu(vp)
 		if _phase_t < PHASES_MESURE[_phase][2]:
 			return
 		var n := maxf(_images, 1)
-		_resultats.append("| %s | %.0f | %.1f | %.2f | %.2f | %.2f | %.2f | %d |" % [PHASES_MESURE[_phase][0],
-			1000.0 / (_sommes[0] / n), _sommes[0] / n, _sommes[1] / n, _sommes[2] / n, _sommes[3] / n, _sommes[4] / n,
-			roundi(_sommes[5] / n)])
+		_resultats.append("| %s | %.0f | %.1f | %.2f | %.2f | %.2f | %.2f | %d | %.2f | %.2f | %.2f |" % [
+			PHASES_MESURE[_phase][0], 1000.0 / (_sommes[0] / n), _sommes[0] / n, _sommes[1] / n, _sommes[2] / n,
+			_sommes[3] / n, _sommes[4] / n, roundi(_sommes[5] / n), _sommes[6] / n, _sommes[7] / n, _sommes[8] / n])
 	_phase += 1
 	if _phase >= PHASES_MESURE.size():
 		_ecrire_mesure()
@@ -422,17 +432,25 @@ func _avancer_mesure(delta: float) -> void:
 		return
 	_phase_t = 0.0
 	_images = 0
-	_sommes = PackedFloat64Array([0, 0, 0, 0, 0, 0])
+	_sommes = PackedFloat64Array([0, 0, 0, 0, 0, 0, 0, 0, 0])
 	vitesse = 0.5
-	aller_a(PHASES_MESURE[_phase][1])
+	var vue: int = PHASES_MESURE[_phase][1]
+	if vue < 0:
+		aller_a(1)
+		if avec_planete:
+			planete.visible = false
+	else:
+		aller_a(vue)
 
 
 func _ecrire_mesure() -> void:
 	var texte := "# Mesure de la planète en rayons (étape 4)\n\n"
 	texte += "Date : %s · %s · %s\n\n" % [Time.get_datetime_string_from_system(), OS.get_processor_name(),
 		RenderingServer.get_video_adapter_name()]
-	texte += "| Essai | Images/s | Image (ms) | Choisir | Éclairer | Envoyer | Dessiner | Rayons |\n"
-	texte += "|---|---|---|---|---|---|---|---|\n"
+	texte += "Sans synchronisation avec l'écran (vsync coupée). Dessiner = processeur + carte graphique (Godot) ;\n"
+	texte += "Processus = tout le GDScript de l'image (choisir/éclairer compris).\n\n"
+	texte += "| Essai | Images/s | Image (ms) | Choisir | Éclairer | Envoyer | Dessiner | Rayons | Processus | Dessin processeur | Dessin carte graphique |\n"
+	texte += "|---|---|---|---|---|---|---|---|---|---|---|\n"
 	texte += "\n".join(_resultats) + "\n"
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://mesures"))
 	var f := FileAccess.open("res://mesures/resultats-planete-pc.md", FileAccess.WRITE)
