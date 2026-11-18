@@ -181,7 +181,9 @@ func _etat(v) -> Etat:
 	e.r = v.distance_centre()
 	e.h = v.altitude()
 	e.hs = e.h - VaisseauPhysiqueH.HAUTEUR_TRAIN
-	e.vit = Vector3(v.vx, v.vy, v.vz)
+	# vitesse par rapport au SOL (qui tourne avec la planète) : c'est elle qu'il faut annuler pour se poser
+	e.vit = v.vitesse_par_rapport_au_sol()
+	var vit_espace := Vector3(v.vx, v.vy, v.vz)
 	if v.gm > 0.0 and e.r > 1.0:
 		var g_arr: Array = v.gravite(v.px, v.py, v.pz)
 		var g_v := Vector3(g_arr[0], g_arr[1], g_arr[2])
@@ -193,7 +195,9 @@ func _etat(v) -> Etat:
 	e.vh = e.vh_v.length()
 	if e.vh > 1e-3:
 		e.u_h = e.vh_v / e.vh
-	e.g_eff = e.g - e.vh * e.vh / maxf(e.r, 1.0)
+	# ce qui reste de la gravité une fois retiré l'effet du virage autour de la planète (vitesse dans l'espace)
+	var vh_espace := (vit_espace - e.haut * vit_espace.dot(e.haut)).length()
+	e.g_eff = e.g - vh_espace * vh_espace / maxf(e.r, 1.0)
 	var a_felt: Vector3 = v.acceleration_ressentie
 	e.vv_av = e.vv + (a_felt.dot(e.haut) - e.g_eff) * T_AVANCE_V
 	return e

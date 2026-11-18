@@ -736,7 +736,7 @@ func _tests_lumiere() -> void:
 	scene.add_child(cam)
 	var l = LumiereJeu.new()
 	scene.add_child(l)
-	var pret: bool = l.preparer(cam, R)
+	var pret: bool = l.preparer(cam, R, GM)
 	var s: Vector3 = Vector3(1.0, 0.25, 0.2).normalized()
 	var jour := PackedFloat64Array([s.x * (R + 100000.0), s.y * (R + 100000.0), s.z * (R + 100000.0)])
 	l.mettre_a_jour(1.0 / 60.0, jour, Vector3.ZERO, Basis.IDENTITY, Vector3.ZERO)
@@ -762,6 +762,17 @@ func _tests_lumiere() -> void:
 	var ok31: bool = absf(l.altitude_oeil - 2.0) < 0.001
 	_resultat(ok31, "Lumière : altitude de l'œil au-dessus du relief",
 		"Relief ici : %.1f m. Œil placé à 2 m du sol : altitude calculée %.4f m." % [h, l.altitude_oeil])
+
+	# 31 bis. La planète tourne : le sol de la lumière (repère de la physique) suit la rotation, et la
+	#         lune existe (avec sa vraie période de Kepler autour de cette planète).
+	l.angle_planete = 1.0
+	var gr := Vector3(g.x * cos(1.0) + g.z * sin(1.0), g.y, -g.x * sin(1.0) + g.z * cos(1.0))
+	var h_tourne: float = l.hauteur_sol(gr.x, gr.y, gr.z)
+	var periode_lune: float = l.orbite.periode() / 3600.0
+	l.angle_planete = 0.0
+	_resultat(absf(h_tourne - h) < 0.01 and l.lune != null and absf(periode_lune - 13.65) < 0.05,
+		"Lumière : la planète tourne, la lune est là",
+		"Sol sous un point tourné avec la planète : %.2f m (attendu %.2f). Lune : un tour en %.2f h." % [h_tourne, h, periode_lune])
 
 	# 32. Les matières du vaisseau passent au système, et le posemètre voit le cockpit
 	var pilote := Node3D.new()
@@ -1052,6 +1063,44 @@ func _tests_pilote_auto() -> void:
 		bilan_att.append("%.0f m à %.0f m/s : touché à %.2f m/s, penché %.1f°, nez au plus bas %.1f°" % [ca[0], Vector2(ca[1], ca[2]).length(), v_touche, penche_a, pique])
 	_resultat(att_bon, "Pilote auto : atterrir",
 		"Arrêt à plat, train sorti, posé sous 2 m/s. " + " ; ".join(bilan_att) + ".")
+
+	# 33 ter bis. Atterrir sur la planète qui tourne (jour de 2 h), à l'équateur : le sol file à 524 m/s.
+	#     Le pilote auto suit le sol (vitesse par rapport au sol) et se pose sans glisser.
+	v = _nouveau(true)
+	v.reactivite_moteurs = 0.3
+	v.omega_planete = TAU / 7200.0
+	v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)
+	v.px = R + 1000.0
+	v.vz = -v.omega_planete * v.px - 30.0   # tourne avec le sol, et 30 m/s de plus vers l'avant
+	v.vx = -5.0
+	p = PiloteAuto.new()
+	p.activer(PiloteAuto.ATTERRIR, v)
+	var touche_r := 0.0
+	for i in 120 * 240:
+		var rel_avant: float = v.vitesse_par_rapport_au_sol().length()
+		_image_pilote(v, p, 1)
+		if v.au_sol and touche_r == 0.0:
+			touche_r = rel_avant
+		if (v.au_sol and v.vitesse_par_rapport_au_sol().length() < 0.05) or v.ecrase:
+			break
+	var penche_r := rad_to_deg(Basis(v.orientation).y.angle_to(Vector3(v.px, v.py, v.pz).normalized()))
+	_resultat(v.au_sol and not v.ecrase and touche_r < 2.0 and penche_r < 3.0,
+		"Pilote auto : atterrir sur la planète qui tourne",
+		"À l'équateur (sol à %.0f m/s dans l'espace), depuis 1 000 m et 30 m/s par rapport au sol : touché à %.2f m/s par rapport au sol, penché %.1f°, %s." % [
+			v.omega_planete * R, touche_r, penche_r, "écrasé" if v.ecrase else "posé"])
+
+	# 33 ter ter. La lune : sa gravité tire le vaisseau, mais la planète est tirée aussi ; à la surface,
+	#     il ne reste que la marée de la lune (≈ 2 G m R / d³), pas son attraction entière.
+	var w = _nouveau(true)
+	var gm_l := 6.674e-11 * 3000.0 * 4.0 / 3.0 * PI * pow(150000.0, 3.0)
+	var d_l := 6.0e6
+	w.ajouter_astre_mobile("lune", gm_l, func(_t: float) -> PackedFloat64Array: return PackedFloat64Array([d_l, 0.0, 0.0]))
+	var g_face: Array = w.gravite(R, 0.0, 0.0)
+	var maree := float(g_face[0]) + GM / (R * R)
+	var attendu := gm_l / pow(d_l - R, 2.0) - gm_l / (d_l * d_l)
+	_resultat(absf(maree - attendu) < 1e-9 and absf(maree) < 1e-4,
+		"La lune : seule sa marée change le mouvement",
+		"Face à la lune : %.3f µm/s² vers elle (attendu %.3f ; son attraction entière : %.1f µm/s²)." % [maree * 1e6, attendu * 1e6, gm_l / pow(d_l - R, 2.0) * 1e6])
 
 	# 33 quater. S'arrêter sans se retourner : à 250 m/s, à plat, le vaisseau passe en vol vertical et se
 	# penche nez en haut ; il ne fait jamais demi-tour (le dessus du vaisseau ne dépasse pas 100° de la verticale)

@@ -493,6 +493,25 @@ func _equilibre_possible(force: float) -> bool:
 func ajouter_astre(nom: String, gm_astre: float, x: float, y: float, z: float) -> void:
 	autres_astres.append({"nom": nom, "gm": gm_astre, "x": x, "y": y, "z": z})
 
+
+## Un astre qui bouge (une lune) : position(t) → PackedFloat64Array [x, y, z] (m, repère de la physique,
+## centré sur la planète), t = temps_univers. Le repère suit la planète, qui est elle aussi attirée par
+## la lune : on retire donc cette attraction de la planète (« terme indirect ») ; il ne reste que ce
+## qui change vraiment le mouvement du vaisseau par rapport à la planète (la marée de la lune).
+func ajouter_astre_mobile(nom: String, gm_astre: float, position: Callable) -> void:
+	var p: PackedFloat64Array = position.call(temps_univers)
+	autres_astres.append({"nom": nom, "gm": gm_astre, "x": p[0], "y": p[1], "z": p[2], "position": position,
+		"indirect": true})
+
+
+func _placer_astres() -> void:
+	for a in autres_astres:
+		if a.has("position"):
+			var p: PackedFloat64Array = (a["position"] as Callable).call(temps_univers)
+			a["x"] = p[0]
+			a["y"] = p[1]
+			a["z"] = p[2]
+
 # =====================================================================
 # SIMULATION
 # =====================================================================
@@ -517,6 +536,12 @@ func gravite(x: float, y: float, z: float) -> Array:
 		ax += k2 * dx
 		ay += k2 * dy
 		az += k2 * dz
+		if a.get("indirect", false):
+			var r2a: float = float(a["x"]) ** 2 + float(a["y"]) ** 2 + float(a["z"]) ** 2
+			var k3 := float(a["gm"]) / (r2a * sqrt(r2a))
+			ax -= k3 * float(a["x"])
+			ay -= k3 * float(a["y"])
+			az -= k3 * float(a["z"])
 	return [ax, ay, az]
 
 
@@ -578,6 +603,7 @@ func pas(dt: float) -> void:
 
 func _pas_un(dt: float) -> void:
 	angle_planete = fposmod(angle_planete + omega_planete * dt, TAU)
+	_placer_astres()
 	# 1. Les moteurs suivent leur consigne avec un petit temps de réponse
 	var k := clampf(dt / maxf(reactivite_moteurs, 1e-9), 0.0, 1.0)
 	for m in moteurs:
@@ -998,6 +1024,16 @@ func vitesse() -> float:
 	return sqrt(vx * vx + vy * vy + vz * vz)
 
 
+## Vitesse du sol qui tourne sous le point (x, y, z) (m/s, repère de la physique).
+func vitesse_sol(x: float, y: float, z: float) -> Vector3:
+	return Vector3(omega_planete * z, 0.0, -omega_planete * x)
+
+
+## Vitesse du vaisseau par rapport au sol qui tourne sous lui (c'est elle qui compte pour se poser).
+func vitesse_par_rapport_au_sol() -> Vector3:
+	return Vector3(vx, vy, vz) - vitesse_sol(px, py, pz)
+
+
 func vitesse_verticale() -> float:
 	var r := distance_centre()
 	return (vx * px + vy * py + vz * pz) / r if r > 0.0 else 0.0
@@ -1005,6 +1041,13 @@ func vitesse_verticale() -> float:
 
 func vitesse_horizontale() -> float:
 	var v := vitesse()
+	var vv := vitesse_verticale()
+	return sqrt(maxf(0.0, v * v - vv * vv))
+
+
+## Vitesse horizontale par rapport au sol (qui tourne avec la planète).
+func vitesse_horizontale_sol() -> float:
+	var v := vitesse_par_rapport_au_sol().length()
 	var vv := vitesse_verticale()
 	return sqrt(maxf(0.0, v * v - vv * vv))
 

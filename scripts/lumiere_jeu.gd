@@ -10,8 +10,10 @@ extends Node3D
 ##   les ombres du vaisseau sur lui-même (la seule lumière de Godot : le Soleil) ;
 ## - la lumière renvoyée par la planète, les lampes du vaisseau, la visière du casque.
 ##
-## Repère : celui de la physique (centre de la planète = 0, la planète ne tourne pas : le Soleil est
-## fixe dans le ciel, comme la physique du vaisseau qui ne connaît pas de rotation de la planète).
+## Repère : celui de la physique (centre de la planète = 0, axes fixes : le Soleil et les étoiles ne
+## bougent pas). La planète TOURNE sur elle-même (angle_planete, donné par la physique) : ses morceaux
+## sont dessinés tournés, et tout ce qui touche au sol passe dans son repère. Une petite lune (comme
+## celle du labo) tourne autour d'elle : vraie gravité, retard de la lumière, éclipses.
 ## L'affichage est centré sur l'œil : la caméra est à l'origine, tout est placé autour d'elle.
 ## Si la partie C++ manque, preparer() renvoie false et le jeu garde son ancien affichage.
 
@@ -25,6 +27,7 @@ const ShaderEtoiles = preload("res://scripts/lumiere/etoiles.gdshader")
 const Objets = preload("res://scripts/lumiere/objets.gd")
 const ChronoBoucle = preload("res://scripts/lumiere/chrono_boucle.gd")
 const Reflets = preload("res://scripts/lumiere/reflets.gd")
+const Orbite = preload("res://scripts/lumiere/orbite.gd")
 
 const GRAINE := 7                         # la même planète que dans le labo
 const VERS_SOLEIL := Vector3(1.0, 0.25, 0.2)
@@ -33,6 +36,15 @@ const DISTANCE_COMPAGNE := 5.0            # UA
 const FOND_CIEL := 2.0e-4                 # cd/m², comme le labo
 const PART_DISQUE_ADAPTATION := 0.03      # voir labo.gd
 const ALBEDO_PLANETE := 0.12              # part moyenne de lumière renvoyée par le sol
+## La petite lune du labo (Q42) : 150 km de rayon, à 6 000 km du centre (10 rayons de la planète),
+## roche de 3 000 kg/m³. Vue du sol, 6 fois plus grande que le Soleil : ses éclipses sont totales.
+## Son orbite contient la direction du Soleil : une éclipse de Soleil et une de lune à chaque tour.
+const RAYON_LUNE := 150000.0
+const GRAINE_LUNE := 23
+const PLACES_LUNE := 512
+const ORBITE_LUNE := 6.0e6
+const MASSE_VOLUMIQUE_LUNE := 3000.0
+const PHASE_LUNE := 1.2
 ## Distance la plus proche dessinée (profondeur logarithmique) : le cockpit est à 20 cm de l'œil.
 const PRES := 0.02
 ## Caméra de Godot : seulement pour le vaisseau (la planète et les étoiles ne sont jamais coupées).
@@ -84,12 +96,28 @@ var _e_autre := 0.0                  # lux venus d'ailleurs que du Soleil sur le
 var _soleil_cache := false           # Soleil caché par la coque, vu de l'œil
 var reflet_visiere := Vector3.ZERO   # étape 9 : voile renvoyé par la visière (cd/m²)
 var ms_reflets := 0.0                # temps de calcul des reflets (ms, dernière image)
+# rotation de la planète et lune (donnés par la physique à chaque image)
+var angle_planete := 0.0             # rad : de combien la planète a tourné autour de Y
+var temps_astres := 0.0              # s : horloge de l'univers (orbite de la lune)
+var lune: MultiMeshInstance3D
+var orbite = Orbite.new()
+var chrono_lune = ChronoBoucle.new()
+var pos_lune := PackedFloat64Array([ORBITE_LUNE, 0.0, 0.0])   # où l'œil VOIT la lune (repère de la physique)
+var rot_lune := Basis.IDENTITY
+var retard_lune := 0.0
+var oeil_lune := PackedFloat64Array([0.0, 0.0, 0.0])          # l'œil dans le repère de la lune
+var oeil_planete := PackedFloat64Array([0.0, 0.0, 0.0])       # l'œil dans le repère de la planète (qui tourne)
 
 
 ## Prépare tout. Faux si la partie C++ manque (le jeu garde alors son ancien affichage).
-func preparer(p_camera: Camera3D, p_rayon: float) -> bool:
+## gm_planete : G × masse de la planète (m³/s²), pour l'orbite de la lune.
+func preparer(p_camera: Camera3D, p_rayon: float, gm_planete := 0.0) -> bool:
 	camera = p_camera
 	rayon = p_rayon
+	var s0 := VERS_SOLEIL.normalized()
+	orbite.configurer(gm_planete if gm_planete > 0.0 else Orbite.gm_boule(p_rayon, 3000.0), ORBITE_LUNE, s0,
+		Vector3.UP.cross(s0))
+	orbite.phase = PHASE_LUNE
 	if not Planete.cpp_disponible():
 		return false
 	soleil.position = _loin(VERS_SOLEIL, Soleil.UA)
@@ -121,6 +149,16 @@ func preparer(p_camera: Camera3D, p_rayon: float) -> bool:
 		planete = null
 		return false
 	add_child(planete)
+
+	lune = Planete.new()
+	lune.name = "Lune"
+	if lune.preparer(RAYON_LUNE, GRAINE_LUNE, PLACES_LUNE):
+		lune.max_par_image = 48
+		lune.budget_eclairer_ms = 1.5
+		add_child(lune)
+	else:
+		lune.free()
+		lune = null
 
 	if etoiles.charger():
 		noeud_etoiles = etoiles.creer_noeud(ShaderEtoiles, table)
@@ -165,11 +203,48 @@ func ajouter_objets(racine: Node3D, reference: Node3D) -> void:
 	objets.convertir(racine, reference)
 
 
-## Hauteur du sol (m au-dessus du rayon) dans la direction (x, y, z) depuis le centre (64 bits).
+## Hauteur du sol (m au-dessus du rayon) dans la direction (x, y, z) depuis le centre (64 bits),
+## repère de la physique (la planète a tourné de angle_planete).
 func hauteur_sol(x: float, y: float, z: float) -> float:
 	if not avec_planete:
 		return 0.0
+	var c := cos(angle_planete)
+	var s := sin(angle_planete)
+	return planete.hauteur_sol(PackedFloat64Array([c * x - s * z, y, s * x + c * z]))
+
+
+## Même chose, (x, y, z) donné dans le repère de la planète (pour la physique, qui fait elle-même la rotation).
+func hauteur_sol_planete(x: float, y: float, z: float) -> float:
+	if not avec_planete:
+		return 0.0
 	return planete.hauteur_sol(PackedFloat64Array([x, y, z]))
+
+
+## G × masse de la lune (m³/s²), pour la gravité du vaisseau.
+func gm_lune() -> float:
+	return Orbite.gm_boule(RAYON_LUNE, MASSE_VOLUMIQUE_LUNE) if lune else 0.0
+
+
+## Vraie position de la lune au temps t (repère de la physique), pour la gravité du vaisseau.
+func position_lune(t: float) -> PackedFloat64Array:
+	return orbite.position(t)
+
+
+## Position et orientation de la lune telles que l'œil les VOIT (retard de la lumière compris).
+func _placer_lune() -> void:
+	retard_lune = orbite.retard(temps_astres, pos_oeil)
+	var t_vu := temps_astres - retard_lune
+	pos_lune = orbite.position(t_vu)
+	# Elle montre toujours la même face à la planète : elle tourne sur elle-même une fois par tour.
+	var normale: Vector3 = orbite.u.cross(orbite.v).normalized()
+	rot_lune = Basis(normale, orbite.angle(t_vu))
+	oeil_lune = _dans_repere(rot_lune, pos_oeil[0] - pos_lune[0], pos_oeil[1] - pos_lune[1], pos_oeil[2] - pos_lune[2])
+
+
+## Vecteur du repère de la physique → repère d'un astre tourné de b (en 64 bits : transposée).
+static func _dans_repere(b: Basis, dx: float, dy: float, dz: float) -> PackedFloat64Array:
+	return PackedFloat64Array([b.x.x * dx + b.x.y * dy + b.x.z * dz, b.y.x * dx + b.y.y * dy + b.y.z * dz,
+		b.z.x * dx + b.z.y * dy + b.z.z * dz])
 
 
 ## Une image. oeil64 = position de l'œil (repère de la physique, m, 64 bits) ; vitesse = du vaisseau
@@ -188,18 +263,41 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	var h := 12000.0
 	var bas := rayon - h
 	var loin := sqrt(maxf(d * d - bas * bas, 0.0)) + sqrt((rayon + h) ** 2 - bas * bas) + 1000.0
+	var rot_planete := Basis(Vector3.UP, angle_planete)
+	oeil_planete = _dans_repere(rot_planete, oeil64[0], oeil64[1], oeil64[2])
+	if lune:
+		_placer_lune()
+		loin = maxf(loin, sqrt((pos_lune[0] - oeil64[0]) ** 2 + (pos_lune[1] - oeil64[1]) ** 2
+			+ (pos_lune[2] - oeil64[2]) ** 2) + RAYON_LUNE * 1.1)
+	var rel_lune := Vector3(pos_lune[0] - oeil64[0], pos_lune[1] - oeil64[1], pos_lune[2] - oeil64[2])
 	planete.profondeur_pres = PRES
 	planete.profondeur_loin = loin
 	var rs := RenderingServer
 	rs.global_shader_parameter_set("affichage_loin", loin)
 	rs.global_shader_parameter_set("planete_centre", rel)
-	planete.mettre_a_jour(camera, oeil64, rel64, temps, chrono)
+	planete.rotation_astre = rot_planete
+	if lune:
+		var o := _dans_repere(rot_planete, pos_lune[0], pos_lune[1], pos_lune[2])
+		planete.occulteur = PackedFloat64Array([o[0], o[1], o[2], RAYON_LUNE])
+	planete.mettre_a_jour(camera, oeil_planete, rel64, temps, chrono,
+		Vector4(rel_lune.x, rel_lune.y, rel_lune.z, RAYON_LUNE if lune else 0.0))
+	if lune:
+		lune.profondeur_pres = PRES
+		lune.profondeur_loin = loin
+		lune.rotation_astre = rot_lune
+		var c := _dans_repere(rot_lune, -pos_lune[0], -pos_lune[1], -pos_lune[2])
+		lune.occulteur = PackedFloat64Array([c[0], c[1], c[2], rayon])
+		lune.mettre_a_jour(camera, oeil_lune, PackedFloat64Array([rel_lune.x, rel_lune.y, rel_lune.z]), temps,
+			chrono_lune, Vector4(rel.x, rel.y, rel.z, rayon))
 
 	# Le Soleil vu du vaisseau : direction, éclairement, part visible (planète + relief proche).
 	var s: Vector3 = soleil.direction(oeil64)
 	var e: float = soleil.eclairement(oeil64)
 	var alpha: float = soleil.rayon_angle(oeil64)
 	part_visible = soleil.part_visible(oeil64, PackedFloat64Array([0.0, 0.0, 0.0]), rayon)
+	if lune:
+		# Deux astres peuvent cacher le Soleil : on retire la part cachée par chacun (éclipse par la lune).
+		part_visible = clampf(part_visible + soleil.part_visible(oeil64, pos_lune, RAYON_LUNE) - 1.0, 0.0, 1.0)
 	ombre_relief = _ombre_relief(oeil64, s, alpha) if part_visible > 0.0 else 0.0
 	var vis := part_visible * ombre_relief
 	eclairement_vaisseau = e * vis
@@ -315,11 +413,19 @@ func _regler_lampes(base: Basis, oeil_local: Vector3, gaz: float) -> void:
 func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis: float, sc: Vector3,
 		base: Basis, oeil_local: Vector3) -> float:
 	var taille := get_viewport().get_visible_rect().size
-	var cases: PackedFloat32Array = planete.posemetre(camera, pos_oeil, s, e, FOND_CIEL, alpha)
-	if ec_vis > 0.0:
-		var en_plus: PackedFloat32Array = planete.posemetre(camera, pos_oeil, sc, ec_vis, 0.0, compagne.rayon_angle(pos_oeil))
+	var cases := _posemetre_astre(planete, oeil_planete, s, e, alpha, ec_vis, sc)
+	if lune:
+		# Deux astres : celui de devant cache celui de derrière, case par case (comme le labo).
+		var cov_p: PackedFloat32Array = planete.couverture()
+		var cases_l := _posemetre_astre(lune, oeil_lune, s, e, alpha, ec_vis, sc)
+		var cov_l: PackedFloat32Array = lune.couverture()
+		var d_lune := Vector3(pos_lune[0] - pos_oeil[0], pos_lune[1] - pos_oeil[1], pos_lune[2] - pos_oeil[2]).length()
+		var lune_devant := d_lune < rel.length()
 		for k in cases.size():
-			cases[k] += en_plus[k]
+			if lune_devant:
+				cases[k] = cases_l[k] - FOND_CIEL * (1.0 - cov_l[k]) + (1.0 - cov_l[k]) * cases[k]
+			else:
+				cases[k] = cases[k] - FOND_CIEL * (1.0 - cov_p[k]) + (1.0 - cov_p[k]) * cases_l[k]
 	var inv := base.inverse()
 	var s_local := inv * s
 	# Lumière moyenne venue d'ailleurs que du Soleil sur une surface du cockpit (lux).
@@ -368,13 +474,33 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis
 	return Oeil.luminance_scene(echantillons, poids, en_plus_disque) * t
 
 
+## Posemètre d'un astre éclairé par les deux étoiles (la partie C++ n'en connaît qu'une à la fois).
+func _posemetre_astre(a: MultiMeshInstance3D, oeil_astre: PackedFloat64Array, s: Vector3, e: float, alpha: float,
+		ec_vis: float, sc: Vector3) -> PackedFloat32Array:
+	var cases: PackedFloat32Array = a.posemetre(camera, oeil_astre, s, e, FOND_CIEL, alpha)
+	if ec_vis > 0.0:
+		var en_plus: PackedFloat32Array = a.posemetre(camera, oeil_astre, sc, ec_vis, 0.0, compagne.rayon_angle(pos_oeil))
+		for k in cases.size():
+			cases[k] += en_plus[k]
+	return cases
+
+
 ## Étape 9 : les reflets. Carte du ciel (la planète vue de l'œil, tirée des rayons), sonde du cockpit
 ## (rayons lancés sur les formes du vaisseau, quelques cases par image) et voile de la visière.
 func _mettre_a_jour_reflets(s: Vector3, e: float, alpha: float, vis: float, base: Basis, oeil_local: Vector3,
 		filtre: Vector3) -> void:
 	var t0 := Time.get_ticks_usec()
 	Reflets.regler_base(base)
-	reflets.mettre_a_jour_ciel([{"planete": planete, "oeil": pos_oeil, "soleil": s, "eclairement": e, "angle": alpha}])
+	var astres := [{"planete": planete, "oeil": oeil_planete, "soleil": s, "eclairement": e, "angle": alpha}]
+	if lune:
+		var a_lune := {"planete": lune, "oeil": oeil_lune, "soleil": s, "eclairement": e, "angle": alpha}
+		var d_lune := Vector3(pos_lune[0] - pos_oeil[0], pos_lune[1] - pos_oeil[1], pos_lune[2] - pos_oeil[2]).length()
+		var d_planete := sqrt(pos_oeil[0] ** 2 + pos_oeil[1] ** 2 + pos_oeil[2] ** 2)
+		if d_lune < d_planete:
+			astres.push_front(a_lune)
+		else:
+			astres.append(a_lune)
+	reflets.mettre_a_jour_ciel(astres)
 	var s_local := base.inverse() * s
 	reflets.mettre_a_jour_cockpit(objets, oeil_local, s_local, e * vis, _e_autre)
 	# Le visage du pilote : Soleil (s'il n'est pas caché par la coque), lumière venue d'ailleurs et
@@ -401,6 +527,15 @@ func changer_visiere() -> void:
 
 
 func infos() -> String:
+	var lune_txt := ""
+	if lune:
+		var d_lune := Vector3(pos_lune[0] - pos_oeil[0], pos_lune[1] - pos_oeil[1], pos_lune[2] - pos_oeil[2]).length()
+		lune_txt = "\n              jour %d %% (2 h)   lune à %d km (sa lumière met %.1f ms)" % [
+			roundi(angle_planete / TAU * 100.0), roundi(d_lune / 1000.0), retard_lune * 1000.0]
+	return _infos_base() + lune_txt
+
+
+func _infos_base() -> String:
 	return "LUMIÈRE       Soleil %s lux sur le vaisseau (%d %% visible)   œil : pupille %.1f mm, nuit %d %%\n              %s (reflet %s cd/m²)   projecteur %s   lampe cockpit %s   reflets %.1f ms" % [
 		_nombre(eclairement_vaisseau), roundi(part_visible * ombre_relief * 100.0), oeil.pupille_mm,
 		roundi(oeil.nuit() * 100.0), NOMS_VISIERES[visiere], _nombre(reflet_visiere.y),
