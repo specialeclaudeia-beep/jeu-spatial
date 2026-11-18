@@ -17,6 +17,7 @@ extends RefCounted
 # CONSTANTES
 # =====================================================================
 const G0 := 9.80665  # pour exprimer les accélérations en « g »
+const C := 299792458.0  # m/s, vitesse de la lumière : rien ne peut l'atteindre (relativité restreinte)
 
 # =====================================================================
 # CARACTÉRISTIQUES DU VAISSEAU (modifiables)
@@ -42,7 +43,28 @@ var py := 0.0
 var pz := 0.0      # position (m), centre de la planète = 0
 var vx := 0.0
 var vy := 0.0
-var vz := 0.0      # vitesse (m/s)
+var vz := 0.0      # vitesse (m/s), mesurée dans le repère de la planète : toujours plus petite que C
+
+# ---------------------------------------------------------------------
+# RELATIVITÉ D'EINSTEIN (étape A : relativité restreinte)
+# ---------------------------------------------------------------------
+## On ne fait pas « vitesse += accélération × temps » (Newton) : à force de pousser, on dépasserait
+## la lumière. On suit à la place la « vitesse propre » u = γ·v : la distance parcourue par seconde
+## de l'HORLOGE DU PILOTE. Elle, peut grandir sans limite ; la vraie vitesse v = u / γ reste toujours
+## sous C, avec γ = √(1 + u²/C²) (facteur de Lorentz). À petite vitesse, γ = 1 : c'est exactement Newton.
+## Le moteur pousse toujours avec la même force dans le repère du vaisseau (le pilote sent toujours
+## les mêmes G), mais vu de la planète, il accélère de moins en moins près de C.
+var ux := 0.0
+var uy := 0.0
+var uz := 0.0      # vitesse propre (m/s de l'horloge du pilote)
+var _v_connue := PackedFloat64Array([0.0, 0.0, 0.0])   # dernière vitesse écrite par la physique
+## Deux horloges : celle de l'univers (planète, étoiles) et celle du pilote. Celle du pilote retarde
+## quand il va vite (γ) et quand il est au fond d'un puits de gravité (relativité générale, faible ici).
+var temps_univers := 0.0   # s
+var temps_pilote := 0.0    # s
+## Puissance des moteurs principaux (5 moteurs arrière + 2 de levage), modifiable en jeu :
+## 1 = la vraie poussée (5 × 200 kN, ≈ 12 g). Les petits propulseurs d'orientation ne changent pas.
+var facteur_poussee := 1.0
 var orientation := Quaternion.IDENTITY
 var omega := Vector3.ZERO                    # vitesse de rotation (rad/s), repère du vaisseau
 var acceleration_ressentie := Vector3.ZERO   # ce que sent le pilote (m/s², repère monde) : pas la gravité
@@ -179,17 +201,38 @@ func _init() -> void:
 	for b in BUSES:
 		_ajouter_rcs(b[0], b[1], (b[2] as Vector3).normalized(), p, -1, 0)
 	_placer_propulseurs_ailes()
-	# poussée vers le haut possible en vol vertical complet (sert au pilote automatique pour savoir
-	# s'il peut s'arrêter à plat)
+	_calculer_poussees()
+
+
+## Poussée vers le haut possible en vol vertical complet (sert au pilote automatique pour savoir s'il
+## peut s'arrêter à plat), puis poussée maximale dans la configuration actuelle.
+func _calculer_poussees() -> void:
+	var garde := vertical
 	vertical = 1.0
 	_placer_propulseurs_vertical()
 	_preparer_repartition()
 	_calculer_poussee_max()
-	poussee_verticale_max = poussee_avant_max
-	vertical = 0.0
+	var verticale := _poussee_avant_vraie
+	vertical = garde
 	_placer_propulseurs_vertical()
 	_preparer_repartition()
 	_calculer_poussee_max()
+	poussee_verticale_max = verticale * facteur_poussee
+
+
+## Change la puissance des moteurs principaux (1 = vraie poussée de 200 kN par moteur).
+## Le calcul des poussées (quel moteur, quel propulseur) se fait toujours avec les vrais moteurs ;
+## la poussée en plus des « moteurs imaginaires » passe par le centre de gravité, comme si leurs
+## tuyères s'orientaient pour ne pas faire tourner le vaisseau (sinon 2 cm d'écart × des milliards
+## de newtons donneraient un couple que les petits propulseurs ne pourraient jamais rattraper).
+func regler_poussee(facteur: float) -> void:
+	facteur_poussee = maxf(facteur, 0.0)
+	_calculer_poussees()
+
+
+## Poussée maximale d'un moteur arrière (N), avec le réglage de puissance.
+func poussee_moteur() -> float:
+	return POUSSEE_MOTEUR * facteur_poussee
 
 
 ## Pour un propulseur posé sur une aile, pos et dir sont donnés dans le repère de la charnière.
@@ -289,6 +332,10 @@ var _tous: Array = []            # tous les propulseurs (moteurs puis propulseur
 var _colonnes: Array = []        # effet de chacun à pleine puissance : [Fx, Fy, Fz, Cx, Cy, Cz], mis à l'échelle
 var _niveaux: PackedFloat64Array = PackedFloat64Array()   # niveaux calculés (0..1)
 var poussee_avant_max := 0.0     # N, plus grande poussée possible dans la direction commandée, sans tourner
+var _poussee_avant_vraie := 0.0  # N, la même avec les vrais moteurs (sert au calcul des poussées)
+## Petite rotation que le calcul des poussées n'a pas pu annuler au dernier ordre (en part de la
+## rotation maximale) : un léger déséquilibre des gros moteurs, que le stabilisateur compense.
+var _reste_rotation := Vector3.ZERO
 var poussee_verticale_max := 0.0  # N, vers le haut en vol vertical complet (calculée au départ)
 var _poussee_borne := 0.0        # N, somme de tous les moteurs dans cette direction (borne haute)
 var _recalcul_poussee := false
@@ -352,7 +399,8 @@ func commander(gaz: float, tangage: float, lacet: float, roulis: float, force_co
 	_appels_depuis_calcul += 1
 	if _recalcul_poussee and _appels_depuis_calcul >= 6:
 		_calculer_poussee_max()
-	_repartir(gaz * poussee_avant_max, gaz, tangage, lacet, roulis, force_cote)
+	var e := _repartir(gaz * _poussee_avant_vraie, gaz, tangage, lacet, roulis, force_cote)
+	_reste_rotation = Vector3(e[3], e[4], e[5]) / POIDS_ROTATION
 	# les moteurs reçoivent une consigne (ils mettent un peu de temps à la suivre),
 	# les propulseurs d'orientation réagissent tout de suite
 	for i in _tous.size():
@@ -415,12 +463,15 @@ func _repartir(force: float, gaz: float, tangage: float, lacet: float, roulis: f
 func _calculer_poussee_max() -> void:
 	_recalcul_poussee = false
 	_appels_depuis_calcul = 0
+	_poussee_avant_vraie = _chercher_poussee_max()
+	poussee_avant_max = _poussee_avant_vraie * facteur_poussee
+
+
+func _chercher_poussee_max() -> float:
 	if _poussee_borne <= 0.0:
-		poussee_avant_max = 0.0
-		return
+		return 0.0
 	if _equilibre_possible(_poussee_borne):
-		poussee_avant_max = _poussee_borne
-		return
+		return _poussee_borne
 	var bas := 0.0
 	var haut := _poussee_borne
 	for i in 14:
@@ -429,7 +480,7 @@ func _calculer_poussee_max() -> void:
 			bas = milieu
 		else:
 			haut = milieu
-	poussee_avant_max = bas
+	return bas
 
 
 func _equilibre_possible(force: float) -> bool:
@@ -498,11 +549,14 @@ func couple_gravite() -> Vector3:
 func effet_propulseurs() -> Array:
 	var f_corps := Vector3.ZERO
 	var couple := Vector3.ZERO
-	for t in _tous:
+	var n_moteurs := moteurs.size()
+	for i in _tous.size():
+		var t: Dictionary = _tous[i]
 		var niveau := float(t["actuel"])
 		if niveau > 0.0:
 			var f: Vector3 = t["direction"] * (float(t["poussee_max"]) * niveau)
-			f_corps += f
+			# moteurs principaux : poussée x facteur_poussee, mais la part en plus passe par le centre de gravité
+			f_corps += f * facteur_poussee if i < n_moteurs else f
 			couple += (t["position"] as Vector3 - CENTRE_GRAVITE).cross(f)
 	return [f_corps, couple]
 
@@ -561,19 +615,24 @@ func _pas_un(dt: float) -> void:
 		a_p += (sol[0] as Vector3) / masse
 		couple += sol[1]
 
-	# 3. Translation : méthode de Verlet (stable pour les orbites)
-	var g := gravite(px, py, pz)
+	# 3. Translation : méthode de Verlet (stable pour les orbites), appliquée à la vitesse propre u
+	#    (relativité restreinte). À petite vitesse, c'est exactement l'ancien calcul de Newton.
+	_lire_vitesse()
+	var inv_g0 := 1.0 / gamma()
+	var phi0 := potentiel(px, py, pz)
 	var h := dt * 0.5
-	vx += (float(g[0]) + a_p.x) * h
-	vy += (float(g[1]) + a_p.y) * h
-	vz += (float(g[2]) + a_p.z) * h
-	px += vx * dt
-	py += vy * dt
-	pz += vz * dt
-	g = gravite(px, py, pz)
-	vx += (float(g[0]) + a_p.x) * h
-	vy += (float(g[1]) + a_p.y) * h
-	vz += (float(g[2]) + a_p.z) * h
+	_pousser_u(gravite(px, py, pz), a_p, h)
+	var ig := 1.0 / gamma()
+	px += ux * ig * dt
+	py += uy * ig * dt
+	pz += uz * ig * dt
+	_pousser_u(gravite(px, py, pz), a_p, h)
+	_ecrire_vitesse()
+	# horloges : celle du pilote avance de dt / γ (vitesse) × √(1 + 2Φ/C²) (gravité)
+	var inv_g1 := 1.0 / gamma()
+	var phi := 0.5 * (phi0 + potentiel(px, py, pz))
+	temps_univers += dt
+	temps_pilote += dt * 0.5 * (inv_g0 + inv_g1) * sqrt(maxf(0.0, 1.0 + 2.0 * phi / (C * C)))
 
 	# ce que sent le pilote : poussée et sol (la gravité ne se sent pas). Posé, le sol pousse ≈ 1 g.
 	acceleration_ressentie = a_p
@@ -632,7 +691,12 @@ func ordres_stabilisateur(duree_s: float) -> Vector3:
 		var gain := GAIN_STABILISATEUR
 		if couple_max[k] > 0.0 and duree_s > 0.0:
 			gain = minf(gain, 0.5 * inertie[k] / (couple_max[k] * duree_s))
-		o[k] = clampf(-omega[k] * gain, -1.0, 1.0)
+		o[k] = -omega[k] * gain
+		# Ordre long (temps très accéléré) : le stabilisateur compense aussi le petit déséquilibre des
+		# gros moteurs (sinon, en 14 minutes d'un seul ordre à x100 000, il ferait tourner le vaisseau).
+		if duree_s > 1.0:
+			o[k] -= _reste_rotation[k]
+		o[k] = clampf(o[k], -1.0, 1.0)
 	return o
 
 
@@ -810,6 +874,107 @@ func _depuis_planete(v: Vector3) -> Vector3:
 # =====================================================================
 # MESURES (pour les instruments)
 # =====================================================================
+# =====================================================================
+# RELATIVITÉ
+# =====================================================================
+## Change la vitesse propre pendant h secondes (temps de l'univers) :
+##   gravité : du/dt = γ·g (vu de la planète, la gravité tire comme Newton, sans jamais faire dépasser C ;
+##             l'étape B la remplacera par la vraie courbure de l'espace-temps d'Einstein) ;
+##   poussée : a_p = poussée / masse, ce que sent le pilote dans son vaisseau. Vue de la planète, elle est
+##             « transformée de Lorentz » : du/dτ = a_p + (γ − 1)(a_p·n)n, n = direction du mouvement,
+##             et du/dt = du/dτ / γ. Dans l'axe du mouvement, la vitesse propre gagne a_p par seconde
+##             du PILOTE ; de côté, a_p/γ.
+func _pousser_u(g: Array, a_p: Vector3, h: float) -> void:
+	var gam := gamma()
+	var axp := a_p.x
+	var ayp := a_p.y
+	var azp := a_p.z
+	var u2 := ux * ux + uy * uy + uz * uz
+	if u2 > 0.0 and gam > 1.0:
+		var u_l := sqrt(u2)
+		var nx := ux / u_l
+		var ny := uy / u_l
+		var nz := uz / u_l
+		var k := (gam - 1.0) * (axp * nx + ayp * ny + azp * nz)
+		axp += k * nx
+		ayp += k * ny
+		azp += k * nz
+	ux += (gam * float(g[0]) + axp / gam) * h
+	uy += (gam * float(g[1]) + ayp / gam) * h
+	uz += (gam * float(g[2]) + azp / gam) * h
+
+
+## Si quelqu'un a changé la vitesse v de l'extérieur (placer en orbite, tests, pilote auto…),
+## on recalcule la vitesse propre à partir d'elle. Sinon on garde u, plus précise près de C.
+func _lire_vitesse() -> void:
+	if vx == _v_connue[0] and vy == _v_connue[1] and vz == _v_connue[2]:
+		return
+	var v2 := vx * vx + vy * vy + vz * vz
+	var b2 := minf(v2 / (C * C), 1.0 - 1e-15)   # une vitesse écrite à la main ne peut pas atteindre C
+	var gam := 1.0 / sqrt(1.0 - b2)
+	var k := gam
+	if v2 / (C * C) > b2:
+		k *= sqrt(b2 * C * C / v2)
+	ux = vx * k
+	uy = vy * k
+	uz = vz * k
+	_ecrire_vitesse()
+
+
+func _ecrire_vitesse() -> void:
+	var ig := 1.0 / _gamma_u()
+	vx = ux * ig
+	vy = uy * ig
+	vz = uz * ig
+	_v_connue[0] = vx
+	_v_connue[1] = vy
+	_v_connue[2] = vz
+
+
+## Facteur de Lorentz γ (1 au repos, 2,29 à 0,9 c, 7,09 à 0,99 c) : de combien l'horloge du pilote
+## retarde, et de combien l'énergie de mouvement dépasse celle de Newton.
+func gamma() -> float:
+	_lire_vitesse()
+	return _gamma_u()
+
+
+func _gamma_u() -> float:
+	return sqrt(1.0 + (ux * ux + uy * uy + uz * uz) / (C * C))
+
+
+## Vitesse en fraction de celle de la lumière (0 à 1, jamais 1).
+func beta() -> float:
+	return vitesse() / C
+
+
+## Rapidité (sans unité) : elle, s'additionne simplement à chaque poussée. Vitesse = C × tanh(rapidité).
+func rapidite() -> float:
+	_lire_vitesse()
+	var u := sqrt(ux * ux + uy * uy + uz * uz)
+	return log(u / C + sqrt(1.0 + u * u / (C * C)))   # asinh(u / C)
+
+
+## Énergie de mouvement (J) : (γ − 1)·m·C², qui devient ½·m·v² à petite vitesse.
+func energie_mouvement() -> float:
+	var gam := gamma()
+	var u2 := ux * ux + uy * uy + uz * uz
+	# (γ − 1) écrit sans soustraction, pour rester précis à petite vitesse
+	return masse * u2 / (gam + 1.0)
+
+
+## Potentiel de gravité Φ (m²/s², négatif) : sert à l'horloge (au fond d'un puits, le temps passe moins vite).
+func potentiel(x: float, y: float, z: float) -> float:
+	var phi := 0.0
+	if gm != 0.0:
+		phi -= gm / sqrt(x * x + y * y + z * z)
+	for a in autres_astres:
+		var dx: float = x - float(a["x"])
+		var dy: float = y - float(a["y"])
+		var dz: float = z - float(a["z"])
+		phi -= float(a["gm"]) / sqrt(dx * dx + dy * dy + dz * dz)
+	return phi
+
+
 func distance_centre() -> float:
 	return sqrt(px * px + py * py + pz * pz)
 
@@ -877,6 +1042,9 @@ func placer_en_orbite(altitude_m: float) -> void:
 	vx = 0.0
 	vy = 0.0
 	vz = -sqrt(gm / r)
+	_lire_vitesse()
+	temps_univers = 0.0
+	temps_pilote = 0.0
 	orientation = Quaternion.IDENTITY   # l'avant (-Z) est déjà dans le sens de la vitesse
 	omega = Vector3.ZERO
 	au_sol = false

@@ -289,6 +289,7 @@ func _lancer() -> void:
 	_test_vol_vertical()
 	_tests_pilote_auto()
 	_tests_v25()
+	_tests_relativite()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
@@ -1344,3 +1345,129 @@ func _tests_v25() -> void:
 	var ok_d: bool = absf(-v.vz - att_d) < 0.05 and v.omega.length() < 2e-3 and absf(v.vx) < 0.05 and absf(v.vy) < 0.05
 	_resultat(ok_d, "Freinage par les buses du nez",
 		"Freiné 5 s à 12 kN : %.3f m/s restants (attendu %.3f), rotation %.5f rad/s, dérive de côté %.3f m/s (attendu ≈ 0)." % [-v.vz, att_d, v.omega.length(), Vector2(v.vx, v.vy).length()])
+
+
+# =====================================================================
+# TESTS : RELATIVITÉ RESTREINTE (étape A du programme « Einstein »)
+# =====================================================================
+func _tests_relativite() -> void:
+	var c: float = VaisseauPhysique.C
+
+	# R1. Poussée constante (ce que sent le pilote ne change pas) : mouvement « hyperbolique » d'Einstein.
+	#     Vu de la planète : v = αt / √(1 + (αt/C)²), distance = C²/α·(√(1 + (αt/C)²) − 1),
+	#     horloge du pilote τ = C/α·asinh(αt/C). On pousse 10 000 fois plus fort que les vrais moteurs
+	#     pour approcher C en quelques minutes.
+	var v = _nouveau(false)
+	v.regler_poussee(10000.0)
+	var dt := 0.2
+	var n := 5000
+	var alpha := 0.0
+	for i in n:
+		_plein_gaz_stabilise(v, dt)
+		v.pas(dt)
+		alpha += v.acceleration_ressentie.length() / n
+	var t: float = v.temps_univers
+	var at: float = alpha * t / c
+	var b_att: float = at / sqrt(1.0 + at * at)
+	var x_att: float = c * c / alpha * (sqrt(1.0 + at * at) - 1.0)
+	var tau_att: float = c / alpha * log(at + sqrt(1.0 + at * at))
+	var dist: float = sqrt(v.px * v.px + v.py * v.py + v.pz * v.pz)
+	var ok1: bool = absf(v.beta() - b_att) < 1e-4 and absf(dist - x_att) < 1e-4 * x_att and absf(v.temps_pilote - tau_att) < 1e-4 * tau_att \
+		and v.omega.length() < 1e-3
+	_resultat(ok1, "Relativité : poussée constante près de la lumière",
+		"%.0f g pendant %.0f s (horloge de l'univers) : vitesse %.6f c (Einstein : %.6f c ; Newton aurait dit %.1f c), distance %s m (attendu %s), horloge du pilote %.2f s (attendu %.2f)." % [alpha / VaisseauPhysique.G0, t, v.beta(), b_att, at, String.num_scientific(dist), String.num_scientific(x_att), v.temps_pilote, tau_att])
+
+	# R2. On continue 100 fois plus fort, très longtemps : la vitesse s'approche de C sans jamais l'atteindre,
+	#     et la rapidité, elle, continue de grandir régulièrement (elle s'additionne à chaque poussée).
+	var r_avant: float = v.rapidite()
+	var tau_avant: float = v.temps_pilote
+	v.regler_poussee(100000.0)
+	var dr_att := 0.0
+	for i in 2000:
+		_plein_gaz_stabilise(v, 1.0)
+		var tau0: float = v.temps_pilote
+		v.pas(1.0)
+		# rapidité gagnée = poussée ressentie dans l'axe du mouvement × temps du pilote / C
+		var n2 := Vector3(v.ux, v.uy, v.uz).normalized()
+		dr_att += (v.temps_pilote - tau0) * v.acceleration_ressentie.dot(n2) / c
+	var ok2: bool = v.vitesse() < c and is_finite(v.vitesse()) and v.gamma() > 50.0 \
+		and absf((v.rapidite() - r_avant) - dr_att) < 1e-3 * dr_att
+	_resultat(ok2, "Relativité : jamais plus vite que la lumière",
+		"Après 2 000 s de plus à %.0f g : vitesse = C − %.3f m/s (%.10f c), γ = %.0f. La rapidité a gagné %.3f (attendu %.3f = accélération dans l'axe × temps du pilote / C)." % [v.acceleration_ressentie.length() / VaisseauPhysique.G0, c - v.vitesse(), v.beta(), v.gamma(), v.rapidite() - r_avant, dr_att])
+
+	# R3. En roue libre à 0,6 c : γ = 1,25, l'horloge du pilote avance de 80 s quand celle de l'univers avance de 100 s.
+	v = _nouveau(false)
+	v.vx = 0.6 * c
+	for i in 100:
+		v.pas(1.0)
+	var ok3: bool = absf(v.temps_pilote - 80.0) < 1e-9 and absf(v.temps_univers - 100.0) < 1e-9 \
+		and absf(v.vx - 0.6 * c) < 1e-6 and absf(v.px - 60.0 * c) < 1e-3 and absf(v.gamma() - 1.25) < 1e-12
+	_resultat(ok3, "Relativité : l'horloge du pilote retarde",
+		"Roue libre à 0,6 c pendant 100 s de l'univers : pilote %.9f s (attendu 80), γ = %.12f (attendu 1,25), vitesse inchangée (%.6f c)." % [v.temps_pilote, v.gamma(), v.vx / c])
+
+	# R4. À petite vitesse, c'est exactement Newton (vitesse = poussée / masse × temps).
+	v = _nouveau(false)
+	var v_newton := 0.0
+	for i in 1200:
+		_plein_gaz_stabilise(v, 1.0 / 120.0)
+		v.pas(1.0 / 120.0)
+		v_newton += v.acceleration_ressentie.length() / 120.0   # ce que sent le pilote × temps
+	var ok4: bool = absf(v.vitesse() - v_newton) < 1e-6 * v_newton and absf(v.temps_univers - v.temps_pilote) < 1e-9
+	_resultat(ok4, "Relativité : à petite vitesse, c'est Newton",
+		"10 s plein gaz (vrais moteurs) : %.6f m/s (Newton, accélération ressentie × temps : %.6f m/s). Le pilote a vieilli de %s s de moins que l'univers (invisible)." % [v.vitesse(), v_newton, String.num_scientific(v.temps_univers - v.temps_pilote)])
+
+	# R5. La puissance des moteurs se règle en jeu, et le vaisseau pousse toujours droit, sans tourner.
+	v = _nouveau(false)
+	var p1: float = v.poussee_avant_max
+	v.regler_poussee(1000.0)
+	var p1000: float = v.poussee_avant_max
+	for i in 240:
+		v.commander(1.0, 0.0, 0.0, 0.0)
+		v.pas(1.0 / 120.0)
+	var w5: float = v.omega.length()
+	var a5: float = v.acceleration_ressentie.length() / VaisseauPhysique.G0
+	v.regler_poussee(1.0)
+	var ok5: bool = absf(p1000 / p1 - 1000.0) < 5.0 and w5 < 1e-3 and absf(v.poussee_avant_max - p1) < 1e-6 * p1 \
+		and absf(v.poussee_moteur() - VaisseauPhysique.POUSSEE_MOTEUR) < 1e-6
+	_resultat(ok5, "Puissance des moteurs modifiable",
+		"x1 : %.0f kN ; x1000 : %.0f MN (%.0f g ressentis), rotation après 2 s plein gaz %.6f rad/s (attendu ≈ 0) ; retour à x1 : %.0f kN." % [p1 / 1000.0, p1000 / 1e6, a5, w5, v.poussee_avant_max / 1000.0])
+
+	# R6. Horloge au fond d'un puits de gravité (relativité générale) : au repos à une distance r d'un astre
+	#     très dense, le temps passe √(1 − 2GM/(r·C²)) fois moins vite. Ici 2GM/(rC²) = 0,2 → 0,894.
+	v = _nouveau(false)
+	var r6 := 1.0e9
+	v.gm = 0.1 * r6 * c * c
+	v.px = r6
+	v.pas(1e-4)
+	var f6: float = v.temps_pilote / v.temps_univers
+	var ok6: bool = absf(f6 - sqrt(0.8)) < 1e-6
+	# et sur la planète du jeu : un écart d'environ 1 seconde tous les 160 ans
+	var w6 = _nouveau(true)
+	w6.px = R + 1.0
+	var f_sol: float = sqrt(1.0 - 2.0 * GM / (R * c * c))
+	_resultat(ok6, "Relativité : le temps ralentit près d'un astre",
+		"Près d'un astre très dense : %.7f s du pilote par seconde de l'univers (attendu %.7f). Au sol de la planète du jeu : 1 − %s (une seconde de retard tous les %.0f ans)." % [f6, sqrt(0.8), String.num_scientific(1.0 - f_sol), 1.0 / (1.0 - f_sol) / (365.25 * 86400.0)])
+
+	# R7. Une vitesse trop grande écrite à la main (ou par erreur) est ramenée juste sous C.
+	v = _nouveau(false)
+	v.vx = 2.0 * c
+	v.pas(0.01)
+	_resultat(v.vitesse() < c and is_finite(v.px) and is_finite(v.gamma()), "Relativité : vitesse impossible corrigée",
+		"Vitesse écrite à 2 C : ramenée à %.15f c (γ = %s), position valide." % [v.beta(), String.num_scientific(v.gamma())])
+
+	# R8. Affichage des horloges et des nombres dans le jeu.
+	var d8: String = Jeu._duree(2.0 * 365.25 * 86400.0 + 3.0 * 86400.0 + 3725.5)
+	var f8: String = Jeu._fraction_c(0.9999995)
+	var n8: String = Jeu._nombre(1234567.0)
+	var ok8: bool = d8 == "2 ans 3 j 01:02:05.5" and f8.begins_with("0,999999") and n8 == "1 234 567"
+	var cmd = Commandes.new()
+	for nom in ["poussee_plus", "poussee_moins", "temps_x10000", "temps_x100000"]:
+		ok8 = ok8 and cmd.liaisons.has(nom) and cmd.liaisons[nom]["clavier"] != ""
+	_resultat(ok8, "Relativité : horloges et touches dans le jeu",
+		"« %s », « %s c », « %s » ; touches 5 et 6 (temps x10 000 et x100 000), 7 et 8 (puissance des moteurs)." % [d8, f8, n8])
+
+
+## Plein gaz vers l'avant, le stabilisateur tient le cap (comme le pilote avec la touche T).
+func _plein_gaz_stabilise(v, dt: float) -> void:
+	var s: Vector3 = v.ordres_stabilisateur(dt)
+	v.commander(1.0, s.x, s.y, s.z)
