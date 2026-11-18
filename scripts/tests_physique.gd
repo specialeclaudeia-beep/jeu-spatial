@@ -9,6 +9,7 @@ const LumiereJeu = preload("res://scripts/lumiere_jeu.gd")
 const Objets = preload("res://scripts/lumiere/objets.gd")
 const Reflets = preload("res://scripts/lumiere/reflets.gd")
 const PiloteAuto = preload("res://scripts/physique/pilote_auto.gd")
+const Reperes = preload("res://scripts/physique/reperes.gd")
 const R := 600000.0
 const GM := 9.81 * 600000.0 * 600000.0
 
@@ -290,6 +291,7 @@ func _lancer() -> void:
 	_tests_pilote_auto()
 	_tests_v25()
 	_tests_relativite()
+	_tests_reperes()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
@@ -1520,3 +1522,251 @@ func _tests_relativite() -> void:
 func _plein_gaz_stabilise(v, dt: float) -> void:
 	var s: Vector3 = v.ordres_stabilisateur(dt)
 	v.commander(1.0, s.x, s.y, s.z)
+
+
+# =====================================================================
+# TESTS : EINSTEIN A3, UN REPÈRE PAR SYSTÈME D'ÉTOILE
+# =====================================================================
+func _norme3(p: PackedFloat64Array) -> float:
+	return sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2])
+
+
+func _ecart3(a: PackedFloat64Array, b: PackedFloat64Array) -> float:
+	return sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
+
+
+## Écart entre deux nombres voisins de l'ordinateur (64 bits) autour de x : la précision des positions.
+func _precision(x: float) -> float:
+	return pow(2.0, floor(log(absf(x)) / log(2.0)) - 52.0)
+
+
+## Un vaisseau dans la vraie situation du jeu : planète, gravité de la maison, repères.
+func _vaisseau_maison() -> Array:
+	var v = _nouveau(true)
+	v.omega_planete = TAU / 7200.0
+	v.placer_en_orbite(100000.0)
+	var r = Reperes.new()
+	r.preparer(v)
+	return [v, r]
+
+
+## Place le vaisseau (repère de la maison) à la fraction f du chemin vers le système i, filant vers lui à b·c.
+func _placer_vers(v, r, i: int, f: float, b: float) -> void:
+	var c: float = Reperes.C
+	var cible: PackedFloat64Array = r.centre_maison(i, 0.0)
+	var d := _norme3(cible)
+	v.px = cible[0] * f
+	v.py = cible[1] * f
+	v.pz = cible[2] * f
+	v.vx = cible[0] / d * b * c
+	v.vy = cible[1] / d * b * c
+	v.vz = cible[2] / d * b * c
+	v.gamma()
+
+
+func _tests_reperes() -> void:
+	var c: float = Reperes.C
+	var al: float = Reperes.ANNEE_LUMIERE
+
+	# A3-1. Les vraies étoiles voisines, à leur vraie place.
+	var r = Reperes.new()
+	var soleil: PackedFloat64Array = r.systemes[0]["etoiles"][0]["p"]
+	var d_alpha := _ecart3(r.centre_maison(1, 0.0), soleil) / al
+	var d_prox := _ecart3(r.centre_maison(2, 0.0), soleil) / al
+	var d_ap := _ecart3(r.centre_maison(1, 0.0), r.centre_maison(2, 0.0)) / Reperes.UA
+	var v_alpha: float = r.systemes[1]["vitesse"]
+	var vr: float = 0.0
+	var n_a: PackedFloat64Array = r.centre_maison(1, 0.0)
+	for k in 3:
+		vr += r.systemes[1]["v"][k] * (n_a[k] - soleil[k]) / (d_alpha * al)
+	var ok1: bool = absf(d_alpha - 4.366) < 0.01 and absf(d_prox - 4.246) < 0.01 and absf(d_ap - 13000.0) < 600.0 \
+		and absf(v_alpha - 32400.0) < 600.0 and absf(vr + 22400.0) < 1.0
+	_resultat(ok1, "Repères : les vraies étoiles voisines",
+		"Alpha du Centaure à %.3f années-lumière (attendu 4,37), Proxima à %.3f (attendu 4,25), %.0f UA entre les deux (attendu ≈ 13 000). Alpha du Centaure file à %.1f km/s par rapport au Soleil, dont %.1f km/s vers nous." % [d_alpha, d_prox, d_ap, v_alpha / 1000.0, -vr / 1000.0])
+
+	# A3-2. La transformation de Lorentz : aller-retour exact, et « l'intervalle d'espace-temps »
+	#       c²t² − distance² est le même vu des deux repères (c'est ce que dit Einstein).
+	var t0 := 3.0e7
+	var x0 := PackedFloat64Array([1.0e12, -3.0e11, 2.0e12])
+	var ev: Array = r.vers_maison(1, t0, x0)
+	var retour: Array = r.depuis_maison(1, ev[0], ev[1])
+	var o: PackedFloat64Array = r.systemes[1]["o"]
+	var dx := PackedFloat64Array([ev[1][0] - o[0], ev[1][1] - o[1], ev[1][2] - o[2]])
+	var s_maison: float = (c * float(ev[0])) ** 2 - (dx[0] ** 2 + dx[1] ** 2 + dx[2] ** 2)
+	var s_alpha: float = (c * t0) ** 2 - _norme3(x0) ** 2
+	var u0 := PackedFloat64Array([0.3 * c, 2.0 * c, -0.1 * c])
+	var u_retour: PackedFloat64Array = r.vitesse_depuis_maison(1, r.vitesse_vers_maison(1, u0))
+	var tol2 := 2.0 * _precision(_norme3(o))
+	var ok2: bool = absf(float(retour[0]) - t0) < 1e-6 and _ecart3(retour[1], x0) <= tol2 \
+		and absf(s_maison - s_alpha) < 1e-9 * absf(s_alpha) and _ecart3(u_retour, u0) < 1e-6
+	_resultat(ok2, "Repères : transformation de Lorentz",
+		"Aller-retour Alpha du Centaure → maison → Alpha du Centaure : écart %s s et %s m (les nombres comptés depuis la maison, à 4 années-lumière, n'ont que %.0f m de précision : c'est pour ça qu'il faut un repère par étoile). Intervalle c²t² − d² : %s (repère d'Alpha) contre %s (maison)." % [String.num_scientific(absf(float(retour[0]) - t0)), String.num_scientific(_ecart3(retour[1], x0)), tol2 / 2.0, String.num_scientific(s_alpha), String.num_scientific(s_maison)])
+
+	# A3-3. Le voyage : à mi-chemin, le vaisseau passe dans le repère d'Alpha du Centaure. Il est au
+	#       même endroit, au même moment (vu de la maison), à la même vitesse : seuls ses nombres changent.
+	var vr3 := _vaisseau_maison()
+	var v = vr3[0]
+	r = vr3[1]
+	_placer_vers(v, r, 1, 0.5, 0.9)
+	v.temps_univers = 4.6e7
+	v.temps_pilote = 2.0e7
+	var avant: Array = r.evenement_maison(v)
+	var v_avant: PackedFloat64Array = r.vitesse_maison(v)
+	var reste = r.verifier(v)   # encore à mi-chemin (marge) : pas de changement
+	var u_avant := PackedFloat64Array([v.ux, v.uy, v.uz])
+	var visites := PackedStringArray()
+	for i in 860:   # 860 × 1 jour à 0,9 c : presque jusqu'à Alpha du Centaure
+		v.pas(86400.0)
+		if r.verifier(v):
+			visites.append(r.nom_courant())
+	var apres: Array = r.evenement_maison(v)
+	var dist_a: float = sqrt(v.px * v.px + v.py * v.py + v.pz * v.pz) / al
+	var ok3: bool = not reste and r.courant == 1 and r.changements == 2 and visites[0] == "Proxima du Centaure" and v.gm == r.systemes[1]["etoiles"][0]["gm"] \
+		and v.rayon_planete == 0.0 and v.autres_astres.size() == 1 and absf(v.beta() - 0.9) < 1e-3 \
+		and v.temps_pilote > 2.0e7 and dist_a < 0.1
+	# le changement lui-même ne déplace rien : on le refait sur une copie à l'endroit du passage
+	var w = _nouveau(true)
+	var rw = Reperes.new()
+	rw.preparer(w)
+	_placer_vers(w, rw, 1, 0.55, 0.9)
+	w.temps_univers = 1.0e8
+	var e_avant: Array = rw.evenement_maison(w)
+	var vm_avant: PackedFloat64Array = rw.vitesse_maison(w)
+	var tp: float = w.temps_pilote
+	rw.passer(w, 1)
+	var e_apres: Array = rw.evenement_maison(w)
+	var vm_apres: PackedFloat64Array = rw.vitesse_maison(w)
+	var saut_m := _ecart3(e_avant[1], e_apres[1])
+	var saut_v := _ecart3(vm_avant, vm_apres)
+	var tol_m := 4.0 * _precision(_norme3(e_avant[1]))
+	ok3 = ok3 and saut_m <= tol_m and saut_v < 1e-6 and absf(float(e_apres[0]) - float(e_avant[0])) < 1e-6 and w.temps_pilote == tp
+	_resultat(ok3, "Repères : passage dans le repère d'Alpha du Centaure",
+		"Parti à 0,9 c depuis mi-chemin vers Alpha du Centaure : repères traversés %s (Proxima, plus proche du chemin, d'abord) ; après 860 jours, repère « %s », à %.3f années-lumière d'Alpha du Centaure A, vitesse %.6f c ; gravité d'Alpha A + B. Au passage : déplacement %.1f m (précision des nombres à cette distance : %.1f m), vitesse %s m/s, heure de la maison %s s : rien ne bouge vraiment." % [" → ".join(visites), r.nom_courant(), dist_a, v.beta(), saut_m, tol_m / 4.0, String.num_scientific(saut_v), String.num_scientific(absf(float(e_apres[0]) - float(e_avant[0])))])
+
+	# A3-4. Pourquoi un repère par étoile : dans le repère d'Alpha du Centaure, à 1 UA de A, les nombres
+	#       gardent 0,03 mm de précision ; comptés depuis la maison, ce serait 8 m. Et l'orbite reste ronde.
+	v = w
+	r = rw
+	var gm_a: float = v.gm
+	var r_orb := Reperes.UA
+	v.px = r_orb
+	v.py = 0.0
+	v.pz = 0.0
+	v.vx = 0.0
+	v.vy = 0.0
+	v.vz = -sqrt(gm_a / r_orb)
+	v.autres_astres = []   # A seule, pour comparer à Kepler
+	var r_min := INF
+	var r_max := 0.0
+	for i in 2000:
+		v.pas(600.0)
+		var rr: float = v.distance_centre()
+		r_min = minf(r_min, rr)
+		r_max = maxf(r_max, rr)
+	var prec_local := _precision(r_orb)
+	var prec_maison := _precision(_norme3(r.centre_maison(1, 0.0)))
+	var g_a: float = gm_a / (r_orb * r_orb)
+	var ok4: bool = prec_local < 1e-4 and prec_maison > 4.0 and (r_max - r_min) < 1.0e-6 * r_orb and absf(g_a - 0.006397) < 1e-4
+	_resultat(ok4, "Repères : précision autour d'une autre étoile",
+		"Orbite à 1 UA d'Alpha du Centaure A (gravité %.5f m/s²) : rayon entre %s et %s m pendant 14 jours. Précision des positions : %s m dans ce repère, %.0f m si on comptait depuis la maison." % [g_a, String.num_scientific(r_min), String.num_scientific(r_max), String.num_scientific(prec_local), prec_maison])
+
+	# A3-5. Retour à la maison : la planète, sa gravité, son relief et sa rotation reviennent, et la planète
+	#       a tourné pendant tout le voyage (heure de la maison).
+	vr3 = _vaisseau_maison()
+	v = vr3[0]
+	r = vr3[1]
+	var gm_p: float = v.gm
+	var n_astres: int = v.autres_astres.size()
+	var angle0: float = v.angle_planete
+	_placer_vers(v, r, 1, 0.55, 0.0)
+	r.passer(v, 1)
+	var t_dep: float = r.heure_maison(v)
+	# repartir vers la maison : à 0,4 du chemin depuis la maison, il repasse dans son repère
+	var m5: PackedFloat64Array = r.centre_maison(1, t_dep + 3.0e7)
+	var x5 := PackedFloat64Array([m5[0] * 0.4, m5[1] * 0.4, m5[2] * 0.4])
+	var loc5: Array = r.depuis_maison(1, t_dep + 3.0e7, x5)
+	v.px = loc5[1][0]
+	v.py = loc5[1][1]
+	v.pz = loc5[1][2]
+	v.temps_univers = loc5[0]
+	var change5: bool = r.verifier(v)
+	var t_ret: float = r.heure_maison(v)
+	var angle_att := fposmod(angle0 + TAU / 7200.0 * (t_ret - t_dep), TAU)
+	var ok5: bool = change5 and r.a_la_maison() and v.gm == gm_p and v.rayon_planete == R and v.autres_astres.size() == n_astres \
+		and absf(v.omega_planete - TAU / 7200.0) < 1e-12 and absf(angle_difference(v.angle_planete, angle_att)) < 1e-6 \
+		and absf(v.temps_univers - t_ret) < 1e-6
+	_resultat(ok5, "Repères : retour à la maison",
+		"Revenu dans le repère « %s » : gravité de la planète, sol et %d autres astres (Soleil, compagne ; dans le jeu, la lune en plus) retrouvés. Heure de la maison %.0f s : la planète a tourné pendant le voyage (angle %.4f rad, attendu %.4f)." % [r.nom_courant(), v.autres_astres.size(), t_ret, v.angle_planete, angle_att])
+
+	# A3-6. La gravité du Soleil (et de la compagne) dans le repère de la maison : près de la planète,
+	#       seule leur marée reste (minuscule) ; loin d'elle, le vaisseau tombe vers le Soleil.
+	vr3 = _vaisseau_maison()
+	v = vr3[0]
+	var p_s: PackedFloat64Array = r.systemes[0]["etoiles"][0]["p"]
+	var ga: Array = v.gravite(v.px, v.py, v.pz)
+	var g_planete: float = GM / (v.px * v.px)
+	var g_tot := Vector3(ga[0], ga[1], ga[2]).length()
+	var loin := PackedFloat64Array([p_s[0] * 0.5, p_s[1] * 0.5, p_s[2] * 0.5])
+	var gl: Array = v.gravite(loin[0], loin[1], loin[2])
+	var vers_soleil := Vector3(p_s[0], p_s[1], p_s[2]).normalized()
+	var g_loin := Vector3(gl[0], gl[1], gl[2])
+	var ok6: bool = absf(g_tot - g_planete) < 1e-6 and g_loin.dot(vers_soleil) > 0.0 and g_loin.length() > 0.01
+	_resultat(ok6, "Repères : gravité du Soleil dans le système de la maison",
+		"En orbite basse : %.6f m/s² (la planète seule : %.6f ; la marée du Soleil change moins d'un millionième). À mi-chemin du Soleil : %.4f m/s² vers lui." % [g_tot, g_planete, g_loin.dot(vers_soleil)])
+
+	# A3-7. Dans une étoile, on brûle.
+	vr3 = _vaisseau_maison()
+	v = vr3[0]
+	r = vr3[1]
+	_placer_vers(v, r, 1, 0.6, 0.0)
+	r.passer(v, 1)
+	v.px = 0.5 * float(r.systemes[1]["etoiles"][0]["rayon"])
+	v.py = 0.0
+	v.pz = 0.0
+	r.verifier(v)
+	_resultat(v.ecrase, "Repères : dans une étoile, le vaisseau brûle",
+		"Vaisseau placé au milieu d'Alpha du Centaure A : %s." % ("détruit" if v.ecrase else "intact (erreur)"))
+
+	# A3-8. La lumière : près d'Alpha du Centaure, A éclaire comme 1,48 Soleil à 1 UA (elle est 1,22 fois
+	#       plus grande), B est dans l'emplacement de la compagne ; dans le ciel, A et B vues de Proxima
+	#       brillent à la magnitude −6,6 environ (au lieu de 0 vues de la Terre).
+	var lum = LumiereJeu.new()
+	var ok8 := false
+	var detail8 := "catalogue d'étoiles absent"
+	if lum.etoiles.charger():
+		lum.noeud_etoiles = lum.etoiles.creer_noeud(load("res://scripts/lumiere/etoiles.gdshader"), null)
+		var r8 = Reperes.new()
+		r8.courant = 1
+		var t8 := 1.4e8
+		var pa: PackedFloat64Array = r8.position_etoile_maison(1, 0, t8)
+		var oeil := PackedFloat64Array([pa[0] + Reperes.UA, pa[1], pa[2]])
+		r8.regler_lumiere(lum, oeil, t8)
+		var e_a: float = lum.soleil.eclairement(oeil)
+		var e_ref: float = 1361.0 * 93.0
+		var dir_ok: bool = (lum.soleil.direction(oeil) as Vector3).dot(Vector3(-1.0, 0.0, 0.0)) > 0.999999
+		var nom_b: String = lum.compagne.nom
+		var cache := true
+		for y in r8._yale:
+			cache = cache and float(y["lg"]) == Reperes.LUX_EFFACE
+		# depuis Proxima
+		r8.courant = 2
+		var pp: PackedFloat64Array = r8.position_etoile_maison(2, 0, t8)
+		r8.regler_lumiere(lum, pp, t8)
+		var lux_a: float = pow(10.0, float(r8._yale[0]["lg"]))
+		var mag_a: float = -2.5 * log(lux_a / 2.54e-6) / log(10.0)
+		var nom_p: String = lum.compagne.nom
+		ok8 = r8._yale.size() == 2 and absf(e_a / e_ref - 1.482) < 0.01 and dir_ok and nom_b == "Alpha du Centaure B" and cache \
+			and absf(mag_a + 6.6) < 0.4 and nom_p == "Proxima du Centaure"
+		detail8 = "À 1 UA de A : %.0f lux (%.3f fois le Soleil à 1 UA), dans la bonne direction : %s ; compagne = %s ; A et B du catalogue effacées (dessinées en vrai) : %s. Vue de Proxima, A brille à la magnitude %.2f ; compagne = %s." % [e_a, e_a / e_ref, "oui" if dir_ok else "non", nom_b, "oui" if cache else "non", mag_a, nom_p]
+		lum.noeud_etoiles.free()
+	lum.free()
+	_resultat(ok8, "Repères : lumière des étoiles d'un autre système", detail8)
+
+	# A3-9. Une ligne « REPÈRE » dans les instruments.
+	var jeu = Jeu.new()
+	jeu.vaisseau = vr3[0]
+	jeu.reperes = vr3[1]
+	var ligne: String = jeu._ligne_repere()
+	jeu.free()
+	_resultat(ligne.begins_with("REPÈRE") and ligne.contains("Alpha du Centaure") and ligne.contains("heure de la maison"),
+		"Repères : affichage", ligne)

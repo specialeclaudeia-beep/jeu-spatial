@@ -84,7 +84,18 @@ ou couper la poussée, le désactive.
   et, un tout petit peu, au fond d'un puits de gravité. Les vrais moteurs donnent 12 g (0,9 c en 43 jours
   du pilote) ; touches 7 / 8 : moteurs « imaginaires » jusqu'à ×100 000 (toujours de vraies forces, dont la
   part en plus passe par le centre de gravité). Le ciel (aberration, Doppler) suit la vraie vitesse.
-  Pas encore : planète et lune déformées par l'aberration (étape A2), gravité d'Einstein (étape B).
+  Étape A2 : planète et lune déformées par l'aberration et colorées par l'effet Doppler.
+  Pas encore : gravité d'Einstein (étape B), trou de ver (étape C).
+- Un repère par système d'étoile (étape A3) : le système du Soleil (la maison : planète, lune, Soleil,
+  étoile compagne), Alpha du Centaure A et B (4,37 années-lumière) et Proxima du Centaure (4,25), à leur
+  vraie place dans le ciel, avec leur vraie vitesse (32 km/s par rapport au Soleil). Le vaisseau compte
+  toujours sa position depuis l'étoile du système où il est : ses nombres restent précis (0,03 mm à 1 UA
+  d'Alpha du Centaure, au lieu de 8 m comptés depuis la maison). À mi-chemin entre deux systèmes, il passe
+  dans le repère de l'autre par une transformation de Lorentz (position, heure et vitesse). Gravité de
+  chaque système (étoiles, et désormais le Soleil et la compagne dans celui de la maison). Ligne REPÈRE à
+  l'écran : système, étoile la plus proche, heure de la maison quand on est ailleurs. Entrer dans une
+  étoile : le vaisseau brûle. Aller à Alpha du Centaure : puissance ×100 000 (touche 8), gaz à fond, temps
+  ×100 000 (touche 6) : environ 25 minutes réelles (si le PC suit le rythme).
 - Gravité de Newton calculée en permanence (planète de test : 600 km de rayon, 9,81 m/s² au sol).
 - Gravité de plusieurs astres possible (somme des attractions) et petit couple dû au gradient de gravité :
   laissé seul en orbite, le vaisseau se balance lentement autour de la direction de la planète.
@@ -127,6 +138,7 @@ ou couper la poussée, le désactive.
 
 ## Organisation
 - `scripts/physique/vaisseau_physique.gd` : toute la physique (indépendante de l'affichage).
+- `scripts/physique/reperes.gd` : les systèmes d'étoile, leurs repères et les transformations de Lorentz entre eux.
 - `scripts/jeu.gd` : affichage (modèle 3D, vues, animation des ailes et du train), instruments.
 - `modeles/vaisseau/` : le vaisseau (`vaisseau_exterieur.glb`), le cockpit (`cockpit.glb`) et les positions
   des propulseurs. Pour une nouvelle version du modèle, il suffit de remplacer ces fichiers (mêmes noms).
