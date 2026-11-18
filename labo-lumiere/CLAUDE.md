@@ -265,6 +265,12 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
   librement dans l'axe. Le sol peut tourner (`omega_planete`, `angle_planete`, relief donné dans le repère
   de la planète). Constat : train arrière étroit (84 cm), ressorts souples, centre de gravité à 1,55 m :
   le vaisseau se couche dès ~3,5° de pente de côté.
+- **Planète qui tourne et lune dans le jeu** : jour de 2 h (`DUREE_JOUR` dans jeu.gd → `omega_planete`) ;
+  `lumiere_jeu.gd` tourne la planète (`rotation_astre`) et crée la lune (rayon 150 km, orbite 6 000 km,
+  masse volumique 3 000 kg/m³, retard de la lumière, éclipses dans les deux sens, reflets). La lune attire
+  le vaisseau (`ajouter_astre_mobile`, avec le terme « indirect » : la planète tombe aussi vers la lune,
+  marée de ~18 µm/s²). Vitesse « par rapport au sol » (Ω × r) pour l'affichage, les roues, les marqueurs
+  et le pilote automatique (atterrissage sur un sol qui défile à ~465 m/s à l'équateur).
 
 ## Einstein A2 : planète et lune vues à grande vitesse
 - `planete.gdshader` (vertex) : chaque coin est déplacé là où l'œil qui va à `oeil_vitesse` reçoit sa lumière

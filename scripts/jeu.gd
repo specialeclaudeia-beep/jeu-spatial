@@ -22,6 +22,9 @@ const Droide = preload("res://scripts/droide.gd")
 const RAYON_PLANETE := 600000.0          # m (planète de test, plus petite que la Terre)
 const GRAVITE_SURFACE := 9.81            # m/s² au sol
 const ALTITUDE_DEPART := 100000.0        # m
+## La planète tourne sur elle-même en 2 h (comme le labo, Q40 : jour court pour les essais). Au sol, à
+## l'équateur, on file donc à 524 m/s dans l'espace : pour se poser, il faut suivre le sol.
+const DUREE_JOUR := 7200.0               # s
 const PAS := 1.0 / 120.0                 # s (120 calculs de physique par seconde)
 const DISTANCE_RENDU_MAX := 200000.0     # au-delà, la planète est dessinée en réduction (même taille apparente)
 const ALTITUDE_CALOTTE := 60000.0        # en dessous, on dessine une calotte détaillée sous le vaisseau
@@ -169,6 +172,7 @@ func _ready() -> void:
 	vaisseau = VaisseauPhysique.new()
 	vaisseau.gm = GRAVITE_SURFACE * RAYON_PLANETE * RAYON_PLANETE
 	vaisseau.rayon_planete = RAYON_PLANETE
+	vaisseau.omega_planete = TAU / DUREE_JOUR
 	vaisseau.placer_en_orbite(ALTITUDE_DEPART)
 	_creer_pilote_et_cockpit()
 	_brancher_lumiere()
@@ -185,7 +189,7 @@ func _brancher_lumiere() -> void:
 	lumiere = LumiereJeu.new()
 	lumiere.name = "Lumiere"
 	add_child(lumiere)
-	avec_lumiere = lumiere.preparer(camera, RAYON_PLANETE)
+	avec_lumiere = lumiere.preparer(camera, RAYON_PLANETE, vaisseau.gm)
 	if not avec_lumiere:
 		lumiere.queue_free()
 		lumiere = null
@@ -209,7 +213,10 @@ func _brancher_lumiere() -> void:
 		lampe_ancienne.queue_free()   # remplacée par la vraie lampe du système
 		lampe_ancienne = null
 	# le sol de la physique suit le relief de la planète dessinée
-	vaisseau.relief = lumiere.hauteur_sol
+	vaisseau.relief = lumiere.hauteur_sol_planete   # (la physique fait elle-même la rotation de la planète)
+	# la petite lune attire aussi le vaisseau (elle bouge : sa position est recalculée à chaque pas)
+	if lumiere.lune:
+		vaisseau.ajouter_astre_mobile("lune", lumiere.gm_lune(), lumiere.position_lune)
 	_creer_casque()
 	_appliquer_vue()
 
@@ -597,7 +604,7 @@ func _animer_amortisseurs(delta: float) -> void:
 		sc.y *= maxf(0.05, (float(r[3]) - c[r[2]]) / float(r[3]))
 		(r[0] as Node3D).scale = sc
 	if roue_avant != null and vaisseau.au_sol and c[0] > 0.0:
-		var avance: float = (Basis(vaisseau.orientation).inverse() * Vector3(vaisseau.vx, vaisseau.vy, vaisseau.vz)).dot(Vector3.FORWARD)
+		var avance: float = (Basis(vaisseau.orientation).inverse() * vaisseau.vitesse_par_rapport_au_sol()).dot(Vector3.FORWARD)
 		roue_avant.rotate_x(-avance / rayon_roue * delta)
 
 
@@ -944,6 +951,8 @@ func _placer_lumiere(delta: float) -> void:
 		gaz_moteurs += float(m["actuel"])
 	gaz_moteurs /= maxf(vaisseau.moteurs.size(), 1)
 	var t0 := Time.get_ticks_usec()
+	lumiere.angle_planete = vaisseau.angle_planete
+	lumiere.temps_astres = vaisseau.temps_univers
 	lumiere.mettre_a_jour(delta, oeil64, Vector3(vaisseau.vx, vaisseau.vy, vaisseau.vz), pilote.basis,
 		oeil_local, gaz_moteurs)
 	temps_lumiere_ms = lerpf(temps_lumiere_ms, (Time.get_ticks_usec() - t0) / 1000.0, 0.05)
@@ -1160,7 +1169,7 @@ func _mettre_a_jour_hud() -> void:
 	var w: Vector3 = vaisseau.omega * (180.0 / PI)
 	var m: Array = vaisseau.moteurs
 	var lignes := PackedStringArray()
-	lignes.append("VITESSE       %s   (verticale %s   horizontale %s)" % [_vitesse_txt(vaisseau.vitesse()), _vitesse_txt(vaisseau.vitesse_verticale(), true), _vitesse_txt(vaisseau.vitesse_horizontale())])
+	lignes.append("VITESSE       %s   (verticale %s   horizontale %s)   par rapport au sol %s (horizontale %s)" % [_vitesse_txt(vaisseau.vitesse()), _vitesse_txt(vaisseau.vitesse_verticale(), true), _vitesse_txt(vaisseau.vitesse_horizontale()), _vitesse_txt(vaisseau.vitesse_par_rapport_au_sol().length()), _vitesse_txt(vaisseau.vitesse_horizontale_sol())])
 	lignes.append("RELATIVITÉ    %s c   γ = %s   rapidité %.4f" % [_fraction_c(vaisseau.beta()), _gamma_txt(vaisseau.gamma()), vaisseau.rapidite()])
 	lignes.append("HORLOGES      pilote %s   univers %s   (le pilote a %s de moins)" % [_duree(vaisseau.temps_pilote), _duree(vaisseau.temps_univers), _duree_courte(vaisseau.temps_univers - vaisseau.temps_pilote)])
 	lignes.append("ALTITUDE      %s" % _distance(vaisseau.altitude()))
@@ -1195,6 +1204,8 @@ func _mettre_a_jour_hud() -> void:
 ## Marqueurs de direction du mouvement : (o) = où l'on va, (x) = d'où l'on vient.
 func _placer_marqueurs() -> void:
 	var v := Vector3(vaisseau.vx, vaisseau.vy, vaisseau.vz)
+	if vaisseau.altitude() < 20000.0:
+		v = vaisseau.vitesse_par_rapport_au_sol()   # près du sol, c'est le mouvement par rapport au sol qui compte
 	if v.length() < 0.5:
 		marqueur_avant.visible = false
 		marqueur_arriere.visible = false
