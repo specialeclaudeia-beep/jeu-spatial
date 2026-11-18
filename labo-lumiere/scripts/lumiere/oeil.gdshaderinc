@@ -18,6 +18,8 @@ global uniform float oeil_nuit;              // 0 = vision de jour (cônes) … 
 global uniform float oeil_pixel_angle;       // angle couvert par un pixel, en radians
 global uniform vec3 oeil_droite;             // repère de la tête : vers la droite…
 global uniform vec3 oeil_haut;               // … et vers le haut (le halo tourne avec la tête)
+global uniform vec3 soleil_direction_vue;    // direction où l'œil VOIT le Soleil (= soleil_direction, sauf
+                                              // à très grande vitesse : aberration, étape 6)
 
 // Bruit fixe par pixel, entre 0 et 1.
 float oeil_hasard(vec2 p) {
@@ -34,11 +36,11 @@ vec3 oeil_voile(vec3 d, float temps) {
 	if (e <= 0.0) {
 		return vec3(0.0);
 	}
-	float c = dot(d, soleil_direction);
-	float th = degrees(atan(length(cross(d, soleil_direction)), c));
+	float c = dot(d, soleil_direction_vue);
+	float th = degrees(atan(length(cross(d, soleil_direction_vue)), c));
 	th = max(th, max(0.1, degrees(soleil_rayon_angle)));
 	// Couronne : raies fines autour du Soleil, qui tournent avec la tête et frémissent un peu.
-	vec3 ecart = d - soleil_direction * c;
+	vec3 ecart = d - soleil_direction_vue * c;
 	float phi = atan(dot(ecart, oeil_haut), dot(ecart, oeil_droite));
 	float raies = pow(abs(sin(phi * 23.0 + sin(phi * 7.0) * 2.0 + temps * 0.7)), 18.0)
 		+ 0.6 * pow(abs(sin(phi * 41.0 - sin(phi * 3.0) * 3.0)), 24.0);

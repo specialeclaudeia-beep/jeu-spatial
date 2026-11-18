@@ -57,7 +57,7 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
   à 0,502 à l'écran). `oeil_vers_ecran` fait donc lui-même la conversion sRGB. Garder
   `Environment.tonemap_mode = LINEAR` et pas de glow.
 - `scripts/lumiere/ciel.gdshader` : ciel (lueur de fond 2e-4 cd/m², disque solaire, couronne de Baumbach).
-  Les étoiles arrivent à l'étape 6.
+  Étape 6 : il ajoute la Voie lactée, l'étoile compagne et l'aberration + Doppler (voir plus bas).
 
 ## Planète en rayons et partie C++ (étape 4)
 - **Partie C++** (GDExtension) : classe `ArbreLumiere`, sources dans `cpp/src/` (dossier ignoré par Godot,
@@ -126,6 +126,42 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
 - Pas encore fait : lumière de la planète sur la lune (et inversement) = rebonds Q38 ; la lune côté nuit
   est donc noire.
 
+## Étoiles, étoile compagne, grande vitesse (étape 6)
+- **Catalogue** : `scripts/lumiere/etoiles_yale.bin` = Bright Star Catalogue de Yale (5e éd., domaine public,
+  9 096 étoiles, les plus brillantes d'abord ; AD, Dec J2000, V, B-V en float32). Fabriqué par
+  `donnees/convertir_yale.py` (dossier ignoré par Godot) depuis le JSON de brettonw/YaleBrightStarCatalog
+  (le site de Harvard et le CDS ne passent pas par le proxy du cloud).
+- **Repère du ciel** : Y = pôle nord céleste = axe de la planète, X = AD 0 h (`Etoiles.direction_ciel`).
+  Le nœud `Etoiles` (MultiMesh, 1 carré par étoile) reste sur la caméra et tourne avec le jour
+  (`Basis(Y, −angle_jour)`, comme le Soleil).
+- **Dessin** (`etoiles.gdshader`) : vraie lumière d'un point (lux = 2,54e-6 × 10^(−0,4 V)), tache gaussienne
+  de 0,6 px qui garde toute la lumière, halo CIE pour les brillantes (carré jusqu'à 24 px), puis
+  `oeil_vers_ecran(fond + étoile) − oeil_vers_ecran(fond)` en mélange additif : l'étoile ajoute ce qu'elle
+  ajoute vraiment à l'œil (rien quand l'œil est ébloui). Étoile trop faible pour l'œil → carré jeté
+  dans le vertex. Profondeur : `DEPTH = 1e-7` (inversée : tout au fond) → la planète et la lune les cachent.
+  Le carré est placé à `distance_dessin` = √(near × far) pour ne jamais être coupé par les plans.
+- **Couleur** : B-V → température (Ballesteros 2012) → corps noir (Planck × CIE 1931 de Wyman 2013) → sRGB
+  linéaire de luminance 1. `Etoiles.table_corps_noir()` = texture 256 × 1 (500 K à 2 MK), alpha =
+  efficacité relative (1 au Soleil). Uniform `corps_noir` à donner au ciel ET aux étoiles.
+- **Voie lactée** (`fond_galaxie`, même formule en GDScript et en shader) : 7e-5 cd/m² + bande (b ≈ 8°)
+  + bulbe vers le centre (Sagittaire). Pôle et centre galactiques J2000 → globals `ciel_pole_galaxie`,
+  `ciel_centre_galaxie` (tournent avec le ciel). Moyenne du ciel ≈ 1e-4 ; le posemètre garde FOND_CIEL = 2e-4.
+- **Étoile compagne** (`etoile_proche.gd`, Q « deux étoiles proches ») : naine K5 (4 400 K, 0,7 R☉) à 5 UA,
+  125° du Soleil (`VERS_COMPAGNE` dans labo.gd). 610 lux. Globals `compagnon_*` (`compagnon.gdshaderinc`).
+  `planete.gdshader` additionne les deux lumières (fonction `eclairage`), le reste du ciel est regroupé dans
+  `lux_fond`. Le posemètre C++ ne connaît qu'une étoile : `labo._posemetre_astre` l'appelle deux fois
+  (2e fois avec fond 0) et additionne. Pas de halo dans l'œil pour la compagne (≈ 1/200 du Soleil) : à faire
+  si besoin avec les 4 sources individuelles.
+- **Ombre de l'astre lui-même** (correctif) : un astre cache ses étoiles sous l'horizon : boule de rayon
+  min(rayon, 0,9999 × distance au centre) dans `planete.gdshader` (`part_etoile`, uniform `rayon_corps`) ET
+  dans le posemètre C++ (même formule, calculée seulement si l'étoile est à moins de ~17° au-dessus).
+  Avant, la loi du cône de petites faces éclairait des pentes en pleine nuit.
+- **Grande vitesse** : global `oeil_vitesse` (fraction de c, repère d'affichage) = déplacements de l'œil + essai B.
+  Mise à 0 si < 1/10 pixel. Le ciel fait l'aberration À L'ENVERS par pixel (d'où vient sa lumière au repos),
+  luminance × D⁴ × eff(D·T)/eff(T), couleur du corps noir à D·T. Les étoiles : direction penchée, éclat
+  × D² × eff(D·T)/eff(T). Le halo du Soleil suit `soleil_direction_vue` (oeil.gdshaderinc).
+  PAS ENCORE : planète et lune non déformées à grande vitesse (et leur lumière pas décalée).
+
 ## Organisation
 | Chemin | Contenu |
 |---|---|
@@ -134,10 +170,11 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
 | `scenes/labo.tscn` | Scène principale (planète, Soleil, caméra libre au fil des étapes) |
 | `scenes/mesure.tscn` | Mesure de vitesse (créée à l'étape 2) |
 | `scenes/tests.tscn` | Tests automatiques |
-| `scripts/lumiere/` | Le système lui-même (`orbite.gd` : lune et retard de la lumière, étape 5). Ne charge RIEN en dehors de ce dossier (un test le vérifie) : il sera copié tel quel dans le jeu à l'étape 8 |
+| `scripts/lumiere/` | Le système lui-même (`orbite.gd` : lune et retard de la lumière, étape 5 ; `etoiles.gd`, `etoile_proche.gd`, `etoiles.gdshader`, `etoiles_yale.bin` : étape 6). Ne charge RIEN en dehors de ce dossier (un test le vérifie) : il sera copié tel quel dans le jeu à l'étape 8 |
 | `scripts/outils/` | Outils du labo (compteur…) |
 | `scripts/tests/` | Les tests |
 | `shaders/` | Programmes de la carte graphique propres au labo (`astre_essai.gdshader` = boule de secours sans C++) |
+| `donnees/` | Outil de conversion du catalogue d'étoiles (ignoré par Godot) |
 | `cpp/` | Sources C++ de `ArbreLumiere` (étape 4), ignorées par Godot |
 | `scripts/lumiere/bin/` | Partie C++ compilée (Windows + Linux) |
 | `addons/godot_ai/` | Copié depuis le jeu sur le PC, pas dans le dépôt (`.gitignore`) |

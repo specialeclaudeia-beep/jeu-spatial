@@ -14,6 +14,7 @@ shader_type spatial;
 render_mode unshaded, cull_disabled, skip_vertex_transform;
 
 #include "res://scripts/lumiere/oeil.gdshaderinc"
+#include "res://scripts/lumiere/compagnon.gdshaderinc"
 
 uniform sampler2D coins : filter_nearest;      // RGBA 32 bits flottants, 90 × places
 uniform sampler2D rayons : filter_nearest;     // RGBA 8 bits, 135 × places
@@ -25,6 +26,9 @@ uniform vec3 centre_planete = vec3(0.0);       // centre de la planète dans le 
 // le Soleil. w = 0 : aucun. Chaque coin reçoit la part du disque solaire qu'il voit encore :
 // ombre (rien), pénombre (une partie), comme dans une vraie éclipse.
 uniform vec4 occulteur = vec4(0.0);
+// Étape 6 : rayon de l'astre lui-même (niveau 0). Il cache le Soleil et l'étoile compagne quand elles
+// sont sous l'horizon : sans cela, une pente tournée vers elles s'éclairait en pleine nuit.
+uniform float rayon_corps = 0.0;
 
 varying vec3 albedo_v;
 varying vec3 direction_v;
@@ -33,6 +37,7 @@ varying vec3 pos_monde;
 varying float profondeur;
 varying vec3 voile_v;
 varying float soleil_visible;
+varying float compagnon_visible;
 
 // Part d'un disque de rayon a cachée par un disque de rayon b dont le centre est à e
 // (même formule que soleil.gd et la partie C++).
@@ -49,18 +54,35 @@ float recouvrement(float a, float b, float e) {
 	return clamp(aire / (PI * a2), 0.0, 1.0);
 }
 
-float part_soleil(vec3 p) {
-	if (occulteur.w <= 0.0) return 1.0;
-	vec3 v = occulteur.xyz - p;
+// Part visible du disque d'une étoile (direction dir, rayon apparent a) depuis le point p, derrière
+// une boule (centre c, rayon r).
+float part_derriere(vec3 p, vec3 dir, float a, vec3 c, float r) {
+	vec3 v = c - p;
 	float dc = length(v);
-	if (dc <= occulteur.w) return 0.0;
+	if (dc <= r) return 0.0;
 	vec3 vn = v / dc;
 	// Angle entre l'astre et le Soleil, calculé par atan2 : précis même pour de tout petits angles.
-	float e = atan(length(cross(vn, soleil_direction)), dot(vn, soleil_direction));
-	float b = asin(min(occulteur.w / dc, 1.0));
-	float a = soleil_rayon_angle;
+	float e = atan(length(cross(vn, dir)), dot(vn, dir));
+	float b = asin(min(r / dc, 1.0));
 	if (e >= a + b) return 1.0;
 	return 1.0 - recouvrement(a, b, e);
+}
+
+// Part visible du disque d'une étoile depuis le point p : cachée par l'astre lui-même (sous l'horizon)
+// et par l'occulteur (éclipse).
+float part_etoile(vec3 p, vec3 dir, float a) {
+	float part = 1.0;
+	if (rayon_corps > 0.0) {
+		vec3 q = p - centre_planete;
+		float dq = length(q);
+		if (dot(q, dir) < 0.3 * dq) {
+			part = part_derriere(p, dir, a, centre_planete, min(rayon_corps, dq * 0.9999));
+		}
+	}
+	if (occulteur.w > 0.0 && part > 0.0) {
+		part *= part_derriere(p, dir, a, occulteur.xyz, occulteur.w);
+	}
+	return part;
 }
 
 // Profondeur « logarithmique » : de 5 cm à des milliers de km sans que les montagnes lointaines se
@@ -94,10 +116,18 @@ void vertex() {
 	// beaucoup moins de calcul par pixel pour la petite carte graphique du PC.
 	voile_v = oeil_voile(normalize(p - CAMERA_POSITION_WORLD), TIME);
 	// L'ombre d'une éclipse varie lentement à l'échelle d'un rayon : calculée aux coins.
-	soleil_visible = part_soleil(p);
+	soleil_visible = part_etoile(p, soleil_direction, soleil_rayon_angle);
+	compagnon_visible = compagnon_eclairement > 0.0 ? part_etoile(p, compagnon_direction, compagnon_rayon_angle) : 0.0;
 	vec4 vue = VIEW_MATRIX * vec4(p, 1.0);
 	profondeur = -vue.z;
 	POSITION = PROJECTION_MATRIX * vue;
+}
+
+// Lumière moyenne d'un cône de petites faces (direction moyenne n, sinus du demi-angle sb) éclairé par
+// une étoile dans la direction s.
+float eclairage(vec3 n, float sb, vec3 s) {
+	float cs = dot(n, s);
+	return cs > sb ? cs : (cs < -sb ? 0.0 : (cs + sb) * (cs + sb) / (4.0 * sb + 1e-6));
 }
 
 void fragment() {
@@ -111,10 +141,14 @@ void fragment() {
 	// cos(angle avec le Soleil) si elle le voit, 0 sinon : en moyenne sur le cône, la lumière déborde
 	// un peu au-delà de la ligne jour/nuit, mais jamais jusqu'au côté nuit.
 	float sb = sqrt(max(1.0 - pow(2.0 * longueur - 1.0, 2.0), 0.0));   // sinus de b
-	float cs = dot(n, soleil_direction);
-	float direct = cs > sb ? cs : (cs < -sb ? 0.0 : (cs + sb) * (cs + sb) / (4.0 * sb + 1e-6));
-	// Sol mat : luminance = albédo × éclairement × cos / π.
-	vec3 l = albedo * (soleil_couleur * soleil_eclairement * direct * soleil_visible + lux_fond) / PI;
+	// Sol mat : luminance = albédo × éclairement × cos / π. Étape 6 : deux étoiles proches, leurs
+	// lumières s'additionnent ; tout le reste du ciel (étoiles lointaines, Voie lactée) est regroupé
+	// dans lux_fond.
+	vec3 e = soleil_couleur * soleil_eclairement * eclairage(n, sb, soleil_direction) * soleil_visible;
+	if (compagnon_eclairement > 0.0) {
+		e += compagnon_couleur * compagnon_eclairement * eclairage(n, sb, compagnon_direction) * compagnon_visible;
+	}
+	vec3 l = albedo * (e + lux_fond) / PI;
 	ALBEDO = oeil_vers_ecran(l + voile_v, FRAGCOORD.xy, TIME);
 	DEPTH = 1.0 - clamp(log2(max(profondeur, profondeur_pres) / profondeur_pres) / log2(profondeur_loin / profondeur_pres), 0.0, 1.0);
 }

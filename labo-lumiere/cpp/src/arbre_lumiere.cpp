@@ -744,6 +744,16 @@ PackedFloat32Array ArbreLumiere::posemetre(const PackedFloat64Array &p_camera, c
 			double sb = std::sqrt(std::max(1.0 - cb * cb, 0.0));
 			double direct = cs > sb ? cs : (cs < -sb ? 0.0 : (cs + sb) * (cs + sb) / (4.0 * sb + 1e-6));
 			double y_al = 0.2126 * al[0] + 0.7152 * al[1] + 0.0722 * al[2];
+			if (direct > 0.0) {
+				// Étape 6 : l'astre lui-même cache l'étoile quand elle est sous l'horizon (côté nuit, même
+				// sur une pente tournée vers elle). Boule au niveau 0 (ou juste sous le point, s'il est plus bas).
+				Vec3d p = c + v;
+				double dp = p.length();
+				double haut = p.dot(s) / dp;
+				if (haut < 0.3) {
+					direct *= part_soleil_visible(p, Vec3d(), std::min(rayon, dp * 0.9999), s, p_soleil_angle);
+				}
+			}
 			if (avec_occulteur && direct > 0.0) {
 				direct *= part_soleil_visible(c + v, occ_c, occ_r, s, p_soleil_angle);
 			}

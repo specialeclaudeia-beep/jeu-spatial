@@ -15,6 +15,10 @@ extends Node3D
 ## arrive avec retard (vitesse de la lumière), et elle fait des éclipses avec pénombre.
 ## 6 éclipse de Soleil vue du sol · 7 l'ombre de la lune vue d'orbite · 8 éclipse de lune
 ## V temps accéléré (×1, ×10, ×100, ×1000)
+## Étape 6 : les étoiles (catalogue de Yale, 9 096 étoiles jusqu'à la magnitude 6,5), la Voie lactée,
+## une étoile compagne (naine orange à 5 UA) qui éclaire aussi la planète, l'aberration et le Doppler.
+## 9 la planète éclairée par l'étoile compagne seule · 0 ciel étoilé, côté nuit
+## E étoile compagne oui / non · B essai à grande vitesse (0, 0,1 c, 0,5 c, 0,9 c, 0,99 c, droit devant)
 
 const Compteur = preload("res://scripts/outils/compteur.gd")
 const Soleil = preload("res://scripts/lumiere/soleil.gd")
@@ -24,6 +28,9 @@ const ShaderAstre = preload("res://shaders/astre_essai.gdshader")
 const Planete = preload("res://scripts/lumiere/planete.gd")
 const Orbite = preload("res://scripts/lumiere/orbite.gd")
 const ChronoBoucle = preload("res://scripts/lumiere/chrono_boucle.gd")
+const Etoiles = preload("res://scripts/lumiere/etoiles.gd")
+const EtoileProche = preload("res://scripts/lumiere/etoile_proche.gd")
+const ShaderEtoiles = preload("res://scripts/lumiere/etoiles.gdshader")
 
 const RAYON_ASTRE := 600000.0            # m : la planète d'essai (niveau 0 de l'arbre ≈ 630 km)
 const GRAINE := 7
@@ -45,6 +52,12 @@ const ORBITE_LUNE := 6.0e6
 ## Masse volumique de la planète (roche, comme la Lune) : donne sa masse, donc la vitesse de la lune.
 const MASSE_VOLUMIQUE := 3000.0
 const ACCELERATIONS: PackedFloat64Array = [1.0, 10.0, 100.0, 1000.0]
+## L'étoile compagne (étape 6) : direction depuis la planète (repère fixe), à 125° du Soleil, et
+## distance. 5 UA : assez loin pour que l'orbite de la planète autour du Soleil reste stable.
+const VERS_COMPAGNE := Vector3(-0.55, 0.35, -0.75)
+const DISTANCE_COMPAGNE := 5.0
+## Vitesses de l'essai « grande vitesse » (touche B), en fraction de la vitesse de la lumière.
+const VITESSES_ESSAI: PackedFloat64Array = [0.0, 0.1, 0.5, 0.9, 0.99]
 
 var camera: Camera3D
 var compteur: CanvasLayer
@@ -73,6 +86,17 @@ var pos_oeil := PackedFloat64Array([0.0, 0.0, 4000.0])
 var pos_astre := PackedFloat64Array([0.0, 0.0, 0.0])
 var luminance_vue := 1.0                 # dernière mesure du « posemètre » de l'œil, cd/m²
 var part_visible := 1.0
+## Étape 6.
+var etoiles = Etoiles.new()
+var noeud_etoiles: MultiMeshInstance3D
+var table_corps_noir: ImageTexture
+var compagne = EtoileProche.new()
+var mat_ciel: ShaderMaterial
+var vitesse_essai := 0.0                 # fraction de c (touche B)
+var direction_essai := Vector3.FORWARD   # sens de l'essai, fixé au moment de l'appui
+var vitesse_oeil := Vector3.ZERO         # m/s : vitesse de l'œil (déplacements au clavier)
+var beta := Vector3.ZERO                 # vitesse totale de l'œil en fraction de c (0 si effet < 1/10 pixel)
+var doppler_soleil := 1.0                # facteur Doppler du Soleil vu par l'œil
 ## Mesure automatique (option « -- --mesure ») : plusieurs survols enchaînés, résultats dans
 ## mesures/resultats-planete-pc.md, puis Godot se ferme.
 const PHASES_MESURE := [
@@ -85,6 +109,9 @@ const PHASES_MESURE := [
 	["Ombre de la lune vue d'orbite (7)", 7, 4.0, false],
 	["Éclipse de lune (8)", 8, 4.0, false],
 	["Orbite, planète cachée (ciel seul)", -1, 4.0, false],
+	["Ciel étoilé, côté nuit (0)", 0, 4.0, false],
+	["Étoile compagne seule (9)", 9, 4.0, false],
+	["Grande vitesse 0,9 c (1 + B)", 1, 4.0, false, 0.9],
 ]
 var mesure_auto := false
 var _phase := -1
@@ -98,8 +125,10 @@ func _ready() -> void:
 	_placer_soleil()
 
 	var ciel := Sky.new()
-	var mat_ciel := ShaderMaterial.new()
+	table_corps_noir = Etoiles.table_corps_noir()
+	mat_ciel = ShaderMaterial.new()
 	mat_ciel.shader = ShaderCiel
+	mat_ciel.set_shader_parameter("corps_noir", table_corps_noir)
 	ciel.sky_material = mat_ciel
 	ciel.radiance_size = Sky.RADIANCE_SIZE_32
 	var env := Environment.new()
@@ -152,6 +181,12 @@ func _ready() -> void:
 	mat.set_shader_parameter("albedo", ALBEDO_ASTRE)
 	astre.material_override = mat
 	add_child(astre)
+
+	if etoiles.charger():
+		noeud_etoiles = etoiles.creer_noeud(ShaderEtoiles, table_corps_noir)
+		add_child(noeud_etoiles)
+	else:
+		push_warning("Catalogue d'étoiles absent : ciel sans étoiles.")
 
 	camera = Camera3D.new()
 	camera.name = "Camera"
@@ -231,6 +266,26 @@ func aller_a(n: int) -> void:
 			var e := c + s * 500000.0 + _vers_planete(est) * 200000.0
 			_placer(e, c - e)
 			_garder_au_dessus_du_sol()
+		9:
+			# Côté nuit pour le Soleil, mais l'étoile compagne est à 35° au-dessus de l'horizon.
+			var c0 := VERS_COMPAGNE.normalized()
+			var s0 := VERS_SOLEIL.normalized()
+			var w := -(s0 - c0 * c0.dot(s0)).normalized()
+			var g := _vers_planete(c0 * cos(deg_to_rad(55.0)) + w * sin(deg_to_rad(55.0)))
+			# On regarde vers elle, 10° au-dessus de l'horizon : le sol éclairé en bas, elle en haut.
+			var vers := _vers_planete(c0)
+			var horiz := (vers - g * vers.dot(g)).normalized()
+			_placer(g * (r + _sol(g) + 30.0), horiz * cos(deg_to_rad(10.0)) + g * sin(deg_to_rad(10.0)))
+		0:
+			# Ni le Soleil ni la compagne au-dessus de l'horizon : le ciel étoilé, vers le centre de la galaxie.
+			var g := _vers_planete(-(VERS_SOLEIL.normalized() + VERS_COMPAGNE.normalized()).normalized())
+			var vers_centre := _vers_planete(Etoiles.centre_galaxie())
+			var horizontal := (vers_centre - g * vers_centre.dot(g))
+			if horizontal.length() < 0.01:
+				horizontal = g.cross(Vector3.RIGHT)
+			horizontal = horizontal.normalized()
+			var hauteur := clampf(asin(clampf(vers_centre.dot(g), -1.0, 1.0)), deg_to_rad(20.0), deg_to_rad(35.0))
+			_placer(g * (r + _sol(g) + 30.0), horizontal * cos(hauteur) + g * sin(hauteur))
 
 
 ## Lieu (repère fixe, longueur 1) où tombe l'ombre de la lune aux points de vue 6 et 7 : à 55° du point
@@ -287,6 +342,8 @@ func _soleil_planete() -> Vector3:
 func _placer_soleil() -> void:
 	var d := _soleil_planete()
 	soleil.position = PackedFloat64Array([d.x * Soleil.UA, d.y * Soleil.UA, d.z * Soleil.UA])
+	var c := _vers_planete(VERS_COMPAGNE.normalized()) * (DISTANCE_COMPAGNE * Soleil.UA)
+	compagne.position = PackedFloat64Array([c.x, c.y, c.z])
 
 
 ## Hauteur du sol sous une direction (0 sans la partie C++).
@@ -348,6 +405,10 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_6, KEY_KP_6: aller_a(6)
 			KEY_7, KEY_KP_7: aller_a(7)
 			KEY_8, KEY_KP_8: aller_a(8)
+			KEY_9, KEY_KP_9: aller_a(9)
+			KEY_0, KEY_KP_0: aller_a(0)
+			KEY_E: compagne.allumee = not compagne.allumee
+			KEY_B: changer_vitesse_essai()
 			KEY_V:
 				var i := ACCELERATIONS.find(acceleration)
 				acceleration = ACCELERATIONS[(i + 1) % ACCELERATIONS.size()]
@@ -381,6 +442,9 @@ func _process(delta: float) -> void:
 		pos_oeil[0] += pas.x
 		pos_oeil[1] += pas.y
 		pos_oeil[2] += pas.z
+		vitesse_oeil = pas / maxf(delta, 1e-6)
+	else:
+		vitesse_oeil = Vector3.ZERO
 	_garder_au_dessus_du_sol()
 	_niveler()
 	_mettre_a_jour_monde()
@@ -396,9 +460,13 @@ func _process(delta: float) -> void:
 	if lune:
 		infos_planete += "Lune : à %s · sa lumière met %s à arriver (celle du Soleil %s) · temps ×%d (V)\n" % [
 			_distance(_distance_lune()), _duree(retard_lune), _duree(soleil.retard(pos_oeil)), roundi(acceleration)]
+	infos_planete += "Étoiles : %d (Yale) · compagne %s · vitesse de l'œil %s%s\n" % [etoiles.nombre,
+		"%d lux, sa lumière met %s (E)" % [roundi(compagne.eclairement(pos_oeil)), _duree(compagne.retard(pos_oeil))] if compagne.allumee else "éteinte (E)",
+		_vitesse(beta.length() * Etoiles.C if beta != Vector3.ZERO else vitesse_oeil.length()),
+		" · Doppler du Soleil ×%.2f" % doppler_soleil if beta != Vector3.ZERO else ""]
 	compteur.infos = infos_planete + "Œil : pupille %.1f mm · habitué à %s cd/m² · vision de nuit %d %% · Soleil visible %d %%\n" % [
 		oeil.pupille_mm, _nombre(oeil.luminance_adaptation()), roundi(oeil.nuit() * 100.0), roundi(part_visible * 100.0)] \
-		+ "1-8 points de vue · R rotation · H halo %s · T adaptation au noir %s" % [
+		+ "0-9 points de vue · B grande vitesse · R rotation · H halo %s · T adaptation au noir %s" % [
 		"oui" if oeil.halo else "non", "réelle (lente)" if oeil.temps_reel else "accélérée"]
 
 
@@ -454,7 +522,56 @@ func _mettre_a_jour_monde() -> void:
 	rs.global_shader_parameter_set("soleil_eclairement_oeil", _eclairement_oeil(e, s))
 	var c := Soleil.COULEUR
 	rs.global_shader_parameter_set("soleil_couleur", Vector3(c.r, c.g, c.b))
+	_mettre_a_jour_etoiles(s)
 	luminance_vue = _poser(rel, s, e, alpha)
+
+
+## Étape 6 : le ciel tourne avec le jour, l'étoile compagne, et la vitesse de l'œil (aberration, Doppler).
+func _mettre_a_jour_etoiles(s: Vector3) -> void:
+	var rs := RenderingServer
+	var rot := Basis(Vector3.UP, -angle_jour)
+	if noeud_etoiles:
+		noeud_etoiles.basis = rot
+		var m := noeud_etoiles.material_override as ShaderMaterial
+		m.set_shader_parameter("halo", 1.0 if oeil.halo else 0.0)
+		m.set_shader_parameter("distance_dessin", sqrt(camera.near * camera.far))
+	rs.global_shader_parameter_set("ciel_pole_galaxie", rot * Etoiles.pole_galaxie())
+	rs.global_shader_parameter_set("ciel_centre_galaxie", rot * Etoiles.centre_galaxie())
+	# La compagne : deux lumières s'additionnent sur la planète et la lune.
+	var ec: float = compagne.eclairement(pos_oeil)
+	rs.global_shader_parameter_set("compagnon_direction", compagne.direction(pos_oeil))
+	rs.global_shader_parameter_set("compagnon_eclairement", ec)
+	rs.global_shader_parameter_set("compagnon_luminance", compagne.luminance_moyenne() if compagne.allumee else 0.0)
+	rs.global_shader_parameter_set("compagnon_rayon_angle", compagne.rayon_angle(pos_oeil))
+	rs.global_shader_parameter_set("compagnon_temperature", compagne.temperature)
+	var cc: Color = compagne.couleur()
+	rs.global_shader_parameter_set("compagnon_couleur", Vector3(cc.r, cc.g, cc.b))
+	# Vitesse de l'œil : ses déplacements + l'essai à grande vitesse (B). Un effet n'est calculé que
+	# s'il dépasse 1/10 de pixel (l'aberration penche les directions d'environ v/c radians).
+	beta = vitesse_oeil / Etoiles.C + direction_essai * vitesse_essai
+	if beta.length() < 0.1 * deg_to_rad(camera.fov) / maxf(get_viewport().get_visible_rect().size.y, 1.0):
+		beta = Vector3.ZERO
+	if beta.length() > 0.999999:
+		beta = beta.normalized() * 0.999999
+	rs.global_shader_parameter_set("oeil_vitesse", beta)
+	var vu: Array = Etoiles.aberration(s, beta)
+	doppler_soleil = vu[1]
+	rs.global_shader_parameter_set("soleil_direction_vue", vu[0])
+
+
+## Essai « grande vitesse » (touche B) : vitesse suivante, droit devant (là où l'on regarde).
+func changer_vitesse_essai() -> void:
+	var i := VITESSES_ESSAI.find(vitesse_essai)
+	vitesse_essai = VITESSES_ESSAI[(i + 1) % VITESSES_ESSAI.size()]
+	direction_essai = -camera.global_transform.basis.z
+
+
+static func _vitesse(v: float) -> String:
+	if v >= 0.001 * Etoiles.C:
+		return "%.3f c" % (v / Etoiles.C)
+	if v >= 1000.0:
+		return "%.1f km/s" % (v / 1000.0)
+	return "%d m/s" % roundi(v)
 
 
 ## La lune par rapport à l'œil, dans le repère d'affichage.
@@ -516,12 +633,15 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float) -> float:
 	var poids := PackedFloat32Array()
 	var e_oeil := _eclairement_oeil(e, s)
 	var cases := PackedFloat32Array()
+	var ec: float = compagne.eclairement(pos_oeil)
+	var sc: Vector3 = compagne.direction(pos_oeil)
+	var ac: float = compagne.rayon_angle(pos_oeil)
 	if avec_planete:
-		cases = planete.posemetre(camera, pos_oeil, s, e, FOND_CIEL, alpha)
+		cases = _posemetre_astre(planete, pos_oeil, s, e, alpha, ec, sc, ac)
 		if lune:
 			# Deux astres : celui de devant cache celui de derrière, case par case.
 			var cov_p: PackedFloat32Array = planete.couverture()
-			var cases_l: PackedFloat32Array = lune.posemetre(camera, oeil_lune, s, e, FOND_CIEL, alpha)
+			var cases_l: PackedFloat32Array = _posemetre_astre(lune, oeil_lune, s, e, alpha, ec, sc, ac)
 			var cov_l: PackedFloat32Array = lune.couverture()
 			var lune_devant := _distance_lune() < rel.length()
 			for k in cases.size():
@@ -544,7 +664,7 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float) -> float:
 				var disc := b * b - c2
 				if disc >= 0.0 and b - sqrt(disc) > 0.0:
 					var n := (dir * (b - sqrt(disc)) - rel) / RAYON_ASTRE
-					l = ALBEDO_ASTRE * e * maxf(n.dot(s), 0.0) / PI
+					l = ALBEDO_ASTRE * (e * maxf(n.dot(s), 0.0) + ec * maxf(n.dot(sc), 0.0)) / PI
 			l += Oeil.voile(e_oeil, rad_to_deg(dir.angle_to(s)))
 			echantillons.append(l)
 			poids.append(0.05 + exp(-(u * u + v * v) / (2.0 * 0.2 * 0.2)))   # le regard compte le plus
@@ -560,6 +680,18 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float) -> float:
 			en_plus = Soleil.luminance_moyenne() * PI * alpha * alpha / champ * part_visible * PART_DISQUE_ADAPTATION
 	rs_angle_pixel(taille)
 	return Oeil.luminance_scene(echantillons, poids, en_plus)
+
+
+## Posemètre d'un astre éclairé par les deux étoiles : les deux lumières s'additionnent (le fond du ciel
+## n'est compté qu'une fois). La partie C++ ne connaît qu'une étoile à la fois : on l'appelle deux fois.
+func _posemetre_astre(a: MultiMeshInstance3D, oeil_astre: PackedFloat64Array, s: Vector3, e: float,
+		alpha: float, ec: float, sc: Vector3, ac: float) -> PackedFloat32Array:
+	var cases: PackedFloat32Array = a.posemetre(camera, oeil_astre, s, e, FOND_CIEL, alpha)
+	if ec > 0.0:
+		var en_plus: PackedFloat32Array = a.posemetre(camera, oeil_astre, sc, ec, 0.0, ac)
+		for k in cases.size():
+			cases[k] += en_plus[k]
+	return cases
 
 
 ## Lux du Soleil qui entrent vraiment dans l'œil : la part visible du disque, et moins de lumière
@@ -621,6 +753,7 @@ func _avancer_mesure(delta: float) -> void:
 	_images = 0
 	_sommes = PackedFloat64Array([0, 0, 0, 0, 0, 0, 0, 0, 0])
 	vitesse = 0.5
+	vitesse_essai = 0.0
 	var vue: int = PHASES_MESURE[_phase][1]
 	if vue < 0:
 		aller_a(1)
@@ -629,11 +762,18 @@ func _avancer_mesure(delta: float) -> void:
 		if lune:
 			lune.visible = false
 	else:
+		if avec_planete:
+			planete.visible = true
+		if lune:
+			lune.visible = true
 		aller_a(vue)
+	if PHASES_MESURE[_phase].size() > 4:
+		vitesse_essai = PHASES_MESURE[_phase][4]
+		direction_essai = -camera.global_transform.basis.z
 
 
 func _ecrire_mesure() -> void:
-	var texte := "# Mesure de la planète en rayons et de sa lune (étapes 4 et 5)\n\n"
+	var texte := "# Mesure de la planète en rayons, de sa lune et des étoiles (étapes 4 à 6)\n\n"
 	texte += "Date : %s · %s · %s\n\n" % [Time.get_datetime_string_from_system(), OS.get_processor_name(),
 		RenderingServer.get_video_adapter_name()]
 	texte += "Sans synchronisation avec l'écran (vsync coupée). Dessiner = processeur + carte graphique (Godot) ;\n"

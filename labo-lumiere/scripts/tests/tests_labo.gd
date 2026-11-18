@@ -9,6 +9,8 @@ const BlocFactice = preload("res://scripts/mesure/bloc_factice.gd")
 const Soleil = preload("res://scripts/lumiere/soleil.gd")
 const Oeil = preload("res://scripts/lumiere/oeil.gd")
 const Orbite = preload("res://scripts/lumiere/orbite.gd")
+const Etoiles = preload("res://scripts/lumiere/etoiles.gd")
+const EtoileProche = preload("res://scripts/lumiere/etoile_proche.gd")
 
 var texte: RichTextLabel
 var fond: ColorRect
@@ -67,6 +69,12 @@ func _lancer() -> void:
 	_test_halo_cie()
 	await _test_labo_oeil()
 	await _test_image_soleil()
+	# Étape 6 (sans la partie C++) : catalogue, couleurs, vitesse, étoile compagne, Voie lactée.
+	_test_catalogue_yale()
+	_test_couleur_etoiles()
+	_test_aberration_doppler()
+	_test_etoile_compagne()
+	_test_voie_lactee()
 	# Étape 4 : la planète en rayons (partie C++).
 	_test_cpp_charge()
 	if not ClassDB.class_exists("ArbreLumiere"):
@@ -84,6 +92,9 @@ func _lancer() -> void:
 	_test_eclipse_cpp()
 	await _test_labo_lune()
 	await _test_image_eclipse()
+	# Étape 6 : les étoiles dans le labo.
+	await _test_labo_etoiles()
+	await _test_image_ciel_etoile()
 
 
 func _test_reglages() -> void:
@@ -348,6 +359,7 @@ func _test_halo_cie() -> void:
 func _test_labo_oeil() -> void:
 	var labo: Node = load("res://scenes/labo.tscn").instantiate()
 	add_child(labo)
+	labo.compagne.allumee = false   # étapes 3-4 : le Soleil seul (l'étoile compagne vient à l'étape 6)
 	await get_tree().process_frame
 	labo.set_process(false)
 	labo.aller_a(3)                     # dans l'ombre de l'astre
@@ -381,6 +393,7 @@ func _test_image_soleil() -> void:
 		return
 	var labo: Node = load("res://scenes/labo.tscn").instantiate()
 	add_child(labo)
+	labo.compagne.allumee = false   # étapes 3-4 : le Soleil seul (l'étoile compagne vient à l'étape 6)
 	texte.visible = false
 	fond.visible = false
 	await get_tree().process_frame
@@ -573,6 +586,7 @@ func _test_choisir_survol() -> void:
 func _test_labo_planete() -> void:
 	var labo: Node = load("res://scenes/labo.tscn").instantiate()
 	add_child(labo)
+	labo.compagne.allumee = false   # étapes 3-4 : le Soleil seul (l'étoile compagne vient à l'étape 6)
 	await get_tree().process_frame
 	labo.set_process(false)
 	var ok: bool = labo.avec_planete
@@ -601,6 +615,7 @@ func _test_image_planete() -> void:
 		return
 	var labo: Node = load("res://scenes/labo.tscn").instantiate()
 	add_child(labo)
+	labo.compagne.allumee = false   # étapes 3-4 : le Soleil seul (l'étoile compagne vient à l'étape 6)
 	texte.visible = false
 	fond.visible = false
 	await get_tree().process_frame
@@ -798,3 +813,219 @@ func _test_image_eclipse() -> void:
 	var ok := dans_ombre < 0.05 and au_soleil > 0.3
 	_resultat(ok, "Image : ombre de la lune sur la planète",
 		"dans l'ombre %.2f, au soleil %.2f (pixels %s et %s)" % [dans_ombre, au_soleil, Vector2i(ombre_px), Vector2i(lumiere_px)])
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Étape 6 : les étoiles
+# ---------------------------------------------------------------------------------------------
+
+func _test_catalogue_yale() -> void:
+	var e = Etoiles.new()
+	var ok: bool = e.charger()
+	if not ok:
+		_resultat(false, "Catalogue de Yale", "fichier etoiles_yale.bin absent ou abîmé")
+		return
+	# Sirius : la plus brillante, ascension droite 6 h 45 min 9 s, déclinaison −16° 43'.
+	var sirius := Etoiles.direction_ciel(e.ascension[0], e.declinaison[0])
+	var attendu := Etoiles.direction_ciel_degres(101.2875, -16.7161)
+	var ecart := rad_to_deg(sirius.angle_to(attendu)) * 60.0
+	var faible := 0
+	var max_mag := -9.0
+	for m in e.magnitude:
+		max_mag = maxf(max_mag, m)
+		if m > 6.0:
+			faible += 1
+	# Une étoile de magnitude 0 donne 2,54e-6 lux ; 5 magnitudes = 100 fois moins.
+	var lux_ok := absf(Etoiles.lux(0.0) - 2.54e-6) < 1e-9 and absf(Etoiles.lux(0.0) / Etoiles.lux(5.0) - 100.0) < 0.01
+	ok = e.nombre > 9000 and absf(e.magnitude[0] + 1.46) < 0.01 and ecart < 2.0 and max_mag < 8.1 and lux_ok
+	_resultat(ok, "Catalogue de Yale : 9 096 étoiles, Sirius à sa place",
+		"%d étoiles (dont %d plus faibles que 6), la plus brillante V = %.2f à %.1f' de Sirius, magnitude 0 → %s lux" % [
+			e.nombre, faible, e.magnitude[0], ecart, _sci(Etoiles.lux(0.0))])
+
+
+func _test_couleur_etoiles() -> void:
+	# Le Soleil (B-V = 0,65) : environ 5 800 K, couleur proche de celle de soleil.gd.
+	var t_soleil := Etoiles.temperature(0.65)
+	var s := Etoiles.corps_noir(Etoiles.T_SOLEIL)
+	var c := Soleil.COULEUR
+	var proche := absf(s.r - c.r) < 0.1 and absf(s.g - c.g) < 0.1 and absf(s.b - c.b) < 0.1
+	var rouge := Etoiles.corps_noir(3000.0)
+	var bleue := Etoiles.corps_noir(20000.0)
+	# Efficacité : maximale vers 6 600 K, faible pour les étoiles très froides ou très chaudes.
+	var eff_ok := Etoiles.efficacite(3000.0) < 0.5 and Etoiles.efficacite(30000.0) < 0.2 and Etoiles.efficacite(6600.0) > 1.0
+	var lum := 0.2126 * bleue.r + 0.7152 * bleue.g + 0.0722 * bleue.b
+	var ok := absf(t_soleil - 5800.0) < 150.0 and proche and rouge.r > rouge.b * 3.0 and bleue.b > bleue.r and eff_ok \
+		and absf(lum - 1.0) < 0.01
+	_resultat(ok, "Couleur des étoiles : corps noir vu par l'œil",
+		"B-V 0,65 → %d K ; Soleil (%.2f, %.2f, %.2f) ; 3 000 K (%.2f, %.2f, %.2f) ; 20 000 K (%.2f, %.2f, %.2f) ; efficacité 3 000 K %.2f, 6 600 K %.2f, 30 000 K %.2f" % [
+			roundi(t_soleil), s.r, s.g, s.b, rouge.r, rouge.g, rouge.b, bleue.r, bleue.g, bleue.b,
+			Etoiles.efficacite(3000.0), Etoiles.efficacite(6600.0), Etoiles.efficacite(30000.0)])
+
+
+func _test_aberration_doppler() -> void:
+	var n := Vector3(1, 0, 0)
+	var arret: Array = Etoiles.aberration(n, Vector3.ZERO)
+	var devant: Array = Etoiles.aberration(Vector3(0, 0, -1), Vector3(0, 0, -0.9))
+	var cote: Array = Etoiles.aberration(n, Vector3(0, 0, -0.9))
+	var derriere: Array = Etoiles.aberration(Vector3(0, 0, 1), Vector3(0, 0, -0.9))
+	# À 0,9 c, une étoile vue « sur le côté » au repos se voit à 25,8° de l'avant (cos = 0,9).
+	var angle_cote := rad_to_deg((cote[0] as Vector3).angle_to(Vector3(0, 0, -1)))
+	# Aller-retour : avec la vitesse opposée, on retrouve la direction de départ.
+	var q := Vector3(0.3, -0.5, 0.8).normalized()
+	var aller: Array = Etoiles.aberration(q, Vector3(0.2, 0.5, -0.4))
+	var retour: Array = Etoiles.aberration(aller[0], -Vector3(0.2, 0.5, -0.4))
+	var aller_retour := rad_to_deg((retour[0] as Vector3).angle_to(q)) * 3600.0
+	# Petite vitesse : décalage ≈ v/c radians (30 km/s → 20,6 secondes d'arc, l'aberration de la Terre).
+	var terre: Array = Etoiles.aberration(n, Vector3(0, 0, -30000.0 / Etoiles.C))
+	var terre_s := rad_to_deg((terre[0] as Vector3).angle_to(n)) * 3600.0
+	# Doppler : devant, le Soleil vu à 0,9 c est un corps noir à 4,36 × 5 772 K, bleu ; derrière, rouge.
+	var f_devant := Etoiles.facteur_eclat(devant[1], Etoiles.T_SOLEIL)
+	var f_derriere := Etoiles.facteur_eclat(derriere[1], Etoiles.T_SOLEIL)
+	var ok: bool = (arret[0] as Vector3).is_equal_approx(n) and absf(arret[1] - 1.0) < 1e-9 \
+		and absf(devant[1] - 4.3589) < 0.001 and absf(angle_cote - 25.84) < 0.05 and aller_retour < 0.1 \
+		and absf(terre_s - 20.6) < 0.1 and absf(derriere[1] - 0.2294) < 0.001 and f_devant > 1.0 and f_derriere < 0.01 \
+		and absf(Etoiles.facteur_eclat(1.0, 5000.0) - 1.0) < 1e-9
+	_resultat(ok, "Grande vitesse : aberration et effet Doppler",
+		"à 0,9 c : D devant %.3f, derrière %.3f, étoile du côté vue à %.2f° de l'avant ; aller-retour %.4f\" ; 30 km/s → %.1f\" ; éclat du Soleil ×%.1f devant, ×%.4f derrière" % [
+			devant[1], derriere[1], angle_cote, aller_retour, terre_s, f_devant, f_derriere])
+
+
+func _test_etoile_compagne() -> void:
+	var c = EtoileProche.new()
+	var o := PackedFloat64Array([0.0, 0.0, 0.0])
+	var e1: float = c.eclairement(o)
+	c.position = PackedFloat64Array([10.0 * Soleil.UA, 0.0, 0.0])
+	var e2: float = c.eclairement(o)
+	var retard: float = c.retard(o) / 2.0
+	var coul: Color = c.couleur()
+	c.allumee = false
+	var eteinte: float = c.eclairement(o)
+	# Naine orange (4 400 K, 0,7 rayon solaire) à 5 UA : 0,7² / 5² × (4 400 / 5 772)⁴ × efficacité ≈ 610 lux.
+	var ok := e1 > 550.0 and e1 < 680.0 and absf(e1 / e2 - 4.0) < 0.001 and absf(retard - 2494.0) < 2.0 \
+		and coul.r > coul.b * 1.5 and eteinte == 0.0
+	_resultat(ok, "Étoile compagne : vraie lumière d'une naine orange à 5 UA",
+		"%.0f lux à 5 UA, %.0f à 10 UA (1/d²) ; sa lumière met %s ; couleur (%.2f, %.2f, %.2f) ; éteinte %.0f lux" % [
+			e1, e2, "%d min %02d s" % [floori(retard / 60.0), roundi(fmod(retard, 60.0))], coul.r, coul.g, coul.b, eteinte])
+
+
+func _test_voie_lactee() -> void:
+	var centre := Etoiles.fond(Etoiles.centre_galaxie())
+	var pole := Etoiles.fond(Etoiles.pole_galaxie())
+	# Un point de la bande, à 90° du centre (vers la constellation du Cygne / de Persée).
+	var bande_dir := Etoiles.pole_galaxie().cross(Etoiles.centre_galaxie()).normalized()
+	var bande := Etoiles.fond(bande_dir)
+	var somme := 0.0
+	for i in 2000:
+		var z := 1.0 - 2.0 * (i + 0.5) / 2000.0
+		var phi := i * 2.399963
+		var r := sqrt(1.0 - z * z)
+		somme += Etoiles.fond(Vector3(r * cos(phi), z, r * sin(phi)))
+	var moyenne := somme / 2000.0
+	var angle_pole := rad_to_deg(Etoiles.pole_galaxie().angle_to(Etoiles.centre_galaxie()))
+	var ok := centre > bande and bande > 2.0 * pole and moyenne > 5e-5 and moyenne < 2.5e-4 and absf(angle_pole - 90.0) < 0.01
+	_resultat(ok, "Voie lactée : plus claire vers le centre de la galaxie, sombre vers ses pôles",
+		"centre %s, bande %s, pôle %s cd/m², moyenne du ciel %s ; pôle et centre à %.2f°" % [
+			_sci(centre), _sci(bande), _sci(pole), _sci(moyenne), angle_pole])
+
+
+## Nombre très petit ou très grand, écrit « 1,2e-4 ».
+static func _sci(x: float) -> String:
+	if x == 0.0:
+		return "0"
+	var p := floori(log(absf(x)) / log(10.0))
+	return "%.1fe%d" % [x / pow(10.0, p), p]
+
+
+func _test_labo_etoiles() -> void:
+	var labo: Node = load("res://scenes/labo.tscn").instantiate()
+	add_child(labo)
+	await get_tree().process_frame
+	labo.set_process(false)
+	var noeud: MultiMeshInstance3D = labo.noeud_etoiles
+	var nb := noeud.multimesh.instance_count if noeud else 0
+	# Ciel étoilé côté nuit : l'œil s'habitue au noir (vision de nuit), le sol n'est PAS éclairé.
+	labo.aller_a(0)
+	for i in 30:
+		labo._process(0.05)
+	labo.oeil.equilibrer(labo.luminance_vue)
+	labo._process(0.05)
+	var nuit: float = labo.luminance_vue
+	var vision_nuit: float = labo.oeil.nuit()
+	var gain_nuit: float = labo.oeil.gain()
+	var cos_s: float = Vector3(labo.pos_oeil[0], labo.pos_oeil[1], labo.pos_oeil[2]).normalized().dot(labo._soleil_planete())
+	# En plein jour face au Soleil : l'œil s'est fermé, une étoile de magnitude 0 ne se voit plus.
+	labo.aller_a(2)
+	for i in 30:
+		labo._process(0.05)
+	labo.oeil.equilibrer(labo.luminance_vue)
+	labo._process(0.05)
+	var gain_jour: float = labo.oeil.gain()
+	var pic := Etoiles.lux(0.0) / (2.0 * PI * 0.36 * pow(deg_to_rad(labo.camera.fov) / 720.0, 2.0))
+	var vue_nuit := pic * gain_nuit / (pic * gain_nuit + 1.0)
+	var vue_jour := pic * gain_jour / (pic * gain_jour + 1.0)
+	# L'étoile compagne éclaire le sol quand le Soleil est couché (point de vue 9), et rien sans elle.
+	labo.aller_a(9)
+	for i in 20:
+		labo._process(0.05)
+	var avec: float = labo.luminance_vue
+	labo.compagne.allumee = false
+	for i in 3:
+		labo._process(0.05)
+	var sans: float = labo.luminance_vue
+	labo.compagne.allumee = true
+	# Essai à grande vitesse (B) : 0,1 c puis 0,5 c droit devant.
+	labo.changer_vitesse_essai()
+	labo.changer_vitesse_essai()
+	labo._process(0.016)
+	var b: float = labo.beta.length()
+	var vitesse_ok: bool = absf(b - 0.5) < 1e-6 and labo.doppler_soleil != 1.0
+	labo.vitesse_essai = 0.0
+	labo._process(0.016)
+	var b0: float = labo.beta.length()
+	labo.queue_free()
+	var ok: bool = nb > 9000 and nuit < 0.01 and cos_s < -0.3 and vision_nuit > 0.9 and vue_nuit > 0.5 and vue_jour < 0.01 \
+		and avec > 20.0 * sans and vitesse_ok and b0 == 0.0
+	_resultat(ok, "Labo : ciel étoilé, étoiles effacées le jour, lumière de l'étoile compagne, grande vitesse",
+		"%d étoiles ; nuit : œil habitué à %.4f cd/m² (vision de nuit %d %%), une étoile de magnitude 0 → %.2f à l'écran ; face au Soleil → %.4f ; sol avec la compagne %.2f, sans %.4f cd/m² ; 0,5 c → Doppler du Soleil ×%.2f" % [
+			nb, nuit, roundi(vision_nuit * 100.0), vue_nuit, vue_jour, avec, sans, labo.doppler_soleil])
+
+
+func _test_image_ciel_etoile() -> void:
+	if DisplayServer.get_name() == "headless":
+		_resultat(true, "Image : ciel étoilé et sol dans le noir", "sauté : pas d'écran ici (il passe sur le PC et dans le cloud avec écran virtuel)")
+		return
+	var labo: Node = load("res://scenes/labo.tscn").instantiate()
+	add_child(labo)
+	texte.visible = false
+	fond.visible = false
+	labo.compteur.visible = false
+	await get_tree().process_frame
+	labo.aller_a(0)
+	for i in 30:
+		await get_tree().process_frame
+	labo.oeil.equilibrer(labo.luminance_vue)
+	for i in 4:
+		await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var img := get_viewport().get_texture().get_image()
+	# Points clairs dans le ciel (moitié haute) et sol noir (bas de l'image, sous l'horizon).
+	var etoiles_vues := 0
+	var w := img.get_width()
+	var h := img.get_height()
+	for y in range(0, h / 2, 2):
+		for x in range(0, w, 2):
+			if img.get_pixel(x, y).get_luminance() > 0.35:
+				etoiles_vues += 1
+	var sol := 0.0
+	var n := 0
+	for x in range(0, w, 16):
+		sol += img.get_pixel(x, h - 20).get_luminance()
+		n += 1
+	sol /= n
+	labo.queue_free()
+	texte.visible = true
+	fond.visible = true
+	var ok := etoiles_vues > 40 and sol < 0.05
+	_resultat(ok, "Image : ciel étoilé et sol dans le noir",
+		"%d pixels d'étoiles dans le haut de l'image, sol %.3f" % [etoiles_vues, sol])

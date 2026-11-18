@@ -10,7 +10,34 @@ en triangles sans risquer de casser le jeu. Le jeu ne voit pas ce dossier.
    coche **Godot AI**. Ferme la fenêtre.
 4. Appuie sur **F5** (ou Lecture ▶) : la scène du labo s'ouvre.
 
-## Ce qu'on voit (étape 5)
+## Ce qu'on voit (étape 6)
+**Le vrai ciel étoilé** : les 9 096 étoiles du catalogue de Yale (toutes celles qu'un œil humain peut
+voir, jusqu'à la magnitude 6,5), à leur vraie place, avec leur vrai éclat et leur vraie couleur
+(Bételgeuse orangée, Rigel bleutée…), et la **Voie lactée**, plus claire vers le centre de la galaxie.
+Le ciel tourne avec le jour, comme sur Terre (le pôle nord du ciel est au-dessus du pôle de la planète).
+Rien n'est caché « à la main » : le jour, ou face au Soleil, l'œil se ferme et les étoiles disparaissent
+d'elles-mêmes ; la nuit, l'œil s'habitue au noir (quelques secondes, ou ~5 min avec T) et elles apparaissent.
+Les étoiles brillantes ont un petit halo, comme dans un vrai œil (même loi que celui du Soleil).
+
+**Une étoile compagne** : une naine orange à 5 fois la distance du Soleil (on la voit comme un point
+orangé très brillant). Elle éclaire aussi la planète et la lune : là où le Soleil est couché mais elle
+levée, le sol est éclairé en orangé, un peu comme un jour très couvert (610 lux). Sa lumière met
+41 min 35 s pour arriver. Touche **E** pour l'éteindre ou la rallumer.
+
+**À très grande vitesse** (touche **B** : 0,1 – 0,5 – 0,9 – 0,99 fois la vitesse de la lumière, droit
+devant) : les étoiles se resserrent vers l'avant (aberration), deviennent bleues et plus brillantes devant,
+rouges et sombres derrière (effet Doppler). Pour l'instant, seul le ciel (étoiles, Soleil, compagne,
+Voie lactée) change ; la planète et la lune ne sont pas encore déformées à ces vitesses.
+
+**Corrigé** : avant, sur le côté nuit, des pentes tournées vers le Soleil s'éclairaient même quand le
+Soleil était loin sous l'horizon. Maintenant la planète cache le Soleil (et la compagne) sous l'horizon :
+la nuit est vraiment noire, et au coucher du Soleil seuls les sommets restent éclairés.
+
+Nouveaux points de vue :
+9. le Soleil est couché, l'étoile compagne éclaire seule le sol ;
+0. le ciel étoilé, côté nuit, vers le centre de la galaxie (attendre quelques secondes que l'œil s'habitue).
+
+## Ce qu'on voyait à l'étape 5
 Une **petite lune** de 150 km tourne autour de la planète, à 6 000 km de son centre, poussée par la
 vraie gravité : un tour prend 60 heures (touche **V** pour accélérer le temps : ×10, ×100, ×1000).
 Elle montre toujours la même face à la planète, comme notre Lune.
@@ -76,7 +103,9 @@ en haut à gauche, le **compteur** :
 | aller 5 fois plus vite | Maj (maintenue) |
 | regarder autour | clic droit maintenu + souris |
 | changer la vitesse | molette |
-| points de vue d'essai | 1 à 8 |
+| points de vue d'essai | 1 à 9, et 0 |
+| étoile compagne oui / non | E |
+| essai à grande vitesse (0 ; 0,1 ; 0,5 ; 0,9 ; 0,99 c) | B |
 | temps accéléré (×1, ×10, ×100, ×1000) | V |
 | halo de l'œil oui / non | H |
 | rotation de la planète oui / non | R |
@@ -88,12 +117,12 @@ s'enchaînent, puis un tableau s'affiche et s'enregistre dans `mesures/resultats
 La planète a des couleurs au hasard : c'est normal, les rayons sont factices.
 
 ## Mesure de la planète (étape 4)
-Lance le labo avec l'option `-- --mesure` (Claude le fait pour toi) : 9 essais s'enchaînent
-(~45 s, dont les éclipses), puis le tableau s'enregistre dans `mesures/resultats-planete-pc.md`.
+Lance le labo avec l'option `-- --mesure` (Claude le fait pour toi) : 12 essais s'enchaînent
+(~55 s, dont les éclipses, le ciel étoilé et la grande vitesse), puis le tableau s'enregistre dans `mesures/resultats-planete-pc.md`.
 
 ## Tests automatiques
 Ouvre `scenes/tests.tscn` (double-clic dans le panneau Système de fichiers), puis **F6**.
-Tout doit être vert (30 tests depuis l'étape 5).
+Tout doit être vert (37 tests depuis l'étape 6).
 
 ## Avancement
 - Étape 0 (17/11/2026) : labo créé, scène vide avec le compteur, 7 tests automatiques.
@@ -102,3 +131,4 @@ Tout doit être vert (30 tests depuis l'étape 5).
 - Étape 4 (18/11/2026) : la planète en rayons, calculée en C++ (rien à installer : la partie C++ est déjà compilée dans `scripts/lumiere/bin`). 600 km, relief, couleurs stables, glissement, rotation (jour de 2 h), l'œil mesure la lumière avec les rayons. Mesure automatique : voir « Mesure de la planète » ci-dessous.
 - Étape 5 (18/11/2026) : petite lune (vraie gravité), éclipses de Soleil et de lune avec pénombre, retard de la lumière, temps accéléré (V). 30 tests automatiques.
 - Étape 3 (18/11/2026) : le vrai Soleil à 1 UA et l'œil du pilote (pupille, adaptation, halo selon la formule d'éblouissement de la CIE, vision de nuit, couronne du Soleil visible pendant une éclipse). 17 tests automatiques.
+- Étape 6 (18/11/2026) : les étoiles (catalogue de Yale, Voie lactée), une étoile compagne qui éclaire aussi la planète, aberration et Doppler à grande vitesse (B), et la planète qui cache enfin le Soleil sous l'horizon. 37 tests automatiques.
