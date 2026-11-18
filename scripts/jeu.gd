@@ -15,6 +15,7 @@ const PiloteAuto = preload("res://scripts/physique/pilote_auto.gd")
 const Cockpit = preload("res://scripts/cockpit.gd")
 const EcransCockpit = preload("res://scripts/ecrans_cockpit.gd")
 const Droide = preload("res://scripts/droide.gd")
+const Reperes = preload("res://scripts/physique/reperes.gd")
 
 # =====================================================================
 # CONSTANTES
@@ -62,6 +63,7 @@ const TETE_G_AMORTI := 0.7
 var vaisseau
 var gaz := 0.0
 var stabilisateur := false
+var reperes = Reperes.new()          # Einstein A3 : un repère par système d'étoile
 var ordinateur = PiloteAuto.new()    # ordinateur de bord (pilote automatique)
 var droide = null                    # droïde R-7 (petite IA, ordres calmes) : droide.gd
 var modele_droide: Node = null
@@ -176,6 +178,7 @@ func _ready() -> void:
 	vaisseau.placer_en_orbite(ALTITUDE_DEPART)
 	_creer_pilote_et_cockpit()
 	_brancher_lumiere()
+	reperes.preparer(vaisseau)   # après la lune : ajoute la gravité du Soleil et de la compagne
 	_creer_hud()
 	_appliquer_vue()
 	droide = Droide.new()
@@ -748,6 +751,7 @@ func _lire_boutons() -> void:
 		ordinateur.activer(PiloteAuto.AUCUN, vaisseau)
 		gaz = 0.0
 		acc_temps = 1
+		reperes.revenir_maison(vaisseau)
 		vaisseau.placer_en_orbite(ALTITUDE_DEPART)
 	clics.clear()
 	if Input.is_action_just_pressed("tests"):
@@ -862,6 +866,11 @@ func _lire_ordres(delta: float) -> void:
 func _physics_process(delta: float) -> void:
 	if en_pause or vaisseau.ecrase or ecran_touches != null:
 		return
+	# Einstein A3 : plus près d'un autre système d'étoile ? On passe dans son repère.
+	if reperes.verifier(vaisseau) and autopilote_actif:
+		ordinateur.activer(PiloteAuto.AUCUN, vaisseau)   # le pilote auto ne connaît que la planète
+	if vaisseau.ecrase:
+		return
 	_lire_ordres(delta)
 	acc_effectif = acc_temps
 	if autopilote_actif:
@@ -946,14 +955,20 @@ func _placer_lumiere(delta: float) -> void:
 	pilote.position = -decalage
 	var oeil64 := PackedFloat64Array([vaisseau.px + float(decalage.x), vaisseau.py + float(decalage.y),
 		vaisseau.pz + float(decalage.z)])
+	# Einstein A3 : la lumière compte depuis la maison (la planète, sa lune, le Soleil y sont). Loin
+	# d'elle, l'œil y est placé à quelques mètres près : seules des étoiles lointaines en dépendent.
+	var ev: Array = reperes.vers_maison(reperes.courant, vaisseau.temps_univers, oeil64)
+	var vm := reperes.vitesse_maison(vaisseau)
+	oeil64 = ev[1]
+	reperes.regler_lumiere(lumiere, oeil64, ev[0])
 	var gaz_moteurs := 0.0
 	for m in vaisseau.moteurs:
 		gaz_moteurs += float(m["actuel"])
 	gaz_moteurs /= maxf(vaisseau.moteurs.size(), 1)
 	var t0 := Time.get_ticks_usec()
-	lumiere.angle_planete = vaisseau.angle_planete
-	lumiere.temps_astres = vaisseau.temps_univers
-	lumiere.mettre_a_jour(delta, oeil64, Vector3(vaisseau.vx, vaisseau.vy, vaisseau.vz), pilote.basis,
+	lumiere.angle_planete = reperes.angle_planete_maison(vaisseau, ev[0])
+	lumiere.temps_astres = ev[0]
+	lumiere.mettre_a_jour(delta, oeil64, Vector3(vm[0], vm[1], vm[2]), pilote.basis,
 		oeil_local, gaz_moteurs)
 	temps_lumiere_ms = lerpf(temps_lumiere_ms, (Time.get_ticks_usec() - t0) / 1000.0, 0.05)
 ## Les pièces du cockpit suivent les commandes, et les écrans affichent l'état du vol.
@@ -970,7 +985,11 @@ func _infos_cockpit() -> Dictionary:
 	var astres := []
 	# planète : position de son centre vue depuis le vaisseau, distance jusqu'à la surface
 	var p := vers_vaisseau * Vector3(-vaisseau.px, -vaisseau.py, -vaisseau.pz)
-	astres.append({"nom": "Planète", "position": p, "distance": vaisseau.altitude(), "principal": true})
+	if reperes.a_la_maison():
+		astres.append({"nom": "Planète", "position": p, "distance": vaisseau.altitude(), "principal": true})
+	else:
+		var e0: Dictionary = reperes.systemes[reperes.courant]["etoiles"][0]
+		astres.append({"nom": String(e0["nom"]), "position": p, "distance": vaisseau.distance_centre() - float(e0["rayon"]), "principal": true})
 	for a in vaisseau.autres_astres:
 		var q := vers_vaisseau * Vector3(float(a["x"]) - vaisseau.px, float(a["y"]) - vaisseau.py, float(a["z"]) - vaisseau.pz)
 		astres.append({"nom": String(a["nom"]), "position": q, "distance": q.length()})
@@ -994,6 +1013,10 @@ func _infos_cockpit() -> Dictionary:
 
 
 func _placer_planete() -> void:
+	if not reperes.a_la_maison():   # la planète est restée dans son système d'étoile
+		planete.visible = false
+		calotte.visible = false
+		return
 	var px: float = vaisseau.px
 	var py: float = vaisseau.py
 	var pz: float = vaisseau.pz
@@ -1172,6 +1195,7 @@ func _mettre_a_jour_hud() -> void:
 	lignes.append("VITESSE       %s   (verticale %s   horizontale %s)   par rapport au sol %s (horizontale %s)" % [_vitesse_txt(vaisseau.vitesse()), _vitesse_txt(vaisseau.vitesse_verticale(), true), _vitesse_txt(vaisseau.vitesse_horizontale()), _vitesse_txt(vaisseau.vitesse_par_rapport_au_sol().length()), _vitesse_txt(vaisseau.vitesse_horizontale_sol())])
 	lignes.append("RELATIVITÉ    %s c   γ = %s   rapidité %.4f" % [_fraction_c(vaisseau.beta()), _gamma_txt(vaisseau.gamma()), vaisseau.rapidite()])
 	lignes.append("HORLOGES      pilote %s   univers %s   (le pilote a %s de moins)" % [_duree(vaisseau.temps_pilote), _duree(vaisseau.temps_univers), _duree_courte(vaisseau.temps_univers - vaisseau.temps_pilote)])
+	lignes.append(_ligne_repere())
 	lignes.append("ALTITUDE      %s" % _distance(vaisseau.altitude()))
 	lignes.append("ORBITE        %s" % orbite_txt)
 	lignes.append("RESSENTI      %.2f g" % (vaisseau.acceleration_ressentie.length() / VaisseauPhysique.G0))
@@ -1199,6 +1223,29 @@ func _mettre_a_jour_hud() -> void:
 		message.text = "Posé (impact à %.1f m/s)" % vaisseau.vitesse_impact
 	else:
 		message.text = ""
+
+
+## Einstein A3 : dans quel système d'étoile on est, l'étoile la plus proche, l'heure de la maison.
+func _ligne_repere() -> String:
+	var e: Array = reperes.etoile_proche(vaisseau)
+	var t_m := reperes.heure_maison(vaisseau)
+	var txt := "REPÈRE        système %s   %s à %s" % [reperes.nom_courant(), e[0], _distance_etoile(float(e[1]) - float(e[2]))]
+	if not reperes.a_la_maison():
+		txt += "   heure de la maison %s   (vitesse vue du Soleil %s)" % [_duree(t_m), _vitesse_txt(_norme(reperes.vitesse_maison(vaisseau)))]
+	return txt
+
+
+static func _norme(p: PackedFloat64Array) -> float:
+	return sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2])
+
+
+## Distance entre étoiles : en UA, puis en années-lumière.
+func _distance_etoile(d: float) -> String:
+	if d < 1.0e10:
+		return _distance(d)
+	if d < 0.05 * Reperes.ANNEE_LUMIERE:
+		return "%.3f UA" % (d / Reperes.UA)
+	return "%.3f années-lumière" % (d / Reperes.ANNEE_LUMIERE)
 
 
 ## Marqueurs de direction du mouvement : (o) = où l'on va, (x) = d'où l'on vient.
