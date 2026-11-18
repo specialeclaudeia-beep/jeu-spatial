@@ -34,6 +34,9 @@ Disposition par défaut :
 | temps ×1, ×10, ×100, ×1000 | 1 2 3 4 | croix directionnelle gauche / droite (moins / plus vite) |
 | tourner la tête, ou la caméra en vue extérieure (le vaisseau ne bouge pas) | — | stick droit (lâché : la tête revient devant) |
 | regarder droit devant | C | R3 (enfoncer le stick droit) |
+| projecteur du vaisseau (allumer / éteindre) | J | — (à choisir avec F2) |
+| visière du casque : relevée, claire, teintée | U | — (à choisir avec F2) |
+| tête qui bouge avec les G (oui / non) | I | — (à choisir avec F2) |
 | tests de physique | F1 (Échap pour revenir) | Rond pour revenir |
 | configurer les commandes | F2 | Options |
 
@@ -55,6 +58,11 @@ Disposition par défaut :
   Posé sur le ventre, le train ne peut pas sortir (le sol bloque les jambes).
 - Vue cockpit (caméra à l'œil du pilote) ou vue extérieure (caméra qui tourne autour du vaisseau) ;
   l'intérieur du cockpit n'est affiché qu'en vue cockpit.
+- **Système de lumière** (étape 8, copié du labo `labo-lumiere/`) : vrai Soleil (environ 127 000 lux),
+  planète dessinée en rayons avec son relief (le vaisseau se pose sur ce relief), étoiles réelles, étoile
+  compagne, ombres du vaisseau dans le cockpit. L'œil du pilote s'habitue à la lumière comme un vrai œil
+  (la nuit, la lampe du cockpit s'allume seule). Casque et visière (touche U), projecteur (J), tête qui
+  bouge de quelques centimètres sous les G (I). Si la partie C++ manque, le jeu reprend l'ancien affichage.
 - Pas de carburant. Pas encore d'atmosphère (phase 4 de la feuille de route).
 - Marqueurs : (o) = direction où l'on va, (x) = direction d'où l'on vient.
 
@@ -65,6 +73,8 @@ Disposition par défaut :
   des propulseurs. Pour une nouvelle version du modèle, il suffit de remplacer ces fichiers (mêmes noms).
 - `scripts/commandes.gd` : touches du clavier et de la manette (disposition par défaut, sauvegarde).
 - `scripts/ecran_touches.gd` : l'écran de configuration des commandes (F2).
+- `scripts/lumiere/` : le système de lumière, copie exacte de `labo-lumiere/scripts/lumiere/` (un test le vérifie : on le change dans le labo, puis on recopie).
+- `scripts/lumiere_jeu.gd` : branche le système dans le jeu (Soleil, planète, lampes, visière, posemètre de l'œil).
 - `scripts/tests_physique.gd` : les tests automatiques (F1).
 - `shaders/` : surface de la planète et ciel étoilé.
 - `banc-essai/banc-lumiere-fractale.html` : banc d'essai du système de lumière fractale (s'ouvre dans un navigateur, sur PC). Version en ligne : https://claude.ai/artifact/7RTivTLhf6TDjpeZyELo2m
