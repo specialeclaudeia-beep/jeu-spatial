@@ -32,6 +32,7 @@ var _corps := RID()
 var _forme := RID()
 var _faces_albedo := PackedFloat32Array()      # 3 nombres par face (couleur linéaire)
 var _faces_emission := PackedFloat32Array()    # luminance émise par face (cd/m²)
+var _faces_emis_couleur := PackedFloat32Array() # 3 nombres par face : couleur de l'émission (étape 9)
 var _faces_matiere := PackedStringArray()
 
 
@@ -115,6 +116,9 @@ func _ranger_faces(mesh: Mesh, surface: int, t: Transform3D, m: BaseMaterial3D, 
 	var indices: PackedInt32Array = tableaux[Mesh.ARRAY_INDEX] if tableaux[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
 	var a := m.albedo_color.srgb_to_linear()
 	var lum := _emission(m.resource_name) if m.emission_enabled else 0.0
+	var ec := m.emission.srgb_to_linear() if m.emission_enabled else Color.WHITE
+	var y_ec := 0.2126 * ec.r + 0.7152 * ec.g + 0.0722 * ec.b
+	ec = Color(ec.r / y_ec, ec.g / y_ec, ec.b / y_ec) if y_ec > 1e-6 else Color.WHITE
 	var nb := indices.size() / 3 if not indices.is_empty() else sommets.size() / 3
 	for f in nb:
 		for k in 3:
@@ -122,6 +126,7 @@ func _ranger_faces(mesh: Mesh, surface: int, t: Transform3D, m: BaseMaterial3D, 
 			faces.append(t * sommets[j])
 		_faces_albedo.append_array([a.r, a.g, a.b])
 		_faces_emission.append(lum)
+		_faces_emis_couleur.append_array([ec.r, ec.g, ec.b])
 		_faces_matiere.append(m.resource_name)
 	nb_faces = _faces_emission.size()
 
@@ -187,15 +192,24 @@ func toucher(depuis: Vector3, direction: Vector3, longueur := 60.0) -> Dictionar
 ## rayon ne touche pas le vaisseau. soleil = direction du Soleil (repère du vaisseau), e_soleil = lux
 ## (part visible comprise), e_autre = lux venus d'ailleurs (compagne, planète, lampes : moyenne).
 func luminance_vue(oeil: Vector3, direction: Vector3, soleil: Vector3, e_soleil: float, e_autre: float) -> float:
+	var c := luminance_vue_couleur(oeil, direction, soleil, e_soleil, e_autre)
+	if c.a <= 0.0:
+		return -1.0
+	return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+
+
+## Étape 9 : la même chose en couleur (sonde du cockpit pour les reflets) : Color(rouge, vert, bleu en
+## cd/m², alpha = 1 si le rayon touche le vaisseau, 0 sinon).
+func luminance_vue_couleur(oeil: Vector3, direction: Vector3, soleil: Vector3, e_soleil: float, e_autre: float) -> Color:
 	var r := toucher(oeil, direction)
 	if r.is_empty():
-		return -1.0
+		return Color(0.0, 0.0, 0.0, 0.0)
 	var f: int = r.get("face_index", -1)
-	var alb := 0.3
-	var emis := 0.0
+	var alb := Vector3(0.3, 0.3, 0.3)
+	var emis := Vector3.ZERO
 	if f >= 0 and f < nb_faces:
-		alb = 0.2126 * _faces_albedo[f * 3] + 0.7152 * _faces_albedo[f * 3 + 1] + 0.0722 * _faces_albedo[f * 3 + 2]
-		emis = _faces_emission[f]
+		alb = Vector3(_faces_albedo[f * 3], _faces_albedo[f * 3 + 1], _faces_albedo[f * 3 + 2])
+		emis = Vector3(_faces_emis_couleur[f * 3], _faces_emis_couleur[f * 3 + 1], _faces_emis_couleur[f * 3 + 2]) * _faces_emission[f]
 	var n: Vector3 = r["normal"]
 	if n.dot(direction) > 0.0:
 		n = -n
@@ -205,7 +219,8 @@ func luminance_vue(oeil: Vector3, direction: Vector3, soleil: Vector3, e_soleil:
 		var p: Vector3 = r["position"]
 		if toucher(p + n * 0.01, soleil).is_empty():
 			e += e_soleil * c
-	return alb * e / PI + emis
+	var l := alb * (e / PI) + emis
+	return Color(l.x, l.y, l.z, 1.0)
 
 
 func liberer() -> void:

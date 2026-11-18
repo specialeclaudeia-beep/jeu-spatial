@@ -10,6 +10,18 @@ en triangles sans risquer de casser le jeu. Le jeu ne voit pas ce dossier.
    coche **Godot AI**. Ferme la fenêtre.
 4. Appuie sur **F5** (ou Lecture ▶) : la scène du labo s'ouvre.
 
+## Étape 9 : les reflets (dans le jeu)
+Ouvre le jeu (pas le labo), F5, vue cockpit. La verrière et la visière renvoient maintenant la lumière
+comme du vrai verre (loi de Fresnel : 4 % par surface de face, beaucoup plus en biais) :
+- **la nuit**, on voit dans la verrière le reflet flou du cockpit éclairé par sa lampe et ses écrans ;
+- **le jour**, le reflet du cockpit au soleil, de la planète (tirée des mêmes rayons que la planète
+  dessinée) et du Soleil lui-même ; la verrière laisse passer 92 % de la lumière, pas 100 % ;
+- **la visière** (U) renvoie un léger voile : ton visage éclairé par le Soleil (fort avec la visière
+  solaire dorée, nul sans casque). Le HUD l'affiche (« reflet … cd/m² ») ;
+- les surfaces lisses et les métaux reflètent le cockpit et la planète, et la lumière **rebondit** dans le
+  cockpit (les écrans éclairent un peu ce qui les entoure, les ombres ne sont plus noires).
+Le HUD affiche aussi « reflets x ms » (temps de calcul, environ 1 ms).
+
 ## Étape 8 : la lumière est dans le jeu
 Le système du labo est maintenant aussi dans le jeu (ouvrir le projet du jeu, F5). En plus du labo :
 le cockpit éclairé par le vrai Soleil avec les ombres des montants, la lampe du cockpit qui s'allume
@@ -160,3 +172,4 @@ Tout doit être vert (37 tests depuis l'étape 6).
 - Étape 3 (18/11/2026) : le vrai Soleil à 1 UA et l'œil du pilote (pupille, adaptation, halo selon la formule d'éblouissement de la CIE, vision de nuit, couronne du Soleil visible pendant une éclipse). 17 tests automatiques.
 - Étape 6 (18/11/2026) : les étoiles (catalogue de Yale, Voie lactée), une étoile compagne qui éclaire aussi la planète, aberration et Doppler à grande vitesse (B), et la planète qui cache enfin le Soleil sous l'horizon. 37 tests automatiques.
 - Étape 8 (18/11/2026) : la lumière branchée dans le jeu (cockpit, vaisseau, lampes, casque et visière, tête sous les G, le vaisseau se pose sur le relief). 42 tests du labo, 32 tests du jeu.
+- Étape 9 (18/11/2026) : les reflets (verrière, visière, métaux), la carte du ciel tirée des rayons (C++ recompilé), la sonde du cockpit par rayons et le rebond de la lumière dans le cockpit. 45 tests du labo, 33 tests du jeu. Dernière étape du programme.

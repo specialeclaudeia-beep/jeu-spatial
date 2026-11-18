@@ -63,6 +63,8 @@ Disposition par défaut :
   compagne, ombres du vaisseau dans le cockpit. L'œil du pilote s'habitue à la lumière comme un vrai œil
   (la nuit, la lampe du cockpit s'allume seule). Casque et visière (touche U), projecteur (J), tête qui
   bouge de quelques centimètres sous les G (I). Si la partie C++ manque, le jeu reprend l'ancien affichage.
+  Étape 9 : reflets de la verrière et de la visière (loi de Fresnel), du cockpit, de la planète et du
+  Soleil ; les métaux reflètent leur entourage et la lumière rebondit dans le cockpit.
 - Pas de carburant. Pas encore d'atmosphère (phase 4 de la feuille de route).
 - Marqueurs : (o) = direction où l'on va, (x) = direction d'où l'on vient.
 

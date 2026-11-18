@@ -128,6 +128,18 @@ public:
 	// Part de chaque case (0 à 1) couverte par cette planète au dernier posemètre : sert à mettre
 	// deux astres l'un devant l'autre (la lune devant la planète, par exemple).
 	PackedFloat32Array couverture() const { return derniere_couverture; }
+	// Étape 9 (reflets) : « carte du ciel » vue de l'œil, tirée des mêmes rayons que le posemètre, mais
+	// dans TOUTES les directions (pas seulement l'écran). Carte en longitude-latitude de largeur × hauteur
+	// cases, dans le repère d'affichage (rotation = repère de l'astre → affichage, comme
+	// tampon_instances). Direction d → u = atan2(d.x, −d.z) / 2π + 0,5 ; v = acos(d.y) / π.
+	// Rend 4 nombres par case : luminance rouge, verte, bleue (cd/m², moyenne des rayons de la case) et
+	// la part de la case couverte par l'astre (0 à 1, calculée par la géométrie de la boule). Une case
+	// de l'astre sans rayon (rayon trop gros près de l'œil, morceau grossier hors de l'écran) prend la
+	// moyenne de ses voisines, sinon la loi de Lambert. Les vitres et les métaux s'en servent pour
+	// refléter la planète (verrière, visière, coque).
+	PackedFloat32Array carte_ciel(const PackedFloat64Array &p_camera, const Basis &p_rotation, int p_largeur,
+			int p_hauteur, const Vector3 &p_soleil, double p_eclairement,
+			const PackedFloat64Array &p_occulteur = PackedFloat64Array(), double p_soleil_angle = 0.004652) const;
 	// Part du disque du Soleil (0 à 1) vue depuis le point p quand une sphère (centre c, rayon r) peut
 	// le cacher. s = direction du Soleil, a = son rayon apparent (rad). Recouvrement de deux disques.
 	static double part_soleil_visible(const lumiere::Vec3d &p, const lumiere::Vec3d &c, double r,
@@ -166,6 +178,12 @@ public:
 	PackedFloat32Array horizon_point(const PackedFloat64Array &p_direction, int p_naissance) const;
 	// Repère du lieu : t1 = « est », t2 = « nord » (le même dans le shader).
 	static void repere_lieu(const lumiere::Vec3d &d, lumiere::Vec3d &t1, lumiere::Vec3d &t2);
+	// Lumière reçue par le rayon t du morceau m (point p, repère de l'astre) : part de l'étoile vue
+	// (cône de petites faces, ombre de l'astre, horizon proche, occulteur) ; rend aussi la direction
+	// moyenne n (non normée) et l'albédo moyen. Commun au posemètre et à la carte du ciel.
+	double eclairage_rayon(const lumiere::Morceau &m, int t, const lumiere::Vec3d &p, const lumiere::Vec3d &s,
+			bool avec_occ, const lumiere::Vec3d &occ_c, double occ_r, double angle, lumiere::Vec3d &n,
+			float al[3]) const;
 	static double part_sous_horizon(const lumiere::Vec3d &up, const lumiere::Vec3d &t1, const lumiere::Vec3d &t2,
 			const float h[lumiere::NB_AZIMUTS], const lumiere::Vec3d &s, double a);
 	PackedFloat64Array centre_morceau(int64_t p_adresse);      // 3 nombres + rayon englobant

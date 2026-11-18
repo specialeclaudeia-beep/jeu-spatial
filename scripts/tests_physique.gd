@@ -7,6 +7,7 @@ const Commandes = preload("res://scripts/commandes.gd")
 const Jeu = preload("res://scripts/jeu.gd")
 const LumiereJeu = preload("res://scripts/lumiere_jeu.gd")
 const Objets = preload("res://scripts/lumiere/objets.gd")
+const Reflets = preload("res://scripts/lumiere/reflets.gd")
 const R := 600000.0
 const GM := 9.81 * 600000.0 * 600000.0
 
@@ -668,6 +669,36 @@ func _tests_lumiere() -> void:
 		"%d matières à remplacer oubliées, %d vitre(s), %d faces pour le posemètre. Regard vers le tableau de bord : %s ; vers le ciel (à travers la verrière) : %s ; Soleil sous le vaisseau caché par la coque : %s." % [
 			mauvais, vitres, o.nb_faces, "touché" if not tableau.is_empty() else "RIEN",
 			"libre" if ciel.is_empty() else "BLOQUÉ", "oui" if not dessous.is_empty() else "NON"])
+
+	# 33. Étape 9 : la sonde du cockpit (reflets), remplie par rayons en quelques images, et la visière
+	var rf = Reflets.new()
+	rf.preparer()
+	var t_sonde := Time.get_ticks_usec()
+	var n_cases: int = Reflets.LARGEUR_COCKPIT * Reflets.HAUTEUR_COCKPIT
+	var n_images := ceili(float(n_cases) / Reflets.RAYONS_PAR_IMAGE)
+	for i in n_images:
+		rf.mettre_a_jour_cockpit(o, oeil_p, Vector3(0.3, 0.9, -0.3).normalized(), 126600.0, 50.0)
+	var ms_sonde := (Time.get_ticks_usec() - t_sonde) / 1000.0 / n_images
+	var touches := 0
+	for kc in n_cases:
+		if rf.image_cockpit.get_pixel(kc % Reflets.LARGEUR_COCKPIT, kc / Reflets.LARGEUR_COCKPIT).a > 0.5:
+			touches += 1
+	var part_touche := float(touches) / n_cases
+	var l_ck: float = rf.luminance_cockpit()
+	l.visiere = 1
+	l.mettre_a_jour(1.0 / 60.0, jour, Vector3.ZERO, Basis.IDENTITY, Vector3.ZERO)
+	var voile_claire: float = l.reflet_visiere.y
+	l.visiere = 2
+	l.mettre_a_jour(1.0 / 60.0, jour, Vector3.ZERO, Basis.IDENTITY, Vector3.ZERO)
+	var voile_or: Vector3 = l.reflet_visiere
+	l.visiere = 0
+	l.mettre_a_jour(1.0 / 60.0, jour, Vector3.ZERO, Basis.IDENTITY, Vector3.ZERO)
+	var voile_sans: float = l.reflet_visiere.length()
+	var ok33: bool = rf.cases_faites == n_cases and part_touche > 0.2 and part_touche < 0.95 and l_ck > 1.0 \
+		and voile_claire > 0.0 and voile_sans == 0.0 and voile_or.x > voile_or.z and ms_sonde < 4.0
+	_resultat(ok33, "Lumière : reflets (sonde du cockpit et visière)",
+		"Sonde remplie en %d images (%.2f ms par image) : %d %% des directions touchent le cockpit, le reste passe par la verrière ; luminance moyenne %.0f cd/m². Voile de la visière au Soleil : claire %.0f cd/m², solaire (or) %.0f rouge / %.0f bleu, sans casque %.0f." % [
+			n_images, ms_sonde, roundi(part_touche * 100.0), l_ck, voile_claire, voile_or.x, voile_or.z, voile_sans])
 	o.liberer()
 	scene.queue_free()
 

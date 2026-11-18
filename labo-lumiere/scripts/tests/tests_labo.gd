@@ -11,6 +11,25 @@ const Oeil = preload("res://scripts/lumiere/oeil.gd")
 const Orbite = preload("res://scripts/lumiere/orbite.gd")
 const Etoiles = preload("res://scripts/lumiere/etoiles.gd")
 const EtoileProche = preload("res://scripts/lumiere/etoile_proche.gd")
+const Reflets = preload("res://scripts/lumiere/reflets.gd")
+
+
+## Étape 9 : un faux astre pour tester le mélange des cartes du ciel (le plus proche cache l'autre).
+class FauxAstre:
+	extends RefCounted
+	var luminance := 1.0
+	var moitie := false
+	func carte_ciel(_o, _s, _e, w: int, h: int, _a := 0.0) -> PackedFloat32Array:
+		var c := PackedFloat32Array()
+		c.resize(w * h * 4)
+		for k in w * h:
+			if moitie and (k % w) >= w / 2:
+				continue
+			c[k * 4] = luminance
+			c[k * 4 + 1] = luminance
+			c[k * 4 + 2] = luminance
+			c[k * 4 + 3] = 1.0
+		return c
 
 var texte: RichTextLabel
 var fond: ColorRect
@@ -101,6 +120,10 @@ func _lancer() -> void:
 	_test_cailloux_grains()
 	_test_ombre_horizon()
 	await _test_labo_loupe_descente()
+	# Étape 9 : les reflets.
+	_test_fresnel_lames()
+	_test_carte_ciel_rayons()
+	_test_melange_cartes()
 
 
 func _test_reglages() -> void:
@@ -1231,3 +1254,106 @@ func _test_labo_loupe_descente() -> void:
 	_resultat(ok, "Labo : loupe à 3 cm (L) et descente continue de l'orbite jusqu'à 3 cm (G)",
 		"loupe : altitude %.2f cm, niveau %d, %.0f cd/m² ; descente de %.0f km à %.2f cm, altitude toujours en baisse %s, niveau %d → %d" % [
 			alt_loupe * 100.0, niveau_loupe, lum, depart / 1000.0, arrivee * 100.0, "oui" if toujours else "NON", niveaux[20], niveau_fin])
+
+
+func _test_fresnel_lames() -> void:
+	# Loi de Fresnel : une lame d'acrylique renvoie 7,5 % de face (2 surfaces de 3,9 %), tout au ras ;
+	# carte en longitude-latitude : aller-retour direction → case → direction ; visière : voile nul sans
+	# casque, proportionnel à la lumière reçue par le visage.
+	var face := Reflets.reflet_lame(1.0, 1.49)
+	var biais := Reflets.reflet_lame(0.2, 1.49)
+	var ras := Reflets.reflet_lame(0.0, 1.49)
+	var pire := 0.0
+	for d in [Vector3(0.3, 0.5, -0.8), Vector3(-0.9, -0.1, 0.4), Vector3(0.0, -0.99, 0.1), Vector3(0.7, 0.0, 0.7)]:
+		var n: Vector3 = (d as Vector3).normalized()
+		pire = maxf(pire, n.angle_to(Reflets.direction(Reflets.uv(n))))
+	var sans := Reflets.reflet_visiere(0, Vector3.ONE, 1.0e5)
+	var claire := Reflets.reflet_visiere(1, Vector3(0.9, 0.9, 0.9), Reflets.eclairement_visage(Vector3.FORWARD, Vector3.FORWARD, 126600.0))
+	var dos := Reflets.eclairement_visage(Vector3.FORWARD, Vector3.BACK, 126600.0)
+	var ok := absf(face - 0.0745) < 0.002 and biais > 0.2 and ras > 0.99 and pire < 1e-4 \
+		and sans == Vector3.ZERO and absf(claire.y - 0.098 * 0.9 * 0.2 * 63300.0 / PI) < 1.0 and dos == 0.0
+	_resultat(ok, "Reflets : loi de Fresnel, carte du ciel, visière",
+		"verrière : %.1f %% renvoyés de face, %.0f %% à 78°, %.0f %% au ras ; carte : écart %.6f rad ; visière claire au Soleil : voile de %.0f cd/m², sans casque 0, Soleil dans le dos 0 lux sur le visage" % [
+			face * 100.0, biais * 100.0, ras * 100.0, pire, claire.y])
+
+
+func _test_carte_ciel_rayons() -> void:
+	# La carte du ciel tirée des rayons, vue à 2 000 km d'altitude (Soleil vers +x) : la planète couvre
+	# le bon angle solide, elle est lumineuse côté jour (proche de la loi de Lambert) et noire côté nuit.
+	var a := _nouvel_arbre()
+	var r := 600000.0
+	var cam := PackedFloat64Array([0.0, r + 2.0e6, 0.0])
+	var axes := PackedFloat32Array([0, -1, 0, 1, 0, 0, 0, 0, -1])
+	var tan_v := tan(deg_to_rad(37.5))
+	for i in 30:
+		a.choisir(cam, axes, tan_v * 16.0 / 9.0, tan_v, 720.0, i / 60.0)
+		a.eclairer(96, 5.0)
+	var w := 64
+	var h := 32
+	var s := Vector3(1, 0, 0)
+	var e := 126600.0
+	var t0 := Time.get_ticks_usec()
+	var c: PackedFloat32Array = a.carte_ciel(cam, Basis.IDENTITY, w, h, s, e)
+	var ms := (Time.get_ticks_usec() - t0) / 1000.0
+	var angle := 0.0
+	for j in h:
+		var th0 := PI * j / h
+		var th1 := PI * (j + 1) / h
+		var case_sr := TAU / w * (cos(th0) - cos(th1))
+		for i in w:
+			angle += c[(j * w + i) * 4 + 3] * case_sr
+	var attendu := TAU * (1.0 - cos(asin(r / (r + 2.0e6))))
+	# Côté jour (vers +x) et côté nuit (vers −x), à 8° de la verticale.
+	var jour := _lire_carte(c, w, h, Vector3(sin(deg_to_rad(8.0)), -cos(deg_to_rad(8.0)), 0.0))
+	var nuit := _lire_carte(c, w, h, Vector3(-sin(deg_to_rad(8.0)), -cos(deg_to_rad(8.0)), 0.0))
+	var haut := _lire_carte(c, w, h, Vector3.UP)
+	# Point du sol vu à 8° : sa normale fait environ 35° avec la verticale, d'où cos ≈ sin(35°) vers le Soleil.
+	var p := Vector3(0.0, r + 2.0e6, 0.0)
+	var d := Vector3(sin(deg_to_rad(8.0)), -cos(deg_to_rad(8.0)), 0.0)
+	var b := p.dot(d)
+	var t := -b - sqrt(b * b - (p.length_squared() - r * r))
+	var cs := (p + d * t).normalized().dot(s)
+	var lambert := 0.12 * e * cs / PI
+	var lj := 0.2126 * jour.r + 0.7152 * jour.g + 0.0722 * jour.b
+	var ln := 0.2126 * nuit.r + 0.7152 * nuit.g + 0.0722 * nuit.b
+	# Coût au pire : vaisseau à 100 km, regard vers l'horizon (beaucoup de morceaux affichés).
+	var bas := PackedFloat64Array([0.0, r + 1.0e5, 0.0])
+	var axes_h := PackedFloat32Array([1, 0, 0, 0, 0, 1, 0, 1, 0])
+	for i in 40:
+		a.choisir(bas, axes_h, tan_v * 16.0 / 9.0, tan_v, 720.0, 1.0 + i / 60.0)
+		a.eclairer(96, 5.0)
+	t0 = Time.get_ticks_usec()
+	a.carte_ciel(bas, Basis.IDENTITY, w, h, s, e)
+	var ms_bas := (Time.get_ticks_usec() - t0) / 1000.0
+	var ok := absf(angle / attendu - 1.0) < 0.1 and jour.a > 0.99 and haut.a == 0.0 and lj > lambert / 4.0 \
+		and lj < lambert * 4.0 and ln < lj * 0.01 and ms_bas < 3.0
+	_resultat(ok, "Carte du ciel tirée des rayons (reflets de la planète)",
+		"planète : %.3f sr (attendu %.3f) ; côté jour %.0f cd/m² (Lambert %.0f), côté nuit %.1f ; ciel au-dessus vide ; %.2f ms à 2 000 km, %.2f ms à 100 km (%d morceaux, budget 3)" % [
+			angle, attendu, lj, lambert, ln, ms, ms_bas, a.nb_morceaux()])
+
+
+static func _lire_carte(c: PackedFloat32Array, w: int, h: int, d: Vector3) -> Color:
+	var p := Reflets.uv(d.normalized())
+	var k := clampi(int(p.y * h), 0, h - 1) * w + clampi(int(p.x * w), 0, w - 1)
+	return Color(c[k * 4], c[k * 4 + 1], c[k * 4 + 2], c[k * 4 + 3])
+
+
+func _test_melange_cartes() -> void:
+	# Deux astres dans la carte du ciel : le plus proche (moitié du ciel, 10 cd/m²) cache le plus
+	# lointain (tout le ciel, 100 cd/m²). La texture envoyée aux programmes de dessin a ses mipmaps.
+	var r := Reflets.new()
+	r.preparer()
+	var pres := FauxAstre.new()
+	pres.luminance = 10.0
+	pres.moitie = true
+	var loin := FauxAstre.new()
+	loin.luminance = 100.0
+	var vide := PackedFloat64Array([0.0, 0.0, 0.0])
+	r.mettre_a_jour_ciel([{"planete": pres, "oeil": vide, "soleil": Vector3.UP, "eclairement": 1.0},
+		{"planete": loin, "oeil": vide, "soleil": Vector3.UP, "eclairement": 1.0}], true)
+	var c1 := r.image_ciel.get_pixel(3, 10)
+	var c2 := r.image_ciel.get_pixel(Reflets.LARGEUR_CIEL - 3, 10)
+	var mip := r.tex_ciel.get_image().has_mipmaps()
+	var ok := absf(c1.r - 10.0) < 0.01 and absf(c1.a - 1.0) < 1e-4 and absf(c2.r - 100.0) < 0.01 and mip
+	_resultat(ok, "Carte du ciel : l'astre le plus proche cache l'autre",
+		"devant : %.1f cd/m², derrière seul : %.1f cd/m², flous (mipmaps) %s" % [c1.r, c2.r, "oui" if mip else "non"])

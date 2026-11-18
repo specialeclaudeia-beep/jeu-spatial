@@ -118,6 +118,30 @@ oeil_filtre={
 "type": "vec3",
 "value": Vector3(1, 1, 1)
 }
+oeil_reflet_visiere={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+reflets_ciel={
+"type": "sampler2D",
+"value": ""
+}
+reflets_cockpit={
+"type": "sampler2D",
+"value": ""
+}
+reflets_base={
+"type": "mat3",
+"value": Basis(1, 0, 0, 0, 1, 0, 0, 0, 1)
+}
+reflets_rayon_sonde={
+"type": "float",
+"value": 0.9
+}
+reflets_actifs={
+"type": "float",
+"value": 0.0
+}
 lampe_a_position={
 "type": "vec3",
 "value": Vector3(0, 0, 0)
