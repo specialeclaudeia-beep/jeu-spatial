@@ -22,12 +22,36 @@ global uniform vec3 soleil_direction_vue;    // direction où l'œil VOIT le Sol
                                               // à très grande vitesse : aberration, étape 6)
 global uniform vec3 oeil_filtre;             // étape 8 : part de la lumière que laisse passer la visière du
                                               // casque, par couleur (1 = pas de visière)
+global uniform vec4 oeil_fantome;            // suite : image fantôme du Soleil dans la visière (xyz = part
+                                             // de la lumière du Soleil renvoyée deux fois, w = rayon du flou, rad)
 global uniform vec3 oeil_reflet_visiere;     // étape 9 : voile (cd/m²) renvoyé à l'œil par la face intérieure
                                               // de la visière (le visage du pilote, très flou)
 
 // Bruit fixe par pixel, entre 0 et 1.
 float oeil_hasard(vec2 p) {
 	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+// Image fantôme du Soleil dans la visière : la lumière passe la visière, se réfléchit sur la face
+// intérieure, revient sur la face extérieure (ou le film d'or) et repart vers l'œil. La visière est
+// une coque courbe à quelques cm de l'œil : l'image est de l'autre côté de l'axe du regard
+// (symétrique du Soleil), toute proche, donc floue pour un œil réglé à l'infini (un disque de
+// rayon oeil_fantome.w). Toute la lumière renvoyée (xyz × e) est répartie sur ce disque.
+vec3 oeil_image_fantome(vec3 d, float e) {
+	if (oeil_fantome.w <= 0.0 || dot(oeil_fantome.xyz, vec3(1.0)) <= 0.0) {
+		return vec3(0.0);
+	}
+	vec3 devant = cross(oeil_haut, oeil_droite);
+	float c = dot(devant, soleil_direction_vue);
+	if (c <= 0.2) {
+		return vec3(0.0);   // Soleil trop sur le côté : son reflet ne revient pas vers l'œil
+	}
+	vec3 g = normalize(2.0 * c * devant - soleil_direction_vue);
+	float a = acos(clamp(dot(d, g), -1.0, 1.0));
+	float w = oeil_fantome.w;
+	float bord = 1.0 - smoothstep(0.8 * w, w, a);
+	// Le reflet faiblit quand le Soleil s'écarte de l'axe (la coque renvoie ailleurs).
+	return soleil_couleur * oeil_fantome.xyz * e * bord * smoothstep(0.2, 0.6, c) / (PI * 0.82 * w * w);
 }
 
 // Lumière du Soleil diffusée dans l'œil, vue dans la direction d (cd/m²).
@@ -53,7 +77,7 @@ vec3 oeil_voile(vec3 d, float temps) {
 	// Anneau irisé : le rouge un peu plus loin du Soleil que le bleu.
 	vec3 rayons_anneau = vec3(3.9, 3.6, 3.25);
 	vec3 anneau = 0.35 * (5.0 / (th * th)) * exp(-pow((vec3(th) - rayons_anneau) / 0.22, vec3(2.0)));
-	return soleil_couleur * e * (couronne + diffus) + e * anneau;
+	return soleil_couleur * e * (couronne + diffus) + e * anneau + oeil_image_fantome(d, e);
 }
 
 // Luminance réelle (cd/m², lumière linéaire) → couleur d'écran, comme l'œil la voit.

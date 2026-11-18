@@ -192,6 +192,23 @@ static func reflet_visiere(visiere: int, filtre: Vector3, e_visage: float) -> Ve
 	return r * filtre * (ALBEDO_VISAGE * e_visage / PI)
 
 
+## Image fantôme du Soleil dans la visière : part de la lumière du Soleil (déjà passée par la visière)
+## qui revient vers l'œil après deux réflexions : face intérieure du polycarbonate (≈ 5 %), puis face
+## extérieure (claire : ≈ 4,9 %) ou film d'or vu de l'intérieur (solaire). Sans casque : rien.
+const FANTOMES_VISIERES := [Vector3(0.0, 0.0, 0.0), Vector3(0.00245, 0.00245, 0.00245),
+	Vector3(0.0275, 0.023, 0.014)]
+## La coque (rayon ≈ 15 cm) fait du Soleil une image virtuelle à ≈ 7,5 cm de l'œil.
+const DISTANCE_IMAGE_FANTOME := 0.075
+
+
+## Global « oeil_fantome » : xyz = part renvoyée, w = rayon angulaire du flou (rad) = rayon de la
+## pupille / distance de l'image (l'œil est réglé à l'infini), jamais moins que le Soleil.
+static func fantome_visiere(visiere: int, pupille_mm: float, rayon_soleil: float) -> Vector4:
+	var f: Vector3 = FANTOMES_VISIERES[clampi(visiere, 0, FANTOMES_VISIERES.size() - 1)]
+	var w := maxf(0.0005 * pupille_mm / DISTANCE_IMAGE_FANTOME, rayon_soleil)
+	return Vector4(f.x, f.y, f.z, w)
+
+
 ## Lux reçus par le visage (une demi-boule tournée vers « devant ») venant d'une étoile de direction s
 ## et d'éclairement e : moyenne de max(cos, 0) sur la demi-boule = (1 + devant·s) / 4.
 static func eclairement_visage(devant: Vector3, s: Vector3, e: float) -> float:

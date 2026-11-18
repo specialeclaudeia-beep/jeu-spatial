@@ -517,6 +517,9 @@ func _mettre_a_jour_reflets(s: Vector3, e: float, alpha: float, vis: float, base
 		e_visage += Reflets.eclairement_visage(devant, s, e * vis)
 	reflet_visiere = Reflets.reflet_visiere(visiere_portee(), filtre, e_visage)
 	RenderingServer.global_shader_parameter_set("oeil_reflet_visiere", reflet_visiere)
+	# Image fantôme du Soleil (deux réflexions dans la visière), floue selon la pupille.
+	RenderingServer.global_shader_parameter_set("oeil_fantome",
+		Reflets.fantome_visiere(visiere_portee(), oeil.pupille_mm, alpha))
 	# L'œil voit aussi ce voile : il s'y habitue.
 	luminance_vue += 0.2126 * reflet_visiere.x + 0.7152 * reflet_visiere.y + 0.0722 * reflet_visiere.z
 	ms_reflets = (Time.get_ticks_usec() - t0) / 1000.0
