@@ -35,9 +35,13 @@ const ACTIONS := [
 	["roulis_gauche", "Roulis : pencher à gauche", "l:65", "a:0:-1"], # A, stick gauche gauche
 	["roulis_droite", "Roulis : pencher à droite", "l:69", "a:0:1"],  # E, stick gauche droite
 	["stabilisateur", "Stabilisateur de rotation", "l:84", "b:3"],   # T, Triangle
+	["pilote_cap", "Pilote auto : garder le cap", "l:75", ""],        # K
+	["pilote_arret", "Pilote auto : s'arrêter", "l:78", ""],          # N
+	["pilote_atterrir", "Pilote auto : atterrir", "l:76", ""],        # L
 	["ailes", "Ouvrir / replier les ailes", "l:88", "b:11"],         # X, croix directionnelle haut
 	["train", "Sortir / rentrer le train", "l:71", "b:12"],          # G, croix directionnelle bas
 	["vue", "Vue cockpit / extérieure", "l:86", "b:20"],             # V, pavé tactile
+	["vol_vertical", "Vol vertical (décollage / atterrissage)", "l:70", "b:15"],  # F, bouton micro
 	["pause", "Pause", "l:80", "b:2"],                                # P, Carré
 	["aide", "Cacher / montrer l'aide", "l:72", "b:1"],               # H, Rond
 	["recommencer", "Recommencer", "l:82", "b:4"],                    # R, Créer
@@ -56,6 +60,7 @@ const ACTIONS := [
 	["phares", "Projecteur du vaisseau", "l:74", ""],                  # J
 	["visiere", "Casque : visière claire / solaire / sans casque", "l:85", ""],   # U
 	["tete_g", "Tête qui bouge avec les G (oui / non)", "l:73", ""],   # I
+	["zoom", "Zoom (lire les instruments)", "l:66", "b:7"],          # B, L3 (maintenir)
 	["tests", "Tests de physique", "p:4194332", ""],                  # F1
 	["ecran_touches", "Configurer les commandes", "p:4194333", "b:6"], # F2, Options
 ]

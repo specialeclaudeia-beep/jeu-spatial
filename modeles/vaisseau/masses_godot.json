@@ -1,0 +1,963 @@
+{
+ "masse_totale_kg": 8458.5,
+ "masse_structure_kg": 4073.5,
+ "masse_equipements_kg": 4385.0,
+ "centre_gravite_godot_m": [
+  -0.0,
+  0.02,
+  1.448
+ ],
+ "inertie_godot_kg_m2": [
+  [
+   68054.9,
+   -0.0,
+   -2.0
+  ],
+  [
+   -0.0,
+   81433.9,
+   136.8
+  ],
+  [
+   -2.0,
+   136.8,
+   19250.2
+  ]
+ ],
+ "inertie_principale_godot_kg_m2": {
+  "x_tangage": 68054.9,
+  "y_lacet": 81433.9,
+  "z_roulis": 19250.2
+ },
+ "masse_par_matiere_kg": {
+  "composite fibre de carbone (ailes)": 1480.7,
+  "alliage aluminium-lithium (coque, trappes)": 929.5,
+  "titane (tuyères, moteur, carters chauds)": 708.4,
+  "acier haute résistance (trains d'atterrissage)": 419.8,
+  "verre aluminosilicate feuilleté (verrière)": 342.9,
+  "aluminium (habillage du cockpit)": 192.2
+ },
+ "equipements": {
+  "Masse_moteur_central": {
+   "masse_kg": 1500,
+   "position_godot": [
+    0.0,
+    0.0,
+    3.6
+   ],
+   "description": "coeur du moteur principal (turbopompes, chambre)"
+  },
+  "Masse_reacteur_aile_haut_droit": {
+   "masse_kg": 380,
+   "position_godot": [
+    1.637,
+    0.424,
+    2.5
+   ],
+   "description": "réacteur d'aile"
+  },
+  "Masse_reacteur_aile_haut_gauche": {
+   "masse_kg": 380,
+   "position_godot": [
+    -1.637,
+    0.424,
+    2.5
+   ],
+   "description": "réacteur d'aile"
+  },
+  "Masse_reacteur_aile_bas_droit": {
+   "masse_kg": 380,
+   "position_godot": [
+    1.637,
+    -0.424,
+    2.5
+   ],
+   "description": "réacteur d'aile"
+  },
+  "Masse_reacteur_aile_bas_gauche": {
+   "masse_kg": 380,
+   "position_godot": [
+    -1.637,
+    -0.424,
+    2.5
+   ],
+   "description": "réacteur d'aile"
+  },
+  "Masse_moteurs_levage": {
+   "masse_kg": 240,
+   "position_godot": [
+    0.0,
+    -0.2,
+    -3.0
+   ],
+   "description": "2 moteurs de levage"
+  },
+  "Masse_pilote_et_siege": {
+   "masse_kg": 180,
+   "position_godot": [
+    0.0,
+    0.1,
+    0.3
+   ],
+   "description": "pilote équipé + siège éjectable"
+  },
+  "Masse_avionique": {
+   "masse_kg": 350,
+   "position_godot": [
+    0.0,
+    0.05,
+    -5.0
+   ],
+   "description": "ordinateurs, radar, batteries"
+  },
+  "Masse_survie": {
+   "masse_kg": 250,
+   "position_godot": [
+    0.0,
+    0.3,
+    1.6
+   ],
+   "description": "air, eau, refroidissement"
+  },
+  "Masse_canons": {
+   "masse_kg": 300,
+   "position_godot": [
+    0.0,
+    -0.1,
+    -5.4
+   ],
+   "description": "canons du nez et munitions"
+  },
+  "Masse_droide": {
+   "masse_kg": 45,
+   "position_godot": [
+    0.0,
+    0.71,
+    1.85
+   ],
+   "description": "droide mecanicien dans son logement"
+  }
+ },
+ "pieces": {
+  "Aile_bas_droit": {
+   "matiere": "composite fibre de carbone (ailes)",
+   "masse_kg": 355.8,
+   "centre_godot": [
+    2.66,
+    -0.968,
+    2.371
+   ]
+  },
+  "Aile_bas_gauche": {
+   "matiere": "composite fibre de carbone (ailes)",
+   "masse_kg": 355.8,
+   "centre_godot": [
+    -2.66,
+    -0.968,
+    2.371
+   ]
+  },
+  "Aile_haut_droit": {
+   "matiere": "composite fibre de carbone (ailes)",
+   "masse_kg": 355.8,
+   "centre_godot": [
+    2.66,
+    0.968,
+    2.371
+   ]
+  },
+  "Aile_haut_gauche": {
+   "matiere": "composite fibre de carbone (ailes)",
+   "masse_kg": 355.8,
+   "centre_godot": [
+    -2.66,
+    0.968,
+    2.371
+   ]
+  },
+  "Aileron_d": {
+   "matiere": "composite fibre de carbone (ailes)",
+   "masse_kg": 28.8,
+   "centre_godot": [
+    0.618,
+    1.203,
+    3.814
+   ]
+  },
+  "Aileron_g": {
+   "matiere": "composite fibre de carbone (ailes)",
+   "masse_kg": 28.8,
+   "centre_godot": [
+    -0.618,
+    1.203,
+    3.814
+   ]
+  },
+  "Bouton_aide_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    0.635,
+    -0.006,
+    0.25
+   ]
+  },
+  "Bouton_ecran_touches_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    0.565,
+    -0.006,
+    0.16
+   ]
+  },
+  "Bouton_pause_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.6,
+    -0.006,
+    -0.02
+   ]
+  },
+  "Bouton_remettre_orbite_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    0.635,
+    -0.006,
+    0.16
+   ]
+  },
+  "Bouton_temps_moins_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.635,
+    -0.006,
+    0.08
+   ]
+  },
+  "Bouton_temps_plus_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.565,
+    -0.006,
+    0.08
+   ]
+  },
+  "Bouton_temps_x1000_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.565,
+    -0.006,
+    0.18
+   ]
+  },
+  "Bouton_temps_x100_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.635,
+    -0.006,
+    0.18
+   ]
+  },
+  "Bouton_temps_x10_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.565,
+    -0.006,
+    0.25
+   ]
+  },
+  "Bouton_temps_x1_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.635,
+    -0.006,
+    0.25
+   ]
+  },
+  "Bouton_vue_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    0.565,
+    -0.006,
+    0.25
+   ]
+  },
+  "Canons": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 5.8,
+   "centre_godot": [
+    0.0,
+    -0.073,
+    -6.025
+   ]
+  },
+  "Cockpit_cadre": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 10.8,
+   "centre_godot": [
+    -0.0,
+    0.736,
+    -0.257
+   ]
+  },
+  "Cockpit_details": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 21.1,
+   "centre_godot": [
+    -0.019,
+    0.101,
+    -0.836
+   ]
+  },
+  "Cockpit_habillage": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 14.7,
+   "centre_godot": [
+    -0.0,
+    -0.018,
+    -0.068
+   ]
+  },
+  "Cockpit_interieur": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 142.2,
+   "centre_godot": [
+    0.0,
+    -0.156,
+    -0.393
+   ]
+  },
+  "Cockpit_verriere": {
+   "matiere": "verre aluminosilicate feuilleté (verrière)",
+   "masse_kg": 211.2,
+   "centre_godot": [
+    0.0,
+    0.73,
+    -0.337
+   ]
+  },
+  "Cylindre_arriere_droit": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 45.0,
+   "centre_godot": [
+    0.42,
+    -0.721,
+    2.39
+   ]
+  },
+  "Cylindre_arriere_gauche": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 45.0,
+   "centre_godot": [
+    -0.42,
+    -0.721,
+    2.39
+   ]
+  },
+  "Ecran_centre": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.2,
+   "centre_godot": [
+    0.0,
+    -0.005,
+    -1.133
+   ]
+  },
+  "Ecran_droit": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.3,
+   "centre_godot": [
+    0.34,
+    -0.005,
+    -1.133
+   ]
+  },
+  "Ecran_gauche": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.3,
+   "centre_godot": [
+    -0.34,
+    -0.005,
+    -1.133
+   ]
+  },
+  "Ecran_lateral_droit": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.2,
+   "centre_godot": [
+    0.62,
+    0.002,
+    -0.6
+   ]
+  },
+  "Ecran_lateral_gauche": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.2,
+   "centre_godot": [
+    -0.62,
+    0.002,
+    -0.6
+   ]
+  },
+  "Emplacement_droide": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 36.8,
+   "centre_godot": [
+    -0.0,
+    0.586,
+    1.85
+   ]
+  },
+  "Etiquettes": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.049,
+    -0.165,
+    -0.499
+   ]
+  },
+  "Fourche_avant": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 31.2,
+   "centre_godot": [
+    0.0,
+    -0.055,
+    -3.305
+   ]
+  },
+  "Fuselage": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 798.5,
+   "centre_godot": [
+    0.0,
+    0.036,
+    0.473
+   ]
+  },
+  "Interrupteur_ailes_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.1,
+    -0.212,
+    -1.093
+   ]
+  },
+  "Interrupteur_ailes_socle": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.1,
+    -0.225,
+    -1.122
+   ]
+  },
+  "Interrupteur_couper_gaz_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    0.3,
+    -0.212,
+    -1.093
+   ]
+  },
+  "Interrupteur_couper_gaz_socle": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    0.3,
+    -0.225,
+    -1.122
+   ]
+  },
+  "Interrupteur_stabilisateur_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    0.1,
+    -0.212,
+    -1.093
+   ]
+  },
+  "Interrupteur_stabilisateur_socle": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    0.1,
+    -0.225,
+    -1.122
+   ]
+  },
+  "Interrupteur_train_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.3,
+    -0.212,
+    -1.093
+   ]
+  },
+  "Interrupteur_train_socle": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.3,
+    -0.225,
+    -1.122
+   ]
+  },
+  "Jambe_arriere_droit": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 19.9,
+   "centre_godot": [
+    0.42,
+    -0.588,
+    2.4
+   ]
+  },
+  "Jambe_arriere_gauche": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 19.9,
+   "centre_godot": [
+    -0.42,
+    -0.588,
+    2.4
+   ]
+  },
+  "Jambe_avant": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 60.0,
+   "centre_godot": [
+    -0.0,
+    -0.048,
+    -4.03
+   ]
+  },
+  "Levier_gaz_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.2,
+   "centre_godot": [
+    -0.52,
+    0.176,
+    -0.388
+   ]
+  },
+  "Manche_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.3,
+   "centre_godot": [
+    0.53,
+    0.247,
+    -0.287
+   ]
+  },
+  "Marquages": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 8.9,
+   "centre_godot": [
+    -0.0,
+    0.49,
+    -1.448
+   ]
+  },
+  "Moteur_central": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 175.4,
+   "centre_godot": [
+    -0.0,
+    0.0,
+    3.781
+   ]
+  },
+  "Moteur_levage_droit_piece": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 13.8,
+   "centre_godot": [
+    0.27,
+    -0.257,
+    -3.0
+   ]
+  },
+  "Moteur_levage_gauche_piece": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 13.8,
+   "centre_godot": [
+    -0.27,
+    -0.257,
+    -3.0
+   ]
+  },
+  "Pedale_droite_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.7,
+   "centre_godot": [
+    0.2,
+    -0.35,
+    -0.9
+   ]
+  },
+  "Pedale_gauche_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.7,
+   "centre_godot": [
+    -0.2,
+    -0.35,
+    -0.9
+   ]
+  },
+  "Pied_arriere_droit": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 71.7,
+   "centre_godot": [
+    0.42,
+    -0.997,
+    2.4
+   ]
+  },
+  "Pied_arriere_gauche": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 71.7,
+   "centre_godot": [
+    -0.42,
+    -0.997,
+    2.4
+   ]
+  },
+  "Poignee_recommencer_piece": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.1,
+   "centre_godot": [
+    0.0,
+    -0.305,
+    -0.822
+   ]
+  },
+  "Puits_moteur_levage_droit": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 6.6,
+   "centre_godot": [
+    0.27,
+    -0.203,
+    -2.999
+   ]
+  },
+  "Puits_moteur_levage_gauche": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 6.6,
+   "centre_godot": [
+    -0.27,
+    -0.203,
+    -2.999
+   ]
+  },
+  "Puits_train_avant": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 45.9,
+   "centre_godot": [
+    0.0,
+    -0.027,
+    -3.638
+   ]
+  },
+  "RCS_integres": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 5.7,
+   "centre_godot": [
+    -0.0,
+    0.031,
+    -0.34
+   ]
+  },
+  "RCS_nez_bas": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 0.5,
+   "centre_godot": [
+    0.0,
+    0.216,
+    -5.2
+   ]
+  },
+  "RCS_nez_droit": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 0.5,
+   "centre_godot": [
+    0.3,
+    0.0,
+    -5.2
+   ]
+  },
+  "RCS_nez_gauche": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 0.5,
+   "centre_godot": [
+    -0.3,
+    0.0,
+    -5.2
+   ]
+  },
+  "RCS_nez_haut": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 0.5,
+   "centre_godot": [
+    -0.0,
+    -0.228,
+    -5.2
+   ]
+  },
+  "RCS_queue_bas": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 0.5,
+   "centre_godot": [
+    0.0,
+    -0.977,
+    4.001
+   ]
+  },
+  "RCS_queue_droit": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 0.5,
+   "centre_godot": [
+    0.877,
+    0.0,
+    4.001
+   ]
+  },
+  "RCS_queue_gauche": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 0.5,
+   "centre_godot": [
+    -0.877,
+    0.0,
+    4.001
+   ]
+  },
+  "RCS_queue_haut": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 0.5,
+   "centre_godot": [
+    -0.0,
+    0.977,
+    4.001
+   ]
+  },
+  "Ressort_arriere_droit": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 13.9,
+   "centre_godot": [
+    0.42,
+    -0.84,
+    2.4
+   ]
+  },
+  "Ressort_arriere_gauche": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 13.9,
+   "centre_godot": [
+    -0.42,
+    -0.84,
+    2.4
+   ]
+  },
+  "Roue_avant": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 27.7,
+   "centre_godot": [
+    0.0,
+    -0.05,
+    -3.03
+   ]
+  },
+  "Trappe_avant": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 16.8,
+   "centre_godot": [
+    0.0,
+    -0.384,
+    -3.65
+   ]
+  },
+  "Trappe_levage_droit": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 1.8,
+   "centre_godot": [
+    0.27,
+    -0.444,
+    -3.0
+   ]
+  },
+  "Trappe_levage_gauche": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 1.8,
+   "centre_godot": [
+    -0.27,
+    -0.444,
+    -3.0
+   ]
+  },
+  "Tuyere_segment_1": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 184.7,
+   "centre_godot": [
+    0.0,
+    -0.0,
+    4.202
+   ]
+  },
+  "Tuyere_segment_2": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 163.8,
+   "centre_godot": [
+    -0.0,
+    0.0,
+    4.481
+   ]
+  },
+  "Tuyere_segment_3": {
+   "matiere": "titane (tuyères, moteur, carters chauds)",
+   "masse_kg": 147.6,
+   "centre_godot": [
+    0.0,
+    -0.0,
+    4.761
+   ]
+  },
+  "Verriere": {
+   "matiere": "verre aluminosilicate feuilleté (verrière)",
+   "masse_kg": 105.0,
+   "centre_godot": [
+    -0.0,
+    0.906,
+    -0.306
+   ]
+  },
+  "Verriere_cadre": {
+   "matiere": "verre aluminosilicate feuilleté (verrière)",
+   "masse_kg": 26.8,
+   "centre_godot": [
+    -0.0,
+    0.902,
+    -0.307
+   ]
+  },
+  "Voyant_ailes": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.1,
+    -0.185,
+    -1.123
+   ]
+  },
+  "Voyant_couper_gaz": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    0.3,
+    -0.185,
+    -1.123
+   ]
+  },
+  "Voyant_gaz_1": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.458,
+    -0.005,
+    -0.225
+   ]
+  },
+  "Voyant_gaz_2": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.458,
+    0.004,
+    -0.225
+   ]
+  },
+  "Voyant_gaz_3": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.458,
+    0.014,
+    -0.225
+   ]
+  },
+  "Voyant_gaz_4": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.458,
+    0.024,
+    -0.225
+   ]
+  },
+  "Voyant_gaz_5": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.459,
+    0.033,
+    -0.225
+   ]
+  },
+  "Voyant_gaz_6": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.458,
+    0.043,
+    -0.225
+   ]
+  },
+  "Voyant_gaz_7": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.458,
+    0.052,
+    -0.225
+   ]
+  },
+  "Voyant_gaz_8": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.459,
+    0.061,
+    -0.225
+   ]
+  },
+  "Voyant_stabilisateur": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    0.1,
+    -0.185,
+    -1.123
+   ]
+  },
+  "Voyant_train": {
+   "matiere": "aluminium (habillage du cockpit)",
+   "masse_kg": 0.0,
+   "centre_godot": [
+    -0.3,
+    -0.185,
+    -1.123
+   ]
+  }
+ },
+ "note": "configuration de vol : ailes ouvertes, train rentre, sans carburant (le jeu n'en a pas). Masses des pieces = surface x epaisseur equivalente x densite."
+}

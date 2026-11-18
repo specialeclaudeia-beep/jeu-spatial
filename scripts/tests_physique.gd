@@ -8,6 +8,7 @@ const Jeu = preload("res://scripts/jeu.gd")
 const LumiereJeu = preload("res://scripts/lumiere_jeu.gd")
 const Objets = preload("res://scripts/lumiere/objets.gd")
 const Reflets = preload("res://scripts/lumiere/reflets.gd")
+const PiloteAuto = preload("res://scripts/physique/pilote_auto.gd")
 const R := 600000.0
 const GM := 9.81 * 600000.0 * 600000.0
 
@@ -75,17 +76,21 @@ func _lancer() -> void:
 		"Inertie dans le vide",
 		"Après 100 s sans moteur : vitesse %.9f m/s (attendu 100), distance %.6f m (attendu 10 000)." % [v.vx, v.px])
 
-	# 2. Poussée centrée : accélère tout droit, sans tourner
+	# 2. Moteur central seul : il pousse dans l'axe, mais le centre de gravité réel est 2 cm plus haut
+	#    que cet axe : il fait donc tourner très lentement (couple = bras de levier × force).
 	v = _nouveau(false)
 	v.moteurs[4]["consigne"] = 1.0
-	for i in 1200:
+	v.moteurs[4]["actuel"] = 1.0
+	for i in 120:
 		v.pas(1.0 / 120.0)
 	var vit: float = v.vitesse()
 	var f2: float = v.moteurs[4]["poussee_max"]
-	var att2: float = f2 / v.masse * 10.0
-	_resultat(absf(vit - att2) < 0.002 * att2 and v.omega.length() < 1e-9,
+	var att2: float = f2 / v.masse * 1.0
+	var c2: Vector3 = ((v.moteurs[4]["position"] as Vector3) - v.CENTRE_GRAVITE).cross(Vector3(0, 0, -f2))
+	var att2w: float = c2.x / v.inertie.x * 1.0
+	_resultat(absf(vit - att2) < 0.002 * att2 and absf(v.omega.x - att2w) < 0.02 * absf(att2w) and absf(v.omega.y) < 1e-9,
 		"Poussée du moteur central",
-		"%.0f kN sur %.0f t pendant 10 s : %.3f m/s (attendu %.0f), rotation %.9f rad/s (attendu 0)." % [f2 / 1000.0, v.masse / 1000.0, vit, att2, v.omega.length()])
+		"%.0f kN sur %.2f t pendant 1 s : %.3f m/s (attendu %.3f). Tangage %.5f rad/s (attendu %.5f : centre de gravité 2 cm au-dessus du moteur), lacet %.9f (attendu 0)." % [f2 / 1000.0, v.masse / 1000.0, vit, att2, v.omega.x, att2w, v.omega.y])
 
 	# 3. Poussée décentrée : le moteur haut droit fait aussi tourner (couple = position × force)
 	v = _nouveau(false)
@@ -94,7 +99,7 @@ func _lancer() -> void:
 		v.pas(1.0 / 120.0)
 	# couple = position × force : bras de levier = hauteur et largeur du moteur, pendant 0,2 s
 	var f3: float = v.moteurs[1]["poussee_max"]
-	var pos3: Vector3 = v.moteurs[1]["position"]
+	var pos3: Vector3 = (v.moteurs[1]["position"] as Vector3) - v.CENTRE_GRAVITE   # bras de levier vu du centre de gravité
 	var attendu_x: float = -pos3.y * f3 * 0.2 / v.inertie.x
 	var attendu_y: float = pos3.x * f3 * 0.2 / v.inertie.y
 	var att3v: float = f3 / v.masse * 0.2
@@ -280,6 +285,10 @@ func _lancer() -> void:
 	_tests_commandes()
 	_tests_modele_v12()
 	_tests_lumiere()
+	_test_cockpit()
+	_test_vol_vertical()
+	_tests_pilote_auto()
+	_tests_v25()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
@@ -374,6 +383,10 @@ func _tests_modele_v12() -> void:
 		ecart_max = 0.0
 		for t in v.moteurs + v.rcs:
 			var cle: String = ("moteur " if v.moteurs.has(t) else "rcs ") + String(t["nom"])
+			if String(t["nom"]).begins_with("levage") or (not v.moteurs.has(t) and int(t["axe"]) < 0):
+				continue   # buses encastrées : comparées au modèle dans le test « Buses encastrées »
+			if String(t["nom"]).begins_with("levage"):
+				continue   # moteurs de levage : rentrés au départ, comparés sortis dans le test du vol vertical
 			if not modele.has(cle):
 				manquants.append(cle)
 				continue
@@ -412,32 +425,139 @@ func _tests_modele_v12() -> void:
 	var e25b: Array = v.effet_propulseurs()
 	var c_roulis: Vector3 = e25b[1]
 	var f_roulis: Vector3 = e25b[0]
-	var ok25: bool = c_gaz.length() < 1.0 and -f_gaz.z > 0.99 * v.poussee_avant_max \
+	var ok25: bool = c_gaz.length() < 1e-3 * v.couple_max.x and -f_gaz.z > 0.99 * v.poussee_avant_max \
 		and absf(c_roulis.z - v.couple_max.z) < 0.01 * v.couple_max.z and f_roulis.length() < 1.0 and v.couple_max.z > 60000.0
 	_resultat(ok25, "Ailes repliées : poussée et roulis",
 		"Plein gaz : %.0f kN, couple parasite %.3f N·m (attendu 0). Roulis : %.0f N·m (ailes ouvertes : environ 70 800), force restante %.3f N (attendu 0)." % [-f_gaz.z / 1000.0, c_gaz.length(), c_roulis.z, f_roulis.length()])
 
-	# 26. Train d'atterrissage : posé sur les roues (1,6 m sous le centre), sinon sur le ventre
+	# 26. Train d'atterrissage à ressorts : posé sur les roues (jambes un peu écrasées), sinon sur le ventre
 	v = _nouveau(true)
+	v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)   # le haut du vaisseau vers l'extérieur de la planète (+X)
 	v.sortir_train(true)
 	v.train = 1.0       # train déjà sorti avant de toucher le sol
-	v.px = R + 3.0
-	for i in 600:
+	v.px = R + 1.7
+	for i in 120 * 10:
 		v.pas(1.0 / 120.0)
 	var h_train: float = v.distance_centre() - R
+	var g_posé: float = v.acceleration_ressentie.length() / VaisseauPhysique.G0
 	var v2 = _nouveau(true)
-	v2.px = R + 3.0
-	for i in 600:
+	v2.orientation = v.orientation
+	v2.px = R + 1.05
+	for i in 120 * 10:
 		v2.pas(1.0 / 120.0)
 	var h_ventre: float = v2.distance_centre() - R
 	# posé sur le ventre, on demande le train : le sol l'empêche de sortir
 	v2.sortir_train(true)
 	for i in 480:
 		v2.pas(1.0 / 120.0)
-	var ok26: bool = v.train == 1.0 and v.au_sol and not v.ecrase and absf(h_train - v.HAUTEUR_TRAIN) < 1e-6 \
-		and v2.au_sol and absf(h_ventre - v2.HAUTEUR_VENTRE) < 1e-6 and v2.train == 0.0
-	_resultat(ok26, "Train d'atterrissage",
-		"Lâché à 3 m : train sorti, le centre reste à %.3f m du sol (roues, attendu 1,6) ; train rentré, %.3f m (ventre, attendu 1,0). Écrasé : %s. Posé sur le ventre, le train reste bloqué : %s." % [h_train, h_ventre, "oui" if v.ecrase else "non", "oui" if v2.train == 0.0 else "NON"])
+	var ok26: bool = v.train == 1.0 and v.au_sol and not v.ecrase and h_train > 1.5 and h_train < 1.58 and absf(g_posé - 1.0) < 0.02 \
+		and v2.au_sol and not v2.ecrase and absf(h_ventre - 1.0) < 0.02 and v2.train == 0.0 and v.vitesse() < 0.01
+	_resultat(ok26, "Train d'atterrissage (ressorts)",
+		"Lâché de 10 cm : train sorti, le centre se pose à %.3f m du sol (roues à 1,6 m, amortisseurs écrasés par le poids), %.2f g ressentis ; train rentré, %.3f m (ventre, attendu 1,0). Écrasé : %s. Posé sur le ventre, le train reste bloqué : %s." % [h_train, g_posé, h_ventre, "oui" if v.ecrase or v2.ecrase else "non", "oui" if v2.train == 0.0 else "NON"])
+
+
+# =====================================================================
+# TEST DU COCKPIT FONCTIONNEL
+# =====================================================================
+func _test_cockpit() -> void:
+	# 27. Chaque commande du cockpit est branchée, et les pièces suivent les commandes
+	const Cockpit = preload("res://scripts/cockpit.gd")
+	var modele: Node3D = (load("res://modeles/vaisseau/cockpit.glb") as PackedScene).instantiate()
+	add_child(modele)   # dans l'arbre, pour pouvoir viser les pièces
+	var c = Cockpit.new(modele)
+	var connues := {}
+	for a in Commandes.ACTIONS:
+		connues[a[0]] = true
+	var inconnues := PackedStringArray()
+	for action in c.boutons.keys() + c.interrupteurs.keys():
+		if not connues.has(action):
+			inconnues.append(action)
+	# gaz à fond, manche tiré et poussé à gauche, train demandé, stabilisateur actif
+	c.mettre_a_jour({"gaz": 1.0, "tangage": 1.0, "lacet": 1.0, "roulis": 0.0, "train": 1.0, "ailes": 1.0, "stabilisateur": true}, 1.0)
+	var levier_deg: float = rad_to_deg(c.levier_gaz.rotation.x)
+	var levier_ok: bool = absf(levier_deg - 30.0) < 0.01
+	var manche_ok: bool = absf(rad_to_deg(c.manche.rotation.x) - 15.0) < 0.01 and absf(rad_to_deg(c.manche.rotation.y) - 10.0) < 0.01
+	var voyants_gaz := 0
+	for k in 8:
+		if c.voyant_allume("gaz", (k + 1) / 8.0):
+			voyants_gaz += 1
+	var interr_ok: bool = absf(c.interrupteurs["train"]["angle"] - c.interrupteurs["train"]["on"]) < 0.01 and c.voyant_allume("train") and c.voyant_allume("stabilisateur")
+	# gaz à moitié : 4 voyants sur 8 ; bouton « vue » enfoncé de 4 mm puis relâché
+	c.mettre_a_jour({"gaz": 0.5}, 0.01)
+	var voyants_moitie := 0
+	for k in 8:
+		if c.voyant_allume("gaz", (k + 1) / 8.0):
+			voyants_moitie += 1
+	c.appuyer("vue")
+	c.mettre_a_jour({"gaz": 0.5}, 0.01)
+	var b: Dictionary = c.boutons["vue"]
+	var enfonce: float = ((b["noeud"] as Node3D).position - (b["repos"] as Vector3)).length()
+	c.mettre_a_jour({"gaz": 0.5}, 0.5)
+	var relache: float = ((b["noeud"] as Node3D).position - (b["repos"] as Vector3)).length()
+	# clic de souris : un rayon qui descend sur le bouton « vue » le trouve
+	var cible: Vector3 = (b["noeud"] as Node3D).global_position
+	var vise: String = c.action_sous_rayon(cible + Vector3(0, 0.3, 0), Vector3.DOWN)
+	modele.queue_free()
+	var ok27: bool = inconnues.is_empty() and c.boutons.size() >= 12 and c.interrupteurs.size() == 4 and c.pedales.size() == 2 		and levier_ok and manche_ok and voyants_gaz == 8 and voyants_moitie == 4 and interr_ok 		and absf(enfonce - 0.004) < 1e-4 and relache < 1e-6 and vise == "vue"
+	_resultat(ok27, "Cockpit fonctionnel",
+		"%d boutons, %d interrupteurs, %d pédales ; actions inconnues : %s. Gaz à fond : levier à %.0f°, %d voyants sur 8 ; à moitié : %d. Bouton « vue » enfoncé de %.1f mm puis relâché, trouvé au clic : %s." % [
+			c.boutons.size(), c.interrupteurs.size(), c.pedales.size(), ", ".join(inconnues) if inconnues.size() else "aucune",
+			levier_deg, voyants_gaz, voyants_moitie, enfonce * 1000.0, vise if vise != "" else "RIEN"])
+
+
+# =====================================================================
+# TEST DU VOL VERTICAL (modèle v17)
+# =====================================================================
+func _test_vol_vertical() -> void:
+	# 28. Passage en vol vertical : les moteurs de levage sortent, la tuyère tourne vers le bas,
+	#     et les gaz donnent une poussée vers le haut, équilibrée entre l'avant et l'arrière
+	var f := FileAccess.open("res://modeles/vaisseau/positions_tuyeres_godot.json", FileAccess.READ)
+	var modele: Dictionary = JSON.parse_string(f.get_as_text())
+	var v = _nouveau(false)
+	var f_avant: float = v.poussee_avant_max
+	v.passer_vol_vertical(true)
+	for i in 4.2 * 120:
+		v.commander(0.0, 0.0, 0.0, 0.0)
+		v.pas(1.0 / 120.0)
+	var ecart := 0.0
+	for paire in [[4, "moteur central oriente vers le bas"], [5, "moteur levage gauche (sorti)"], [6, "moteur levage droit (sorti)"]]:
+		var p: Array = modele[paire[1]]
+		ecart = maxf(ecart, ((v.moteurs[paire[0]]["position"] as Vector3) - Vector3(p[0], p[1], p[2])).length())
+	var f_max: float = v.poussee_avant_max
+	var poids: float = v.masse * 9.81
+	v.commander(poids / f_max, 0.0, 0.0, 0.0)
+	for m in v.moteurs:
+		m["actuel"] = m["consigne"]
+	var e: Array = v.effet_propulseurs()
+	var force: Vector3 = e[0]
+	var couple: Vector3 = e[1]
+	var ok_a: bool = v.vertical == 1.0 and absf(v.angle_tuyere() - 90.0) < 1e-6 and ecart < 0.005 		and f_max > 1.1 * poids and f_max < 3.0 * poids and absf(force.y - poids) < 0.01 * poids 		and absf(force.z) < 0.01 * poids and couple.length() < 0.01 * v.couple_max.x
+	# 29. Vol stationnaire à 50 m du sol pendant 10 s : on ne monte pas, on ne tombe pas, on ne bascule pas
+	var w = _nouveau(true)
+	w.px = R + 100000.0
+	w.passer_vol_vertical(true)
+	for i in 4.2 * 120:
+		w.pas(1.0 / 120.0)       # loin du sol, le temps que la séquence se termine
+	w.px = R + 50.0
+	w.py = 0.0
+	w.pz = 0.0
+	w.vx = 0.0
+	w.vy = 0.0
+	w.vz = 0.0
+	# le haut du vaisseau (+Y) vers le ciel (+X monde)
+	w.orientation = Quaternion(Basis(Vector3(0, -1, 0), Vector3(1, 0, 0), Vector3(0, 0, 1)))
+	w.omega = Vector3.ZERO
+	var g_loc := GM / ((R + 50.0) * (R + 50.0))
+	for i in 1200:
+		w.commander(w.masse * g_loc / w.poussee_avant_max, 0.0, 0.0, 0.0)
+		w.pas(1.0 / 120.0)
+	var haut: Vector3 = Basis(w.orientation) * Vector3.UP
+	var bascule := rad_to_deg(acos(clampf(haut.x, -1.0, 1.0)))
+	var derive: float = w.distance_centre() - (R + 50.0)
+	var ok_b: bool = absf(derive) < 1.0 and bascule < 1.0 and not w.au_sol
+	_resultat(ok_a and ok_b, "Vol vertical",
+		"Tuyère à %.0f°, sorties à %.4f m du modèle. Poussée vers le haut sans basculer : %.0f kN au plus (vers l'avant : %.0f kN), pour un poids de %.0f kN. Au poids exact : %.1f kN vers le haut, couple %.0f N·m. Vol stationnaire 10 s à 50 m : %+.2f m d'altitude, penché de %.2f°." % [
+			v.angle_tuyere(), ecart, f_max / 1000.0, f_avant / 1000.0, poids / 1000.0, force.y / 1000.0, couple.length(), derive, bascule])
 
 
 func _energie_rotation(v) -> float:
@@ -567,23 +687,27 @@ func _tests_lumiere() -> void:
 		("%d fichiers de labo-lumiere/scripts/lumiere identiques dans scripts/lumiere." % nb) if d != null and differents.is_empty()
 		else ("Labo absent : rien à comparer." if d == null else "Différents : %s" % ", ".join(differents)))
 
-	# 28. Le sol de la physique suit le relief : posé sur une montagne de 1 234 m
-	var v = _nouveau(true)
-	v.relief = func(_x: float, _y: float, _z: float) -> float: return 1234.0
-	v.placer_en_orbite(0.0)
-	v.px = R + 1234.0 + v.hauteur_contact() + 0.3
-	v.py = 0.0
-	v.pz = 0.0
-	v.vx = 0.0
-	v.vy = 0.0
-	v.vz = 0.0
-	for i in 600:
-		v.pas(1.0 / 120.0)
-	var hauteur: float = v.distance_centre() - R - 1234.0
-	var ok28: bool = v.au_sol and not v.ecrase and absf(hauteur - v.hauteur_contact()) < 0.01 and absf(v.altitude() - v.hauteur_contact()) < 0.01
+	# 28. Le sol de la physique suit le relief : posé sur une montagne de 1 234 m.
+	# Même posé (même orientation, mêmes ressorts) sur un sol lisse puis sur la montagne : même hauteur.
+	var hauteurs := []
+	var v
+	for montagne in [0.0, 1234.0]:
+		v = _nouveau(true)
+		var m: float = montagne
+		v.relief = func(_x: float, _y: float, _z: float) -> float: return m
+		v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)   # ventre vers le sol (+X ici)
+		v.sortir_train(true)
+		v.train = 1.0
+		v.px = R + m + 1.61   # juste au-dessus du contact des roues
+		for i in 600:
+			v.pas(1.0 / 120.0)
+		hauteurs.append(v.distance_centre() - R - m)
+	var hauteur: float = hauteurs[1]
+	var ok28: bool = v.au_sol and not v.ecrase and absf(hauteur - float(hauteurs[0])) < 0.01 and absf(v.altitude() - hauteur) < 0.01 \
+		and hauteur > 1.5
 	_resultat(ok28, "Lumière : le vaisseau se pose sur le relief dessiné",
-		"Sol à 1 234 m : posé %s, centre à %.3f m au-dessus du sol (roues : %.3f m), altitude affichée %.3f m." % [
-			"oui" if v.au_sol else "NON", hauteur, v.hauteur_contact(), v.altitude()])
+		"Sol à 1 234 m : posé %s, centre à %.3f m au-dessus du sol (sol lisse : %.3f m), altitude affichée %.3f m." % [
+			"oui" if v.au_sol else "NON", hauteur, float(hauteurs[0]), v.altitude()])
 
 	# 29. La tête bouge avec les G : 3 g de poussée vers l'avant → la tête recule de 4,5 cm, sans trop osciller
 	var cible: Vector3 = Jeu.cible_tete_g(Vector3(0.0, 0.0, -3.0 * VaisseauPhysique.G0))
@@ -714,3 +838,440 @@ func _fichiers(base: String, sous: String) -> PackedStringArray:
 	for sd in d.get_directories():
 		res.append_array(_fichiers(base, sous + sd + "/"))
 	return res
+# TESTS : ORDINATEUR DE BORD (pilote automatique, étape 1)
+# =====================================================================
+## Une image du jeu avec le pilote auto : il calcule ses ordres, le vaisseau les exécute.
+func _image_pilote(v, p, acc: int) -> void:
+	# comme dans le jeu : le pilote limite l'accélération du temps quand c'est dangereux, et calcule
+	# ses ordres par petits morceaux de temps (au plus periode_controle), même en temps accéléré
+	var a: int = mini(acc, p.limite_temps(v))
+	var duree: float = a / 120.0
+	var n: int = maxi(1, ceili(duree / p.periode_controle(v)))
+	for i in n:
+		p.calculer(v, duree / n)
+		v.commander(p.gaz, p.ordres.x, p.ordres.y, p.ordres.z, p.force_cote)
+		v.pas(duree / n)
+
+
+func _ecart_angle(a: Quaternion, b: Quaternion) -> float:
+	return rad_to_deg(a.angle_to(b))
+
+
+func _tests_pilote_auto() -> void:
+	# 27. Commande « pousser de côté » : les petits propulseurs donnent la force sans tourner
+	var v = _nouveau(false)
+	v.commander(0.0, 0.0, 0.0, 0.0, Vector3(8000.0, 20000.0, 0.0))
+	var e: Array = v.effet_propulseurs()
+	var f: Vector3 = e[0]
+	var c: Vector3 = e[1]
+	var ok: bool = absf(f.x - 8000.0) < 400.0 and absf(f.y - 20000.0) < 1000.0 and c.length() < 0.05 * v.couple_max.x
+	_resultat(ok, "Commande de côté (pour le pilote auto)",
+		"Demandé 8 kN à droite et 20 kN vers le haut : obtenu %.1f kN et %.1f kN, rotation parasite %.0f N·m (%.1f %% du maximum, le pilote auto la corrige)." % [f.x / 1000.0, f.y / 1000.0, c.length(), 100.0 * c.length() / v.couple_max.x])
+
+	# 28. Garder le cap : le vaisseau tourne vite dans tous les sens, le pilote revient à la
+	#     direction gardée et s'y arrête, rien qu'avec les propulseurs
+	v = _nouveau(false)
+	var p = PiloteAuto.new()
+	p.activer(PiloteAuto.CAP, v)
+	var garde: Quaternion = v.orientation
+	v.omega = Vector3(0.3, -0.25, 0.6)
+	for i in 120 * 60:
+		_image_pilote(v, p, 1)
+	var ecart: float = _ecart_angle(v.orientation, garde)
+	_resultat(ecart < 0.2 and v.omega.length() < 1e-3,
+		"Pilote auto : garder le cap",
+		"Lancé en rotation à %.0f°/s : après 60 s, écart %.3f° avec le cap gardé, rotation %.4f°/s." % [rad_to_deg(Vector3(0.3, -0.25, 0.6).length()), ecart, rad_to_deg(v.omega.length())])
+
+	# 29. Garder le cap en orbite pendant 20 minutes (le gradient de gravité tire dessus),
+	#     en temps accéléré x10
+	v = _nouveau(true)
+	v.placer_en_orbite(100000.0)
+	p = PiloteAuto.new()
+	p.activer(PiloteAuto.CAP, v)
+	garde = v.orientation
+	var pire := 0.0
+	for i in 12 * 60 * 20:
+		_image_pilote(v, p, 10)
+		pire = maxf(pire, _ecart_angle(v.orientation, garde))
+	_resultat(pire < 0.5 and _valide(v), "Pilote auto : garder le cap en orbite (x10)",
+		"20 min en orbite à 100 km : plus grand écart %.3f° (attendu < 0,5°)." % pire)
+
+	# 30. S'arrêter dans le vide : vitesse et orientation au hasard au départ
+	var hasard := RandomNumberGenerator.new()
+	hasard.seed = 7
+	var pire_v := 0.0
+	var pire_t := 0.0
+	var pire_g := 0.0
+	for essai in 5:
+		v = _nouveau(false)
+		v.vx = hasard.randf_range(-300.0, 300.0)
+		v.vy = hasard.randf_range(-300.0, 300.0)
+		v.vz = hasard.randf_range(-300.0, 300.0)
+		v.orientation = Quaternion(Vector3(hasard.randf(), hasard.randf(), hasard.randf()).normalized(), hasard.randf_range(0.0, TAU))
+		p = PiloteAuto.new()
+		p.activer(PiloteAuto.ARRET, v)
+		var t := 0.0
+		while t < 300.0 and not p.arrete:
+			_image_pilote(v, p, 1)
+			t += 1.0 / 120.0
+			pire_g = maxf(pire_g, v.acceleration_ressentie.length() / VaisseauPhysique.G0)
+		pire_v = maxf(pire_v, v.vitesse())
+		pire_t = maxf(pire_t, t)
+	_resultat(pire_v < 0.11 and pire_g < 3.05, "Pilote auto : s'arrêter dans le vide",
+		"5 départs au hasard (jusqu'à 520 m/s) : arrêté en %.0f s au plus, vitesse restante %.3f m/s, au plus %.2f g ressentis (limite 3 g)." % [pire_t, pire_v, pire_g])
+
+	# 31. S'arrêter près de la planète : le vaisseau finit en vol stationnaire, sans tomber
+	v = _nouveau(true)
+	v.px = 0.0
+	v.py = R + 5000.0
+	v.pz = 0.0
+	v.vx = 150.0
+	v.vy = -60.0
+	p = PiloteAuto.new()
+	p.activer(PiloteAuto.ARRET, v)
+	var alt_min := INF
+	for i in 120 * 180:
+		_image_pilote(v, p, 1)
+		alt_min = minf(alt_min, v.altitude())
+	var alt_fin: float = v.altitude()
+	for i in 120 * 20:
+		_image_pilote(v, p, 1)
+	var derive: float = absf(v.altitude() - alt_fin)
+	_resultat(v.vitesse() < 0.1 and alt_min > 3000.0 and derive < 1.0 and not v.au_sol,
+		"Pilote auto : s'arrêter près de la planète",
+		"Parti à 5 km d'altitude à 160 m/s : plus bas %.0f m, puis immobile (%.3f m/s, %.2f m de dérive en 20 s) sur ses moteurs." % [alt_min, v.vitesse(), derive])
+
+	# 32. S'arrêter en vol vertical : le vaisseau finit immobile, à plat (ventre vers le sol)
+	v = _nouveau(false)
+	v.passer_vol_vertical(true)
+	for i in 120 * 5:          # loin de tout, le temps que la séquence de vol vertical se termine
+		v.pas(1.0 / 120.0)
+	v.gm = GM
+	v.rayon_planete = R
+	v.px = 0.0
+	v.py = R + 2000.0
+	v.pz = 0.0
+	v.vx = 40.0
+	v.vy = -20.0
+	v.vz = 0.0
+	p = PiloteAuto.new()
+	p.activer(PiloteAuto.ARRET, v)
+	alt_min = INF
+	for i in 120 * 120:
+		_image_pilote(v, p, 1)
+		alt_min = minf(alt_min, v.altitude())
+	var haut_vaisseau: Vector3 = Basis(v.orientation).y
+	var vertical_local := Vector3(v.px, v.py, v.pz).normalized()
+	var inclinaison := rad_to_deg(haut_vaisseau.angle_to(vertical_local))
+	_resultat(v.vitesse() < 0.1 and inclinaison < 3.0 and alt_min > 1000.0 and not v.au_sol,
+		"Pilote auto : s'arrêter en vol vertical",
+		"Parti à 2 km à 45 m/s, moteurs de levage sortis : plus bas %.0f m, puis immobile (%.3f m/s), à plat (inclinaison %.1f°)." % [alt_min, v.vitesse(), inclinaison])
+
+	# 33. S'arrêter près du sol : il freine la descente à temps et ne touche jamais le sol
+	v = _nouveau(false)
+	v.passer_vol_vertical(true)
+	for i in 120 * 5:
+		v.pas(1.0 / 120.0)
+	v.gm = GM
+	v.rayon_planete = R
+	v.px = 0.0
+	v.py = R + 250.0
+	v.pz = 0.0
+	v.vx = 10.0
+	v.vy = -15.0
+	v.vz = 0.0
+	p = PiloteAuto.new()
+	p.activer(PiloteAuto.ARRET, v)
+	alt_min = INF
+	for i in 120 * 60:
+		_image_pilote(v, p, 1)
+		alt_min = minf(alt_min, v.altitude())
+	_resultat(alt_min > 30.0 and not v.au_sol and v.vitesse() < 0.1,
+		"Pilote auto : s'arrêter près du sol",
+		"Parti à 250 m en descendant à 15 m/s (vol vertical) : plus bas %.0f m (le sol n'est jamais touché), puis immobile (%.3f m/s)." % [alt_min, v.vitesse()])
+
+	# 33 bis. S'arrêter en vol normal, à plat (problème vu en jeu le 16/11 : le vaisseau se cabrait
+	# nez en haut et touchait le sol). L'ordinateur passe lui-même en vol vertical et reste à plat.
+	var cas_plat := [[500.0, 30.0, -5.0], [200.0, 10.0, 0.0], [800.0, 0.0, -40.0]]
+	var bilan_plat := PackedStringArray()
+	var tout_bon := true
+	for cp in cas_plat:
+		v = _nouveau(true)
+		v.orientation = Quaternion.IDENTITY      # à plat, nez à l'horizontale
+		v.omega = Vector3.ZERO
+		v.px = 0.0
+		v.py = R + float(cp[0])
+		v.pz = 0.0
+		v.vx = 0.0
+		v.vy = float(cp[2])
+		v.vz = -float(cp[1])
+		p = PiloteAuto.new()
+		p.activer(PiloteAuto.ARRET, v)
+		alt_min = INF
+		for i in 120 * 60:
+			_image_pilote(v, p, 1)
+			alt_min = minf(alt_min, v.altitude())
+		var penche := rad_to_deg(Basis(v.orientation).y.angle_to(Vector3(v.px, v.py, v.pz).normalized()))
+		var bon: bool = v.vitesse() < 0.1 and penche < 3.0 and v.vertical >= 1.0 and not v.au_sol and not v.ecrase
+		tout_bon = tout_bon and bon
+		bilan_plat.append("%.0f m à %.0f m/s : plus bas %.0f m, %.2f m/s, penché %.1f°" % [cp[0], Vector2(cp[1], cp[2]).length(), alt_min, v.vitesse(), penche])
+	_resultat(tout_bon, "Pilote auto : s'arrêter à plat depuis le vol normal",
+		"En vol vertical tout seul, à plat, sans toucher le sol. " + " ; ".join(bilan_plat) + ".")
+
+	# 33 ter. Atterrissage automatique (touche L) : il s'arrête à plat, sort le train, descend et se
+	# pose doucement, sans jamais piquer du nez (problème vu en jeu le 16/11 avec la touche N)
+	var cas_att := [[1000.0, 40.0, -5.0], [150.0, 0.0, 0.0]]
+	var bilan_att := PackedStringArray()
+	var att_bon := true
+	for ca in cas_att:
+		v = _nouveau(true)
+		v.reactivite_moteurs = 0.3
+		v.orientation = Quaternion.IDENTITY
+		v.px = 0.0
+		v.py = R + float(ca[0])
+		v.pz = 0.0
+		v.vz = -float(ca[1])
+		v.vy = float(ca[2])
+		p = PiloteAuto.new()
+		p.activer(PiloteAuto.ATTERRIR, v)
+		var v_touche := 0.0
+		var pique := 0.0
+		for i in 120 * 200:
+			var vit_avant: float = v.vitesse()
+			_image_pilote(v, p, 1)
+			if v.vertical > 0.0:
+				pique = minf(pique, rad_to_deg(asin(clampf((-Basis(v.orientation).z).dot(Vector3(v.px, v.py, v.pz).normalized()), -1.0, 1.0))))
+			if v.au_sol and v_touche == 0.0:
+				v_touche = vit_avant
+			if v.au_sol and v.vitesse() < 0.05:
+				break
+		var penche_a := rad_to_deg(Basis(v.orientation).y.angle_to(Vector3(v.px, v.py, v.pz).normalized()))
+		var bon_a: bool = v.au_sol and not v.ecrase and v_touche < 2.0 and penche_a < 3.0 and pique > -3.0
+		att_bon = att_bon and bon_a
+		bilan_att.append("%.0f m à %.0f m/s : touché à %.2f m/s, penché %.1f°, nez au plus bas %.1f°" % [ca[0], Vector2(ca[1], ca[2]).length(), v_touche, penche_a, pique])
+	_resultat(att_bon, "Pilote auto : atterrir",
+		"Arrêt à plat, train sorti, posé sous 2 m/s. " + " ; ".join(bilan_att) + ".")
+
+	# 33 quater. S'arrêter sans se retourner : à 250 m/s, à plat, le vaisseau passe en vol vertical et se
+	# penche nez en haut ; il ne fait jamais demi-tour (le dessus du vaisseau ne dépasse pas 100° de la verticale)
+	v = _nouveau(true)
+	v.reactivite_moteurs = 0.3
+	v.px = 0.0
+	v.py = R + 2000.0
+	v.pz = 0.0
+	v.vz = -250.0
+	p = PiloteAuto.new()
+	p.activer(PiloteAuto.ARRET, v)
+	var pire_incl := 0.0
+	var t_arret := -1.0
+	alt_min = INF
+	for i in 120 * 80:
+		_image_pilote(v, p, 1)
+		var haut_q := Vector3(v.px, v.py, v.pz).normalized()
+		pire_incl = maxf(pire_incl, rad_to_deg((Basis(v.orientation) * Vector3.UP).angle_to(haut_q)))
+		alt_min = minf(alt_min, v.altitude())
+		if t_arret < 0.0 and p.arrete and v.vitesse() < 0.1:
+			t_arret = float(i) / 120.0
+			break
+	_resultat(t_arret > 0.0 and t_arret < 40.0 and pire_incl < 100.0 and alt_min > 1500.0 and not v.ecrase,
+		"Pilote auto : s'arrêter sans se retourner",
+		"2 km, 250 m/s : arrêté en %.0f s (moins de 40 s), le dessus du vaisseau penché au plus de %.0f° (jamais retourné), plus bas %.0f m." % [t_arret, pire_incl, alt_min])
+
+	# 33 quinquies. La gravité freine la montée : le vaisseau monte à 100 m/s, le pilote ne pousse pas
+	# contre la montée (la gravité s'en charge) : il monte autant que s'il tombait en chute libre (≈ 510 m)
+	v = _nouveau(true)
+	v.reactivite_moteurs = 0.3
+	v.px = 0.0
+	v.py = R + 10000.0
+	v.pz = 0.0
+	v.vy = 100.0
+	p = PiloteAuto.new()
+	p.activer(PiloteAuto.ARRET, v)
+	var haut_max := v.altitude()
+	var t_montee := -1.0
+	for i in 120 * 25:
+		_image_pilote(v, p, 1)
+		haut_max = maxf(haut_max, v.altitude())
+		if p.arrete and v.vitesse() < 0.1:
+			t_montee = float(i) / 120.0
+			break
+	var monte := haut_max - 10000.0
+	_resultat(monte > 440.0 and monte < 560.0 and t_montee > 0.0 and not v.ecrase,
+		"Pilote auto : la gravité freine la montée",
+		"Montée à 100 m/s : il est monté de %.0f m (en chute libre : 510 m, donc la poussée n'a presque pas freiné la montée), puis arrêté en %.0f s." % [monte, t_montee])
+
+	# 33 sexies. Temps accéléré : à x100 et x1000 demandés, le pilote garde le contrôle (il limite lui-même
+	# l'accélération du temps près du sol) : ni écrasé, ni perdu
+	var bilan_acc := PackedStringArray()
+	var acc_bon := true
+	for cas_acc in [["s'arrêter", PiloteAuto.ARRET, 3000.0, 100.0, -20.0, 1000], ["atterrir", PiloteAuto.ATTERRIR, 3000.0, 60.0, -10.0, 1000], ["atterrir", PiloteAuto.ATTERRIR, 20000.0, 300.0, -20.0, 100]]:
+		v = _nouveau(true)
+		v.reactivite_moteurs = 0.3
+		v.px = 0.0
+		v.py = R + float(cas_acc[2])
+		v.pz = 0.0
+		v.vz = -float(cas_acc[3])
+		v.vy = float(cas_acc[4])
+		p = PiloteAuto.new()
+		p.activer(int(cas_acc[1]), v)
+		var t_acc := 0.0
+		var fini := false
+		var impact_acc := 0.0
+		alt_min = INF
+		for i in 6000:
+			var a_eff: int = mini(int(cas_acc[5]), p.limite_temps(v))
+			_image_pilote(v, p, int(cas_acc[5]))
+			t_acc += a_eff / 120.0
+			alt_min = minf(alt_min, v.altitude())
+			if v.ecrase:
+				break
+			if int(cas_acc[1]) == PiloteAuto.ARRET and p.arrete and v.vitesse() < 0.1:
+				fini = true
+				break
+			if int(cas_acc[1]) == PiloteAuto.ATTERRIR and v.au_sol and v.vitesse() < 0.1:
+				fini = true
+				impact_acc = v.vitesse_impact
+				break
+		var bon_acc: bool = fini and not v.ecrase and impact_acc < 2.0
+		acc_bon = acc_bon and bon_acc
+		bilan_acc.append("%s depuis %.0f m à x%d : %s en %.0f s de jeu (impact %.1f m/s)" % [cas_acc[0], cas_acc[2], cas_acc[5], "réussi" if bon_acc else "RATÉ", t_acc, impact_acc])
+	_resultat(acc_bon, "Pilote auto : temps accéléré (x100, x1000)", " ; ".join(bilan_acc) + ".")
+
+	# 33 septies. Urgence : le vaisseau tombe vite, trop près du sol pour le vol vertical : il utilise les
+	# gros moteurs, nez en haut, puis revient à plat. Il ne s'écrase pas.
+	var bilan_urg := PackedStringArray()
+	var urg_bon := true
+	for cas_urg in [[1000.0, 0.0, -100.0], [300.0, 20.0, -30.0], [150.0, 0.0, -10.0]]:
+		v = _nouveau(true)
+		v.reactivite_moteurs = 0.3
+		v.px = 0.0
+		v.py = R + float(cas_urg[0])
+		v.pz = 0.0
+		v.vz = -float(cas_urg[1])
+		v.vy = float(cas_urg[2])
+		p = PiloteAuto.new()
+		p.activer(PiloteAuto.ARRET, v)
+		alt_min = INF
+		var arret_urg := false
+		for i in 120 * 90:
+			_image_pilote(v, p, 1)
+			alt_min = minf(alt_min, v.altitude())
+			if v.ecrase or v.au_sol:
+				break
+			if p.arrete and v.vitesse() < 0.1 and not p.urgence:
+				arret_urg = true
+				break
+		var bon_urg: bool = arret_urg and not v.ecrase and alt_min > 30.0
+		urg_bon = urg_bon and bon_urg
+		bilan_urg.append("%.0f m, descend à %.0f m/s : %s, plus bas %.0f m" % [cas_urg[0], -float(cas_urg[2]), "arrêté" if bon_urg else "RATÉ", alt_min])
+	_resultat(urg_bon, "Pilote auto : urgence près du sol", " ; ".join(bilan_urg) + ".")
+
+	_tests_train_ressorts()
+
+
+func _tests_train_ressorts() -> void:
+	# 34. Posés à différentes vitesses : les ressorts absorbent les posés normaux, un choc trop fort casse
+	var lignes := PackedStringArray()
+	var attendu_ok := true
+	for cas in [[1.0, true, false], [2.0, true, false], [3.0, true, false], [4.0, true, false], [5.0, true, true], [6.0, true, true], [8.0, true, true], [2.0, false, false], [5.0, false, true]]:
+		var v = _nouveau(true)
+		v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)
+		if cas[1]:
+			v.sortir_train(true)
+			v.train = 1.0
+		v.px = R + (1.61 if cas[1] else 1.01)   # juste avant le contact
+		v.vx = -float(cas[0])
+		var acc_max := 0.0
+		for i in 120 * 8:
+			v.pas(1.0 / 120.0)
+			acc_max = maxf(acc_max, v.acceleration_ressentie.length() / VaisseauPhysique.G0)
+			if v.ecrase:
+				break
+		if v.ecrase != cas[2]:
+			attendu_ok = false
+		lignes.append("%s à %.0f m/s : %s (pic %.1f g)" % ["roues" if cas[1] else "ventre", cas[0], "écrasé" if v.ecrase else "posé", acc_max])
+	_resultat(attendu_ok, "Posés plus ou moins durs",
+		"; ".join(lignes) + ". Attendu : posés sur les roues jusqu'à 4 m/s (amortisseurs de 12 à 15 cm), sur le ventre jusqu'à 2 m/s, casse au-delà.")
+
+	# 35. Temps accéléré x1000 posé au sol : le calcul est découpé, le vaisseau reste posé et calme
+	var w = _nouveau(true)
+	w.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)
+	w.sortir_train(true)
+	w.train = 1.0
+	w.px = R + 1.6
+	for i in 240:
+		w.pas(1.0 / 120.0)
+	for i in 30:
+		w.pas(1000.0 / 120.0)
+	var h_w: float = w.distance_centre() - R
+	_resultat(_valide(w) and w.au_sol and not w.ecrase and w.vitesse() < 0.05 and h_w > 1.5 and h_w < 1.58,
+		"Posé en temps accéléré x1000",
+		"Après 250 s en x1000 : %.3f m du sol, vitesse %.4f m/s, écrasé : %s." % [h_w, w.vitesse(), "oui" if w.ecrase else "non"])
+
+
+# =====================================================================
+# TESTS DU MODÈLE v25 : VRAIES MASSES, BUSES ENCASTRÉES, DROÏDE
+# =====================================================================
+func _tests_v25() -> void:
+	var v = _nouveau(false)
+	# a. masse, centre de gravité et inertie = ceux calculés dans Blender (masses_godot.json)
+	var f := FileAccess.open("res://modeles/vaisseau/masses_godot.json", FileAccess.READ)
+	var j = JSON.parse_string(f.get_as_text()) if f != null else null
+	var ok_a := false
+	var det_a := "fichier masses_godot.json illisible"
+	if j is Dictionary:
+		var cg: Array = j["centre_gravite_godot_m"]
+		var ip: Dictionary = j["inertie_principale_godot_kg_m2"]
+		var e_cg: float = (v.CENTRE_GRAVITE - Vector3(cg[0], cg[1], cg[2])).length()
+		var e_i: float = (v.inertie - Vector3(ip["x_tangage"], ip["y_lacet"], ip["z_roulis"])).length()
+		ok_a = absf(v.masse - float(j["masse_totale_kg"])) < 1.0 and e_cg < 0.005 and e_i < 10.0
+		det_a = "Masse %.1f kg (modèle %.1f), centre de gravité à %.3f m derrière l'origine (écart %.4f m), inertie écart %.1f kg·m²." % [v.masse, float(j["masse_totale_kg"]), v.CENTRE_GRAVITE.z, e_cg, e_i]
+	_resultat(ok_a, "Vraies masses du modèle", det_a)
+
+	# b. plein gaz vers l'avant : les moteurs sont alignés avec le centre de gravité, aucune rotation
+	v = _nouveau(false)
+	v.commander(1.0, 0.0, 0.0, 0.0)
+	for i in 240:
+		v.commander(1.0, 0.0, 0.0, 0.0)
+		v.pas(1.0 / 120.0)
+	_resultat(v.omega.length() < 1e-3, "Plein gaz autour du vrai centre de gravité",
+		"2 s plein gaz : %.0f m/s, rotation %.6f rad/s (attendu ≈ 0). Accélération %.1f g (8,46 t)." % [v.vitesse(), v.omega.length(), v.poussee_avant_max / v.masse / 9.80665])
+
+	# c. les 10 buses sont exactement là où le modèle les dessine, et poussent dans le même sens
+	var scene := load("res://modeles/vaisseau/vaisseau_exterieur.glb") as PackedScene
+	var ecart := INF
+	var ecart_dir := INF
+	var trouvees := 0
+	if scene != null:
+		var m := scene.instantiate()
+		ecart = 0.0
+		ecart_dir = 0.0
+		for t in v.rcs:
+			if int(t["axe"]) >= 0:
+				continue
+			var n := m.find_child("Point_rcs_" + String(t["nom"]).replace(" ", "_"), true, false) as Node3D
+			if n == null:
+				continue
+			trouvees += 1
+			var e = n.get_meta("extras", {})
+			var d: Array = e.get("poussee_godot", [0, 0, 0]) if e is Dictionary else [0, 0, 0]
+			ecart = maxf(ecart, ((t["position"] as Vector3) - n.position).length())
+			ecart_dir = maxf(ecart_dir, ((t["direction"] as Vector3) - Vector3(d[0], d[1], d[2]).normalized()).length())
+		var droide_ok: bool = m.find_child("Point_droide", true, false) != null and load("res://modeles/vaisseau/droide.glb") != null
+		m.free()
+		_resultat(trouvees == 10 and ecart < 0.005 and ecart_dir < 0.01 and droide_ok, "Buses encastrées et droïde",
+			"%d buses sur 10 trouvées dans le modèle, écart de position %.4f m, de direction %.4f. Logement et modèle du droïde : %s." % [trouvees, ecart, ecart_dir, "trouvés" if droide_ok else "ABSENTS"])
+	else:
+		_resultat(false, "Buses encastrées et droïde", "modèle extérieur introuvable")
+
+	# d. freiner sans se retourner : les buses du nez poussent vers l'arrière, sans faire tourner
+	v = _nouveau(false)
+	v.vz = -10.0   # 10 m/s vers l'avant
+	var frein := Vector3(0, 0, 12000.0)
+	for i in 600:
+		v.commander(0.0, 0.0, 0.0, 0.0, frein)
+		v.pas(1.0 / 120.0)
+	var att_d: float = 10.0 - 12000.0 / v.masse * 5.0
+	var ok_d: bool = absf(-v.vz - att_d) < 0.05 and v.omega.length() < 2e-3 and absf(v.vx) < 0.05 and absf(v.vy) < 0.05
+	_resultat(ok_d, "Freinage par les buses du nez",
+		"Freiné 5 s à 12 kN : %.3f m/s restants (attendu %.3f), rotation %.5f rad/s, dérive de côté %.3f m/s (attendu ≈ 0)." % [-v.vz, att_d, v.omega.length(), Vector2(v.vx, v.vy).length()])

@@ -1,0 +1,12 @@
+[gd_scene format=3 uid="uid://dn3wdu7xt6tkk"]
+
+[ext_resource type="Script" uid="uid://1cdtxm8pjttp" path="res://scripts/banc_ia.gd" id="1"]
+
+[node name="BancIA" type="Control" unique_id=206157669]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")

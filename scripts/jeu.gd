@@ -11,6 +11,10 @@ const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
 const Commandes = preload("res://scripts/commandes.gd")
 const EcranTouches = preload("res://scripts/ecran_touches.gd")
 const LumiereJeu = preload("res://scripts/lumiere_jeu.gd")
+const PiloteAuto = preload("res://scripts/physique/pilote_auto.gd")
+const Cockpit = preload("res://scripts/cockpit.gd")
+const EcransCockpit = preload("res://scripts/ecrans_cockpit.gd")
+const Droide = preload("res://scripts/droide.gd")
 
 # =====================================================================
 # CONSTANTES
@@ -24,10 +28,13 @@ const ALTITUDE_CALOTTE := 60000.0        # en dessous, on dessine une calotte d�
 const DIRECTION_SOLEIL := Vector3(0.8, 0.3, 0.5)
 const MODELE_EXTERIEUR := "res://modeles/vaisseau/vaisseau_exterieur.glb"
 const MODELE_COCKPIT := "res://modeles/vaisseau/cockpit.glb"
+const MODELE_DROIDE := "res://modeles/vaisseau/droide.glb"
 const OEIL_PILOTE_DEFAUT := Vector3(0.0, 0.58, 0.38)   # remplacé par le point Oeil_pilote du modèle s'il existe
 # vue extérieure : caméra qui tourne autour du vaisseau (stick droit), à cette distance du centre
 const VUE_EXT_DISTANCE := 24.0
 const VUE_EXT_HAUTEUR := deg_to_rad(-12.0)    # un peu au-dessus du vaisseau
+const FOV_NORMAL := 75.0
+const FOV_ZOOM := 25.0        # zoom pour lire les instruments (3 fois plus gros)
 const PART_TRAPPES := 0.3     # part du mouvement du train pendant laquelle les trappes s'ouvrent
 const ACCELERATIONS_TEMPS := [1, 10, 100, 1000]
 # tête du pilote (stick droit) : ne touche qu'à la caméra, jamais au vaisseau
@@ -49,8 +56,14 @@ const TETE_G_AMORTI := 0.7
 var vaisseau
 var gaz := 0.0
 var stabilisateur := false
+var ordinateur = PiloteAuto.new()    # ordinateur de bord (pilote automatique)
+var droide = null                    # droïde R-7 (petite IA, ordres calmes) : droide.gd
+var modele_droide: Node = null
+var force_cote := Vector3.ZERO       # force de côté demandée par le pilote auto (N)
 var en_pause := false
 var acc_temps := 1
+var acc_effectif := 1                # accélération du temps réellement appliquée (le pilote auto peut la limiter)
+var autopilote_actif := false        # le pilote auto calcule les ordres cette image
 var aide_visible := true
 var ordres := Vector3.ZERO           # tangage, lacet, roulis demandés (-1..1)
 var commandes                        # touches du clavier et de la manette (modifiables, sauvegardées)
@@ -81,9 +94,58 @@ var camera: Camera3D
 var exterieur: Node3D                # coque, ailes, train (visible dans les deux vues)
 var cockpit: Node3D                  # intérieur du cockpit et grande verrière (vue intérieure seulement)
 var charnieres := {}                 # nom de l'aile -> nœud Charniere_* du modèle
-var trains: Array = []               # [nœud Train_*, angle rentré (degrés)]
-var trappes: Array = []              # [nœud Charniere_Trappe_*, angle ouvert (degrés)]
+var trains: Array = []               # [nœud Train_*, "rotation" ou "piston", angle rentré (°) ou course sorti (m), position de repos]
+var trappes: Array = []              # [nœud Charniere_Trappe_*, angle ouvert (degrés), true = trappe des moteurs de levage]
+var tuyere: Node3D                   # pivot de la tuyère orientable du moteur central
+var moteurs_levage: Array = []       # [nœud Moteur_levage_*, position de repos, course (m)]
 var maillages_exterieurs: Array = [] # pour couper leurs ombres en vue cockpit
+var caches_en_cockpit: Array = []    # pièces du nez (train avant, moteurs de levage) qui bouchent la vue du pilote
+var amortisseurs: Array = []         # [nœud Amortisseur_*, position de repos, n° de roue de la physique]
+var ressorts: Array = []             # [nœud Ressort_*, échelle de repos, n° de roue, longueur au repos (m)]
+var roue_avant: Node3D = null
+var rayon_roue := 0.18
+var lueurs: Array = []               # [nœud, matériau, propulseur de la physique, couleur faible, couleur forte, énergie min, énergie max]
+var panaches: Array = []             # [nœud, matériau, propulseur de la physique, échelle de repos, axe (0,1,2), couleur faible, couleur forte]
+const SHADER_PANACHE := """
+shader_type spatial;
+render_mode unshaded, blend_add, cull_disabled, depth_draw_never;
+uniform vec3 couleur = vec3(0.0, 0.25, 1.0);
+uniform vec3 axe = vec3(0.0, 0.0, 1.0);
+uniform float longueur = 1.5;
+uniform float puissance = 0.0;
+varying float d;
+void vertex() { d = clamp(abs(dot(VERTEX, axe)) / max(longueur, 0.001), 0.0, 1.0); }
+void fragment() { ALBEDO = couleur; ALPHA = (1.0 - d) * 0.8 * puissance; }
+"""
+## Le même jet dans le système de lumière (étape 8) : vraie luminance, œil du pilote, profondeur logarithmique.
+const SHADER_PANACHE_LUMIERE := """
+shader_type spatial;
+render_mode unshaded, blend_add, cull_disabled, depth_draw_never, fog_disabled;
+#include "res://scripts/lumiere/oeil.gdshaderinc"
+#include "res://scripts/lumiere/compagnon.gdshaderinc"
+#include "res://scripts/lumiere/objets.gdshaderinc"
+uniform vec3 couleur = vec3(0.0, 0.25, 1.0);
+uniform vec3 axe = vec3(0.0, 0.0, 1.0);
+uniform float longueur = 1.5;
+uniform float puissance = 0.0;
+uniform float luminance = 1500.0;
+varying float d;
+void vertex() { d = clamp(abs(dot(VERTEX, axe)) / max(longueur, 0.001), 0.0, 1.0); }
+void fragment() {
+	vec3 l = couleur * luminance * (1.0 - d) * 0.8 * puissance;
+	ALBEDO = max(oeil_vers_ecran(l, FRAGCOORD.xy, TIME) - oeil_vers_ecran(vec3(0.0), FRAGCOORD.xy, TIME), vec3(0.0));
+	DEPTH = profondeur_log(-VERTEX.z);
+}
+"""
+## Luminances (cd/m²) de ce qui brille, pour le système de lumière : écran ordinaire, lueur d'une sortie
+## de moteur à pleine poussée (métal chauffé et gaz ionisé), cœur d'un jet à pleine poussée.
+const LUMINANCE_ECRAN := 120.0
+const LUMINANCE_LUEUR := 4000.0
+const LUMINANCE_JET := 1500.0
+var pieces_cockpit                   # leviers, manche, pédales, interrupteurs, boutons, voyants (cockpit.gd)
+var ecrans                           # écrans du cockpit remplis en direct (ecrans_cockpit.gd)
+var clics := {}                      # actions déclenchées cette image par un clic sur le cockpit
+var ordres_pilote := Vector3.ZERO    # ce que demande le pilote (le manche ne suit pas le stabilisateur)
 var planete: MeshInstance3D
 var calotte: MeshInstance3D
 var materiau_planete: ShaderMaterial
@@ -108,6 +170,10 @@ func _ready() -> void:
 	_creer_pilote_et_cockpit()
 	_brancher_lumiere()
 	_creer_hud()
+	_appliquer_vue()
+	droide = Droide.new()
+	add_child(droide)
+	droide.installer(self, couche_hud, modele_droide)
 
 
 ## Étape 8 : le système de lumière (vrai Soleil, planète en rayons, œil du pilote). Sans sa partie C++,
@@ -126,6 +192,7 @@ func _brancher_lumiere() -> void:
 		return
 	lumiere.ajouter_objets(exterieur, pilote)
 	lumiere.ajouter_objets(cockpit, pilote)
+	_brillances_dans_lumiere()
 	# La coque passe au-dessus du cockpit, sous la verrière : elle ne doit pas lui faire d'ombre.
 	var vitre := cockpit.find_child("Cockpit_verriere", true, false) as MeshInstance3D
 	var coque := exterieur.find_child("Fuselage", true, false) as MeshInstance3D
@@ -142,6 +209,45 @@ func _brancher_lumiere() -> void:
 	vaisseau.relief = lumiere.hauteur_sol
 	_creer_casque()
 	_appliquer_vue()
+
+
+## Ce qui brille dans le modèle v25 (écrans, voyants, lueurs et jets des moteurs) passe aussi par le
+## système de lumière : une vraie luminance (cd/m²) vue par l'œil du pilote, et la même profondeur
+## logarithmique que le reste (sinon ces pièces passeraient devant ou derrière la coque au hasard).
+func _brillances_dans_lumiere() -> void:
+	# écrans : l'image dessinée devient la lumière qu'ils émettent (≈ 120 cd/m², un écran ordinaire)
+	for nom in ecrans.ecrans:
+		var mi := ecrans.ecrans[nom]["mesh"] as MeshInstance3D
+		var m := mi.get_surface_override_material(0) as ShaderMaterial
+		if m == null:
+			continue
+		m.set_shader_parameter("tex_emission", (ecrans.ecrans[nom]["viewport"] as SubViewport).get_texture())
+		m.set_shader_parameter("tex_albedo", null)
+		m.set_shader_parameter("albedo_lin", Vector3(0.02, 0.02, 0.02))   # verre sombre
+		m.set_shader_parameter("emission_couleur", Vector3.ONE)
+		m.set_shader_parameter("emission_luminance", LUMINANCE_ECRAN)
+	# voyants : ils reprennent leurs nouvelles matières pour s'allumer et s'éteindre
+	pieces_cockpit.rebrancher_matieres()
+	# lueurs des sorties de moteurs : matière du système, sa luminance suit la vraie poussée
+	var sh_objet: Shader = load("res://scripts/lumiere/objet.gdshader")
+	for l in lueurs:
+		var m := ShaderMaterial.new()
+		m.shader = sh_objet
+		m.set_shader_parameter("albedo_lin", Vector3.ZERO)
+		m.set_shader_parameter("emission_luminance", 0.0)
+		(l[0] as MeshInstance3D).material_override = m
+		l[1] = m
+	# jets : lumière ajoutée devant ce qu'il y a derrière, vue par l'œil
+	var sh_jet := Shader.new()
+	sh_jet.code = SHADER_PANACHE_LUMIERE
+	for pa in panaches:
+		var ancien := pa[1] as ShaderMaterial
+		var m := ShaderMaterial.new()
+		m.shader = sh_jet
+		m.set_shader_parameter("axe", ancien.get_shader_parameter("axe"))
+		m.set_shader_parameter("longueur", ancien.get_shader_parameter("longueur"))
+		(pa[0] as MeshInstance3D).material_override = m
+		pa[1] = m
 
 
 ## Bord du casque, vu de l'intérieur : la visière ne laisse voir qu'un grand ovale, le reste est l'intérieur
@@ -210,13 +316,22 @@ func _creer_planete() -> void:
 
 
 func _creer_pilote_et_cockpit() -> void:
-	pilote = Node3D.new()           # suit l'orientation du vaisseau ; centre de masse à l'origine
+	pilote = Node3D.new()           # suit l'orientation du vaisseau ; centre de gravité à l'origine
 	add_child(pilote)
-	# le modèle 3D est exporté de Blender dans le même repère que la physique (-Z avant, +Y haut)
+	# le modèle 3D est exporté de Blender dans le même repère que la physique (-Z avant, +Y haut) ;
+	# il est décalé pour que son centre de gravité soit au centre de la scène (le vaisseau tourne autour)
+	var corps := Node3D.new()
+	corps.position = -VaisseauPhysique.CENTRE_GRAVITE
+	pilote.add_child(corps)
 	exterieur = (load(MODELE_EXTERIEUR) as PackedScene).instantiate()
-	pilote.add_child(exterieur)
+	corps.add_child(exterieur)
 	cockpit = (load(MODELE_COCKPIT) as PackedScene).instantiate()
-	pilote.add_child(cockpit)
+	corps.add_child(cockpit)
+	# droïde (modèle v24) : posé au fond de son logement, seule la tête dépasse
+	var logement := exterieur.find_child("Point_droide", true, false) as Node3D
+	if logement != null and ResourceLoader.exists(MODELE_DROIDE):
+		modele_droide = (load(MODELE_DROIDE) as PackedScene).instantiate()
+		logement.add_child(modele_droide)
 	for nom in VaisseauPhysique.AILES:
 		var n := exterieur.find_child("Charniere_" + nom, true, false) as Node3D
 		if n != null:
@@ -224,24 +339,42 @@ func _creer_pilote_et_cockpit() -> void:
 	for nom in ["Train_avant", "Train_arriere_gauche", "Train_arriere_droit"]:
 		var n := exterieur.find_child(nom, true, false) as Node3D
 		if n != null:
-			# angle rentré lu dans le modèle (propriété angle_rentre_deg de Blender), sinon valeur connue
-			var rentre := 90.0 if nom == "Train_avant" else -90.0
 			var extras = n.get_meta("extras", {})
-			if extras is Dictionary and extras.has("angle_rentre_deg"):
-				rentre = float(extras["angle_rentre_deg"])
-			trains.append([n, rentre])
+			if not (extras is Dictionary):
+				extras = {}
+			if extras.get("type", "") == "piston":
+				# jambe qui coulisse (vérin) : translation selon Z de Blender = Y de Godot
+				trains.append([n, "piston", float(extras.get("course_sorti_m", -0.56)), n.position])
+			else:
+				# jambe qui pivote autour de X : angle rentré lu dans le modèle
+				trains.append([n, "rotation", float(extras.get("angle_rentre_deg", -90.0)), n.position])
 	# trappes du train : elles tournent autour de l'axe avant-arrière (Y de Blender = -Z de Godot)
 	for n in exterieur.find_children("Charniere_Trappe_*", "Node3D", true, false):
 		var extras = n.get_meta("extras", {})
 		var ouvert := 0.0
 		if extras is Dictionary and extras.has("angle_ouvert_deg"):
 			ouvert = -float(extras["angle_ouvert_deg"])
-		trappes.append([n, ouvert])
+		trappes.append([n, ouvert, String(n.name).contains("levage")])
+	tuyere = exterieur.find_child("Pivot_tuyere_centrale", true, false) as Node3D
+	for nom in ["Moteur_levage_gauche", "Moteur_levage_droit"]:
+		var n := exterieur.find_child(nom, true, false) as Node3D
+		if n != null:
+			var extras = n.get_meta("extras", {})
+			var course := -0.32
+			if extras is Dictionary:
+				course = float(extras.get("course_sorti_m", course))
+			moteurs_levage.append([n, n.position, course])
+	_trouver_amortisseurs_et_lueurs()
 	var oeil := cockpit.find_child("Oeil_pilote", true, false) as Node3D
 	if oeil != null:
 		oeil_pilote = oeil.position
+	oeil_pilote -= VaisseauPhysique.CENTRE_GRAVITE   # la caméra est placée par rapport au centre de gravité
 	for m in exterieur.find_children("*", "GeometryInstance3D", true, false):
 		maillages_exterieurs.append(m)
+	for n in exterieur.find_children("*", "Node3D", true, false):
+		var e = n.get_meta("extras", {})
+		if e is Dictionary and bool(e.get("cacher_en_vue_cockpit", false)):
+			caches_en_cockpit.append(n)
 
 	camera = Camera3D.new()
 	camera.fov = 75.0
@@ -258,6 +391,8 @@ func _creer_pilote_et_cockpit() -> void:
 	lampe.omni_range = 2.0
 	cockpit.add_child(lampe)
 	lampe_ancienne = lampe
+	pieces_cockpit = Cockpit.new(cockpit)
+	ecrans = EcransCockpit.new(cockpit, self)
 	_appliquer_vue()
 	_animer_modele()
 
@@ -266,10 +401,16 @@ func _creer_pilote_et_cockpit() -> void:
 ## tout noir). Vue extérieure : le cockpit est caché, la coque fait de nouveau ses ombres.
 func _appliquer_vue() -> void:
 	cockpit.visible = vue_interieure
+	for n in caches_en_cockpit:
+		(n as Node3D).visible = not vue_interieure
+	# en vue cockpit, les informations sont sur les écrans du tableau de bord ; dehors, en surimpression
+	if hud != null:
+		hud.visible = not vue_interieure
 	tete = Vector2.ZERO
 	if casque:
 		casque.visible = vue_interieure and lumiere.visiere != 0
 	if avec_lumiere:
+		lumiere.vue_interieure = vue_interieure
 		# système de lumière : la coque fait toujours ses ombres (la verrière, jamais : on voit à travers)
 		for m in maillages_exterieurs:
 			var nom := String((m as Node).name).to_lower()
@@ -294,9 +435,155 @@ func _animer_modele() -> void:
 	var porte := clampf(vaisseau.train / PART_TRAPPES, 0.0, 1.0)
 	var jambe := clampf((vaisseau.train - PART_TRAPPES) / (1.0 - PART_TRAPPES), 0.0, 1.0)
 	for t in trains:
-		(t[0] as Node3D).rotation = Vector3(deg_to_rad(lerpf(float(t[1]), 0.0, jambe)), 0, 0)
+		if t[1] == "piston":
+			(t[0] as Node3D).position = (t[3] as Vector3) + Vector3(0, float(t[2]) * jambe, 0)
+		else:
+			(t[0] as Node3D).rotation = Vector3(deg_to_rad(lerpf(float(t[2]), 0.0, jambe)), 0, 0)
+	# moteurs de levage : d'abord leurs trappes s'ouvrent, puis le vérin les descend (l'inverse en rentrant)
+	var s_levage: float = vaisseau.sortie_levage()
+	var porte_levage := clampf(s_levage / PART_TRAPPES, 0.0, 1.0)
+	var verin := clampf((s_levage - PART_TRAPPES) / (1.0 - PART_TRAPPES), 0.0, 1.0)
 	for t in trappes:
-		(t[0] as Node3D).rotation = Vector3(0, 0, deg_to_rad(float(t[1]) * porte))
+		var ouverture: float = porte_levage if t[2] else porte
+		(t[0] as Node3D).rotation = Vector3(0, 0, deg_to_rad(float(t[1]) * ouverture))
+	for m in moteurs_levage:
+		(m[0] as Node3D).position = (m[1] as Vector3) + Vector3(0, float(m[2]) * verin, 0)
+	if tuyere != null:
+		# tuyère en 3 anneaux (v18) : chacun tourne d'un tiers de l'angle
+		var n_tuyere := tuyere
+		var tiers := deg_to_rad(vaisseau.angle_tuyere()) / 3.0
+		for nom in ["Pivot_tuyere_centrale_2", "Pivot_tuyere_centrale_3", ""]:
+			n_tuyere.rotation = Vector3(tiers, 0, 0)
+			if nom == "":
+				break
+			n_tuyere = n_tuyere.find_child(nom, true, false) as Node3D
+			if n_tuyere == null:
+				break
+
+
+## Modèle v20 : amortisseurs, ressorts, roue avant ; v19 : lueurs et jets des moteurs.
+func _trouver_amortisseurs_et_lueurs() -> void:
+	var roue_de := {"Amortisseur_avant": 0, "Amortisseur_arriere_gauche": 1, "Amortisseur_arriere_droit": 2,
+		"Ressort_arriere_gauche": 1, "Ressort_arriere_droit": 2}
+	for nom in roue_de:
+		var n := exterieur.find_child(nom, true, false) as Node3D
+		if n == null:
+			continue
+		var e = n.get_meta("extras", {})
+		if nom.begins_with("Ressort"):
+			var l := 0.18
+			if e is Dictionary:
+				l = float(e.get("longueur_repos_m", l))
+			ressorts.append([n, n.scale, roue_de[nom], l])
+		else:
+			amortisseurs.append([n, n.position, roue_de[nom]])
+	roue_avant = exterieur.find_child("Roue_avant", true, false) as Node3D
+	if roue_avant != null:
+		var e = roue_avant.get_meta("extras", {})
+		if e is Dictionary:
+			rayon_roue = float(e.get("rayon_m", rayon_roue))
+	# n° du moteur de la physique pour chaque point de poussée du modèle
+	var num := {}
+	for m in vaisseau.moteurs:
+		num["Point_moteur_" + String(m["nom"]).replace(" ", "_")] = m
+	for n in exterieur.find_children("*", "MeshInstance3D", true, false):
+		var e = n.get_meta("extras", {})
+		if not (e is Dictionary):
+			continue
+		var i = num.get(e.get("moteur", ""))
+		if i == null and String(e.get("moteur", "")).begins_with("Point_rcs_"):
+			# petite buse : on prend le propulseur de la physique le plus proche de la lueur
+			# (les noms haut/bas des buses du nez sont inversés dans le modèle, la position ne trompe pas)
+			var d_min := 0.1
+			for t in vaisseau.rcs:
+				var d: float = ((t["position"] as Vector3) - (n as Node3D).position).length()
+				if t["aile"] == "" and d < d_min:
+					d_min = d
+					i = t
+		if i == null:
+			continue
+		var faible := _couleur(e.get("couleur_faible", [0.0, 0.25, 1.0]))
+		var forte := _couleur(e.get("couleur_forte", [0.55, 0.0, 1.0]))
+		var mi := n as MeshInstance3D
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if e.get("type", "") == "lueur":
+			var mat := StandardMaterial3D.new()
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			mat.albedo_color = Color.BLACK
+			mi.material_override = mat
+			lueurs.append([mi, mat, i, faible, forte, float(e.get("energie_min", 1.0)), float(e.get("energie_max", 4.0))])
+		elif e.get("type", "") == "panache":
+			var mat := ShaderMaterial.new()
+			var sh := Shader.new()
+			sh.code = SHADER_PANACHE
+			mat.shader = sh
+			var axe := {"X": 0, "Y": 1, "Z": 2}.get(String(e.get("axe_longueur_godot", "Z")), 2) as int
+			var v_axe := Vector3.ZERO
+			v_axe[axe] = 1.0
+			mat.set_shader_parameter("axe", v_axe)
+			mat.set_shader_parameter("longueur", float(e.get("longueur_max_m", 1.5)))
+			mi.material_override = mat
+			var repos := Vector3.ONE   # dans le glb, les jets sont exportés écrasés (moteurs coupés)
+			panaches.append([mi, mat, i, repos, axe, faible, forte])
+			mi.visible = false
+
+
+static func _couleur(a) -> Color:
+	if a is Array and a.size() >= 3:
+		return Color(float(a[0]), float(a[1]), float(a[2]))
+	return Color(0.0, 0.25, 1.0)
+
+
+## Lueurs et jets : ils suivent la VRAIE poussée de chaque moteur (pas la commande des gaz).
+func _animer_lueurs() -> void:
+	for l in lueurs:
+		var p: float = clampf(float(l[2]["actuel"]), 0.0, 1.0)
+		if float(l[2]["poussee_max"]) <= 0.0:
+			p = 0.0
+		var lum := lerpf(float(l[5]), float(l[6]), p) / float(l[6])
+		if l[1] is ShaderMaterial:
+			# système de lumière : vraie luminance
+			var c := (l[3] as Color).lerp(l[4], p).srgb_to_linear()
+			var mat_l := l[1] as ShaderMaterial
+			mat_l.set_shader_parameter("emission_couleur", Vector3(c.r, c.g, c.b))
+			mat_l.set_shader_parameter("emission_luminance", 0.0 if p < 0.01 else LUMINANCE_LUEUR * lum)
+			continue
+		var mat: StandardMaterial3D = l[1]
+		if p < 0.01:
+			mat.albedo_color = Color.BLACK
+		else:
+			mat.albedo_color = (l[3] as Color).lerp(l[4], p) * lum
+	for pa in panaches:
+		var p: float = clampf(float(pa[2]["actuel"]), 0.0, 1.0)
+		if float(pa[2]["poussee_max"]) <= 0.0:
+			p = 0.0
+		var mi: MeshInstance3D = pa[0]
+		mi.visible = p >= 0.01
+		if mi.visible:
+			var sc: Vector3 = pa[3]
+			sc[pa[4]] = maxf(p, 0.001)
+			mi.scale = sc
+			var mat: ShaderMaterial = pa[1]
+			var cj := (pa[5] as Color).lerp(pa[6], p)
+			if avec_lumiere:
+				cj = cj.srgb_to_linear()
+				mat.set_shader_parameter("luminance", LUMINANCE_JET)
+			mat.set_shader_parameter("couleur", cj)
+			mat.set_shader_parameter("puissance", 1.0)
+
+
+## Amortisseurs et ressorts : ils s'écrasent comme dans la physique ; la roue avant tourne en roulant.
+func _animer_amortisseurs(delta: float) -> void:
+	var c: PackedFloat64Array = vaisseau.compression_roues
+	for a in amortisseurs:
+		(a[0] as Node3D).position = (a[1] as Vector3) + Vector3(0, c[a[2]], 0)
+	for r in ressorts:
+		var sc: Vector3 = r[1]
+		sc.y *= maxf(0.05, (float(r[3]) - c[r[2]]) / float(r[3]))
+		(r[0] as Node3D).scale = sc
+	if roue_avant != null and vaisseau.au_sol and c[0] > 0.0:
+		var avance: float = (Basis(vaisseau.orientation).inverse() * Vector3(vaisseau.vx, vaisseau.vy, vaisseau.vz)).dot(Vector3.FORWARD)
+		roue_avant.rotate_x(-avance / rayon_roue * delta)
 
 
 func _label(taille: int, couleur := Color(0.75, 0.95, 0.8)) -> Label:
@@ -323,7 +610,7 @@ func _creer_hud() -> void:
 	aide.anchor_top = 1.0
 	aide.anchor_bottom = 1.0
 	aide.offset_left = 16
-	aide.offset_top = -232
+	aide.offset_top = -268
 	couche.add_child(aide)
 	_ecrire_aide()
 	message = _label(28, Color(1.0, 0.45, 0.4))
@@ -347,11 +634,14 @@ func _ecrire_aide() -> void:
 		"%s : plus de poussée   %s : moins   %s : couper la poussée\n" % [c.resume("gaz_plus"), c.resume("gaz_moins"), c.resume("couper_gaz")]
 		+ "Tangage %s      Lacet %s\n" % [_paire("tangage_haut", "tangage_bas"), _paire("lacet_gauche", "lacet_droite")]
 		+ "Roulis %s\n" % _paire("roulis_gauche", "roulis_droite")
+		+ "Pilote auto : %s garder le cap   %s s'arrêter   %s atterrir (une touche de pilotage le coupe)\n" % [c.resume("pilote_cap"), c.resume("pilote_arret"), c.resume("pilote_atterrir")]
 		+ "%s : stabilisateur   %s : pause   Temps : %s %s %s %s, ou %s / %s\n" % [c.resume("stabilisateur"), c.resume("pause"), c.resume("temps_x1"), c.resume("temps_x10"), c.resume("temps_x100"), c.resume("temps_x1000"), c.resume("temps_moins"), c.resume("temps_plus")]
 		+ "%s : remettre en orbite   %s : recommencer   %s : tests   %s : cacher l'aide\n" % [c.resume("remettre_orbite"), c.resume("recommencer"), c.resume("tests"), c.resume("aide")]
-		+ "%s : ailes   %s : train d'atterrissage   %s : vue cockpit / extérieure\n" % [c.resume("ailes"), c.resume("train"), c.resume("vue")]
-		+ "Tourner la tête (ou la caméra) : %s   %s : regarder droit devant\n" % [_aide_tete(), c.resume("regard_centre")]
+		+ "%s : ailes   %s : train d'atterrissage   %s : vol vertical   %s : vue cockpit / extérieure\n" % [c.resume("ailes"), c.resume("train"), c.resume("vol_vertical"), c.resume("vue")]
+		+ "Tourner la tête (ou la caméra) : %s   %s : regarder droit devant   %s (maintenir) : zoom\n" % [_aide_tete(), c.resume("regard_centre"), c.resume("zoom")]
 		+ "%s : projecteur   %s : casque et visière   %s : tête qui bouge avec les G\n" % [c.resume("phares"), c.resume("visiere"), c.resume("tete_g")]
+		+ "Dans le cockpit, on peut aussi cliquer sur les boutons et les interrupteurs\n"
+		+ "Entrée : parler au droïde R-7 (ordres calmes : train, ailes, pilote auto, questions)\n"
 		+ "%s : configurer les commandes (clavier et manette)" % c.resume("ecran_touches"))
 
 ## « stick droit » si les 4 directions de la tête sont sur le stick droit, sinon la liste.
@@ -384,43 +674,78 @@ func _paire(a: String, b: String) -> String:
 ## Appuis simples (boutons, touches). On interroge Godot à chaque image : ça marche pareil
 ## pour une touche, un bouton de manette ou même un stick si le joueur en choisit un.
 func _lire_boutons() -> void:
-	if ecran_touches != null or Engine.get_process_frames() == image_fermeture:
+	if ecran_touches != null or Engine.get_process_frames() == image_fermeture or (droide != null and droide.ecrit):
+		clics.clear()
 		return
-	if Input.is_action_just_pressed("ecran_touches"):
+	if _appui("ecran_touches"):
 		_ouvrir_ecran_touches()
+		clics.clear()
 		return
-	if Input.is_action_just_pressed("temps_x1"): acc_temps = ACCELERATIONS_TEMPS[0]
-	if Input.is_action_just_pressed("temps_x10"): acc_temps = ACCELERATIONS_TEMPS[1]
-	if Input.is_action_just_pressed("temps_x100"): acc_temps = ACCELERATIONS_TEMPS[2]
-	if Input.is_action_just_pressed("temps_x1000"): acc_temps = ACCELERATIONS_TEMPS[3]
-	if Input.is_action_just_pressed("temps_plus"):
+	if _appui("temps_x1"): acc_temps = ACCELERATIONS_TEMPS[0]
+	if _appui("temps_x10"): acc_temps = ACCELERATIONS_TEMPS[1]
+	if _appui("temps_x100"): acc_temps = ACCELERATIONS_TEMPS[2]
+	if _appui("temps_x1000"): acc_temps = ACCELERATIONS_TEMPS[3]
+	if _appui("temps_plus"):
 		acc_temps = ACCELERATIONS_TEMPS[mini(ACCELERATIONS_TEMPS.find(acc_temps) + 1, ACCELERATIONS_TEMPS.size() - 1)]
-	if Input.is_action_just_pressed("temps_moins"):
+	if _appui("temps_moins"):
 		acc_temps = ACCELERATIONS_TEMPS[maxi(ACCELERATIONS_TEMPS.find(acc_temps) - 1, 0)]
-	if Input.is_action_just_pressed("couper_gaz"): gaz = 0.0
-	if Input.is_action_just_pressed("stabilisateur"): stabilisateur = not stabilisateur
-	if Input.is_action_just_pressed("ailes"): vaisseau.ouvrir_ailes(vaisseau.ailes_consigne < 0.5)
-	if Input.is_action_just_pressed("train"): vaisseau.sortir_train(vaisseau.train_consigne < 0.5)
-	if Input.is_action_just_pressed("vue"):
+	if _appui("couper_gaz"):
+		gaz = 0.0
+		ordinateur.activer(PiloteAuto.AUCUN, vaisseau)
+	if _appui("pilote_cap"):
+		ordinateur.activer(PiloteAuto.AUCUN if ordinateur.mode == PiloteAuto.CAP else PiloteAuto.CAP, vaisseau)
+	if _appui("pilote_arret"):
+		ordinateur.activer(PiloteAuto.AUCUN if ordinateur.mode == PiloteAuto.ARRET else PiloteAuto.ARRET, vaisseau)
+	if _appui("pilote_atterrir"):
+		ordinateur.activer(PiloteAuto.AUCUN if ordinateur.mode == PiloteAuto.ATTERRIR else PiloteAuto.ATTERRIR, vaisseau)
+	if _appui("stabilisateur"): stabilisateur = not stabilisateur
+	if _appui("ailes"): vaisseau.ouvrir_ailes(vaisseau.ailes_consigne < 0.5)
+	if _appui("train"): vaisseau.sortir_train(vaisseau.train_consigne < 0.5)
+	if _appui("vol_vertical"): vaisseau.passer_vol_vertical(vaisseau.vertical_consigne < 0.5)
+	if _appui("vue"):
 		vue_interieure = not vue_interieure
 		_appliquer_vue()
-	if Input.is_action_just_pressed("pause"): en_pause = not en_pause
-	if Input.is_action_just_pressed("tete_g"):
+	if _appui("pause"): en_pause = not en_pause
+	if _appui("tete_g"):
 		tete_g = not tete_g
-	if avec_lumiere and Input.is_action_just_pressed("phares"):
+	if avec_lumiere and _appui("phares"):
 		lumiere.projecteur = not lumiere.projecteur
-	if avec_lumiere and Input.is_action_just_pressed("visiere"):
+	if avec_lumiere and _appui("visiere"):
 		lumiere.changer_visiere()
 		casque.visible = vue_interieure and lumiere.visiere != 0
-	if Input.is_action_just_pressed("aide"):
+	if _appui("aide"):
 		aide_visible = not aide_visible
 		aide.visible = aide_visible
-	if Input.is_action_just_pressed("recommencer") or Input.is_action_just_pressed("remettre_orbite"):
+	var recommencer := _appui("recommencer")
+	if _appui("remettre_orbite") or recommencer:
+		ordinateur.activer(PiloteAuto.AUCUN, vaisseau)
 		gaz = 0.0
 		acc_temps = 1
 		vaisseau.placer_en_orbite(ALTITUDE_DEPART)
+	clics.clear()
 	if Input.is_action_just_pressed("tests"):
 		get_tree().change_scene_to_file("res://scenes/tests.tscn")
+
+
+## Vrai si l'action vient d'être demandée (touche, manette ou clic sur le cockpit).
+## La pièce correspondante du cockpit s'enfonce alors un instant.
+func _appui(action: String) -> bool:
+	if Input.is_action_just_pressed(action) or clics.has(action):
+		pieces_cockpit.appuyer(action)
+		return true
+	return false
+
+
+## Clic gauche en vue cockpit : on cherche la commande visée (bouton, interrupteur, poignée).
+func _unhandled_input(e: InputEvent) -> void:
+	if not vue_interieure or ecran_touches != null:
+		return
+	if e is InputEventMouseButton and e.pressed and (e as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+		var pos := (e as InputEventMouseButton).position
+		var action: String = pieces_cockpit.action_sous_rayon(camera.project_ray_origin(pos), camera.project_ray_normal(pos))
+		if action != "":
+			clics[action] = true
+			get_viewport().set_input_as_handled()
 
 
 func _ouvrir_ecran_touches() -> void:
@@ -438,7 +763,7 @@ func _fermer_ecran_touches() -> void:
 
 ## Tourner la tête dans le cockpit (stick droit). Stick lâché : la tête revient doucement droit devant.
 func _bouger_tete(delta: float) -> void:
-	if ecran_touches != null:
+	if ecran_touches != null or (droide != null and droide.ecrit):
 		return
 	if Input.is_action_just_pressed("regard_centre"):
 		tete = Vector2.ZERO
@@ -452,6 +777,9 @@ func _bouger_tete(delta: float) -> void:
 			tete.y = clampf(tete.y + dy * TETE_VITESSE * delta, -TETE_LACET_MAX, TETE_LACET_MAX)
 		else:
 			tete.y = wrapf(tete.y + dy * TETE_VITESSE * delta, -PI, PI)   # dehors : on peut faire le tour
+	# zoom (maintenir) : le champ de vision se resserre pour lire les écrans du tableau de bord
+	var fov_voulu := FOV_ZOOM if Input.is_action_pressed("zoom") else FOV_NORMAL
+	camera.fov = lerpf(camera.fov, fov_voulu, minf(1.0, 10.0 * delta))
 	if vue_interieure:
 		camera.position = oeil_pilote + tete_g_pos
 		camera.rotation = Vector3(tete.x, tete.y, 0.0)
@@ -464,12 +792,26 @@ func _bouger_tete(delta: float) -> void:
 
 ## Lit le clavier et la manette. Sticks et gâchettes sont analogiques : à moitié = la moitié.
 func _lire_ordres(delta: float) -> void:
-	var t := Input.get_axis("tangage_bas", "tangage_haut")
-	var l := Input.get_axis("lacet_droite", "lacet_gauche")
-	var r := Input.get_axis("roulis_droite", "roulis_gauche")
+	var ecrit: bool = droide != null and droide.ecrit   # on parle au droïde : clavier ignoré
+	var t := 0.0 if ecrit else Input.get_axis("tangage_bas", "tangage_haut")
+	var l := 0.0 if ecrit else Input.get_axis("lacet_droite", "lacet_gauche")
+	var r := 0.0 if ecrit else Input.get_axis("roulis_droite", "roulis_gauche")
+	ordres_pilote = Vector3(t, l, r)
 	# la poussée monte ou descend d'autant plus vite qu'on appuie fort (Z / S ou gâchettes R2 / L2)
-	gaz += 0.5 * delta * (Input.get_action_strength("gaz_plus") - Input.get_action_strength("gaz_moins"))
+	if not ecrit:
+		gaz += 0.5 * delta * (Input.get_action_strength("gaz_plus") - Input.get_action_strength("gaz_moins"))
 	gaz = clampf(gaz, 0.0, 1.0)
+	force_cote = Vector3.ZERO
+	# Pilote automatique : dès que le joueur touche aux commandes, il reprend la main.
+	# (ses ordres sont calculés dans _physics_process, par petits morceaux de temps : en temps
+	# accéléré, il garde ainsi le contrôle)
+	autopilote_actif = false
+	if ordinateur.mode != PiloteAuto.AUCUN:
+		if t != 0.0 or l != 0.0 or r != 0.0 or (not ecrit and (Input.is_action_pressed("gaz_plus") or Input.is_action_pressed("gaz_moins"))):
+			ordinateur.activer(PiloteAuto.AUCUN, vaisseau)
+		else:
+			autopilote_actif = true
+			return
 	# Stabilisateur : sur chaque axe non commandé, il allume les propulseurs qui freinent la rotation.
 	# Il n'agit QUE par les propulseurs (aucune rotation imposée directement).
 	# En temps accéléré, l'ordre dure plus longtemps (PAS × acc_temps) : le stabilisateur en tient compte.
@@ -487,7 +829,26 @@ func _physics_process(delta: float) -> void:
 	if en_pause or vaisseau.ecrase or ecran_touches != null:
 		return
 	_lire_ordres(delta)
-	vaisseau.commander(gaz, ordres.x, ordres.y, ordres.z)
+	acc_effectif = acc_temps
+	if autopilote_actif:
+		# Le pilote auto calcule ses ordres au plus toutes les 0,04 s de temps de jeu, même en temps
+		# accéléré (sinon un seul ordre durerait jusqu'à 8 s à x1000). Il limite lui-même l'accélération
+		# du temps quand c'est dangereux (près du sol).
+		acc_effectif = mini(acc_temps, ordinateur.limite_temps(vaisseau))
+		var duree: float = PAS * acc_effectif
+		var n_ap: int = maxi(1, ceili(duree / ordinateur.periode_controle(vaisseau)))
+		var dt_ap: float = duree / n_ap
+		for i in n_ap:
+			ordinateur.calculer(vaisseau, dt_ap)
+			gaz = ordinateur.gaz
+			force_cote = ordinateur.force_cote
+			ordres = ordinateur.ordres
+			vaisseau.commander(gaz, ordres.x, ordres.y, ordres.z, force_cote)
+			vaisseau.pas(dt_ap)
+			if vaisseau.ecrase:
+				break
+		return
+	vaisseau.commander(gaz, ordres.x, ordres.y, ordres.z, force_cote)
 	if acc_temps == 1:
 		vaisseau.pas(PAS)
 	else:
@@ -505,6 +866,9 @@ func _process(delta: float) -> void:
 	_suivre_g(delta)
 	_bouger_tete(delta)
 	_animer_modele()
+	_animer_lueurs()
+	_animer_amortisseurs(delta)
+	_mettre_a_jour_cockpit(delta)
 	if avec_lumiere:
 		_placer_lumiere(delta)
 	else:
@@ -555,6 +919,41 @@ func _placer_lumiere(delta: float) -> void:
 	lumiere.mettre_a_jour(delta, oeil64, Vector3(vaisseau.vx, vaisseau.vy, vaisseau.vz), pilote.basis,
 		oeil_local, gaz_moteurs)
 	temps_lumiere_ms = lerpf(temps_lumiere_ms, (Time.get_ticks_usec() - t0) / 1000.0, 0.05)
+## Les pièces du cockpit suivent les commandes, et les écrans affichent l'état du vol.
+func _mettre_a_jour_cockpit(delta: float) -> void:
+	pieces_cockpit.mettre_a_jour({
+		"gaz": gaz, "tangage": ordres_pilote.x, "lacet": ordres_pilote.y, "roulis": ordres_pilote.z,
+		"train": vaisseau.train_consigne, "ailes": vaisseau.ailes_consigne, "stabilisateur": stabilisateur,
+	}, delta)
+	ecrans.mettre_a_jour(_infos_cockpit(), delta, vue_interieure)
+
+
+func _infos_cockpit() -> Dictionary:
+	var vers_vaisseau := Basis(vaisseau.orientation).inverse()
+	var astres := []
+	# planète : position de son centre vue depuis le vaisseau, distance jusqu'à la surface
+	var p := vers_vaisseau * Vector3(-vaisseau.px, -vaisseau.py, -vaisseau.pz)
+	astres.append({"nom": "Planète", "position": p, "distance": vaisseau.altitude(), "principal": true})
+	for a in vaisseau.autres_astres:
+		var q := vers_vaisseau * Vector3(float(a["x"]) - vaisseau.px, float(a["y"]) - vaisseau.py, float(a["z"]) - vaisseau.pz)
+		astres.append({"nom": String(a["nom"]), "position": q, "distance": q.length()})
+	var rcs_actifs := 0
+	for t in vaisseau.rcs:
+		if float(t["actuel"]) > 0.01:
+			rcs_actifs += 1
+	var moteurs := []
+	for m in vaisseau.moteurs:
+		moteurs.append(float(m["actuel"]))
+	return {
+		"vitesse": vaisseau.vitesse(), "v_horiz": vaisseau.vitesse_horizontale(), "v_vert": vaisseau.vitesse_verticale(),
+		"altitude": vaisseau.altitude(), "g": vaisseau.acceleration_ressentie.length() / VaisseauPhysique.G0,
+		"rotation": vaisseau.omega * (180.0 / PI), "gaz": gaz, "moteurs": moteurs, "rcs_actifs": rcs_actifs,
+		"ailes": vaisseau.ailes, "ailes_txt": _etat(vaisseau.ailes, vaisseau.ailes_consigne, "ouvertes", "repliées"),
+		"train": vaisseau.train, "train_txt": _etat(vaisseau.train, vaisseau.train_consigne, "sorti", "rentré"),
+		"vertical": vaisseau.vertical, "vertical_txt": _etat(vaisseau.vertical, vaisseau.vertical_consigne, "ACTIF", "arrêt"),
+		"stabilisateur": stabilisateur, "temps": acc_effectif, "pause": en_pause, "vue_interieure": vue_interieure,
+		"orbite": vaisseau.orbite(), "au_sol": vaisseau.au_sol, "ecrase": vaisseau.ecrase, "astres": astres,
+	}
 
 
 func _placer_planete() -> void:
@@ -661,10 +1060,16 @@ func _mettre_a_jour_hud() -> void:
 	lignes.append("GAZ           %s %3d %%" % [_barre(gaz), int(round(gaz * 100.0))])
 	lignes.append("MOTEURS       HG %s  HD %s" % [_barre(m[0]["actuel"]), _barre(m[1]["actuel"])])
 	lignes.append("              BG %s  BD %s   C %s" % [_barre(m[2]["actuel"]), _barre(m[3]["actuel"]), _barre(m[4]["actuel"])])
+	lignes.append("LEVAGE        G  %s  D  %s" % [_barre(m[5]["actuel"]), _barre(m[6]["actuel"])])
 	lignes.append("ROTATION      tangage %+.1f°/s   lacet %+.1f°/s   roulis %+.1f°/s" % [w.x, w.y, w.z])
 	lignes.append("AILES         %s      TRAIN %s      VUE %s" % [_etat(vaisseau.ailes, vaisseau.ailes_consigne, "ouvertes", "repliées"),
 		_etat(vaisseau.train, vaisseau.train_consigne, "sorti", "rentré"), "cockpit" if vue_interieure else "extérieure"])
-	lignes.append("STABILISATEUR %s      TEMPS x%d%s" % ["activé" if stabilisateur else "désactivé", acc_temps, "   (PAUSE)" if en_pause else ""])
+	lignes.append("VOL VERTICAL  %s   (tuyère %.0f°, poussée max %.0f kN)" % [_etat(vaisseau.vertical, vaisseau.vertical_consigne, "activé", "désactivé"), vaisseau.angle_tuyere(), vaisseau.poussee_avant_max / 1000.0])
+	lignes.append("PILOTE AUTO   %s" % ordinateur.nom_mode())
+	var temps_txt := "x%d" % acc_temps
+	if acc_effectif < acc_temps:
+		temps_txt += " (pilote auto : x%d)" % acc_effectif
+	lignes.append("STABILISATEUR %s      TEMPS %s%s" % ["activé" if stabilisateur else "désactivé", temps_txt, "   (PAUSE)" if en_pause else ""])
 	if avec_lumiere:
 		lignes.append(lumiere.infos())
 		lignes.append("TÊTE          %s (déplacement %.1f cm)      calcul de la lumière %.1f ms par image" % ["bouge avec les G" if tete_g else "fixe", tete_g_pos.length() * 100.0, temps_lumiere_ms])
