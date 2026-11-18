@@ -10,6 +10,12 @@ en triangles sans risquer de casser le jeu. Le jeu ne voit pas ce dossier.
    coche **Godot AI**. Ferme la fenêtre.
 4. Appuie sur **F5** (ou Lecture ▶) : la scène du labo s'ouvre.
 
+## Étape 8 : la lumière est dans le jeu
+Le système du labo est maintenant aussi dans le jeu (ouvrir le projet du jeu, F5). En plus du labo :
+le cockpit éclairé par le vrai Soleil avec les ombres des montants, la lampe du cockpit qui s'allume
+seule la nuit, le projecteur (J), la visière du casque (U : relevée, claire, teintée) et la tête qui
+bouge sous les G (I).
+
 ## Ce qu'on voit (étape 7)
 **On peut descendre jusqu'au millimètre.** L'œil va maintenant jusqu'à 5 mm du sol (avant : 1,8 m), et
 les triangles se coupent jusqu'à des rayons d'environ **1 mm**. Près du sol, on découvre :
@@ -153,3 +159,4 @@ Tout doit être vert (37 tests depuis l'étape 6).
 - Étape 5 (18/11/2026) : petite lune (vraie gravité), éclipses de Soleil et de lune avec pénombre, retard de la lumière, temps accéléré (V). 30 tests automatiques.
 - Étape 3 (18/11/2026) : le vrai Soleil à 1 UA et l'œil du pilote (pupille, adaptation, halo selon la formule d'éblouissement de la CIE, vision de nuit, couronne du Soleil visible pendant une éclipse). 17 tests automatiques.
 - Étape 6 (18/11/2026) : les étoiles (catalogue de Yale, Voie lactée), une étoile compagne qui éclaire aussi la planète, aberration et Doppler à grande vitesse (B), et la planète qui cache enfin le Soleil sous l'horizon. 37 tests automatiques.
+- Étape 8 (18/11/2026) : la lumière branchée dans le jeu (cockpit, vaisseau, lampes, casque et visière, tête sous les G, le vaisseau se pose sur le relief). 42 tests du labo, 32 tests du jeu.

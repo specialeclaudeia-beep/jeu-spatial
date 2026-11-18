@@ -10,6 +10,7 @@ extends Node3D
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
 const Commandes = preload("res://scripts/commandes.gd")
 const EcranTouches = preload("res://scripts/ecran_touches.gd")
+const LumiereJeu = preload("res://scripts/lumiere_jeu.gd")
 
 # =====================================================================
 # CONSTANTES
@@ -35,6 +36,12 @@ const TETE_LACET_MAX := deg_to_rad(130.0)     # jusqu'où on peut tourner la tê
 const TETE_HAUT_MAX := deg_to_rad(80.0)
 const TETE_BAS_MAX := deg_to_rad(50.0)
 const TETE_RETOUR := 2.0                      # vitesse du retour doux vers l'avant, stick lâché
+# tête qui bouge avec les forces G (étape 8 du système de lumière) : le cou est un ressort amorti.
+# Assis et sanglé, la tête recule d'environ 1,5 cm par g ; au plus 8 cm.
+const TETE_G_METRES_PAR_G := 0.015
+const TETE_G_MAX := 0.08
+const TETE_G_FREQUENCE := 1.5                 # Hz (oscillation propre du cou)
+const TETE_G_AMORTI := 0.7
 
 # =====================================================================
 # ÉTAT
@@ -52,6 +59,15 @@ var image_fermeture := -1
 var tete := Vector2.ZERO             # x = tête levée / baissée, y = tête tournée à gauche / à droite (radians)
 var vue_interieure := true           # true = cockpit, false = vue extérieure (3e personne)
 var oeil_pilote := OEIL_PILOTE_DEFAUT
+# système de lumière (étape 8)
+var lumiere = null                   # scripts/lumiere_jeu.gd (null : ancien affichage)
+var avec_lumiere := false
+var tete_g := true                   # la tête bouge avec les G (touche I)
+var tete_g_pos := Vector3.ZERO       # m, repère du vaisseau
+var tete_g_vit := Vector3.ZERO
+var casque: CanvasLayer              # bord du casque (vue cockpit)
+var lampe_ancienne: OmniLight3D
+var temps_lumiere_ms := 0.0          # temps de calcul du système de lumière par image (moyenne)
 
 # calotte détaillée
 var calotte_dir := Vector3.ZERO
@@ -89,10 +105,67 @@ func _ready() -> void:
 	vaisseau.gm = GRAVITE_SURFACE * RAYON_PLANETE * RAYON_PLANETE
 	vaisseau.rayon_planete = RAYON_PLANETE
 	vaisseau.placer_en_orbite(ALTITUDE_DEPART)
-	_creer_environnement()
-	_creer_planete()
 	_creer_pilote_et_cockpit()
+	_brancher_lumiere()
 	_creer_hud()
+
+
+## Étape 8 : le système de lumière (vrai Soleil, planète en rayons, œil du pilote). Sans sa partie C++,
+## le jeu garde son ancien affichage (planète lisse, Soleil de Godot).
+func _brancher_lumiere() -> void:
+	lumiere = LumiereJeu.new()
+	lumiere.name = "Lumiere"
+	add_child(lumiere)
+	avec_lumiere = lumiere.preparer(camera, RAYON_PLANETE)
+	if not avec_lumiere:
+		lumiere.queue_free()
+		lumiere = null
+		_creer_environnement()
+		_creer_planete()
+		_appliquer_vue()
+		return
+	lumiere.ajouter_objets(exterieur, pilote)
+	lumiere.ajouter_objets(cockpit, pilote)
+	# La coque passe au-dessus du cockpit, sous la verrière : elle ne doit pas lui faire d'ombre.
+	var vitre := cockpit.find_child("Cockpit_verriere", true, false) as MeshInstance3D
+	var coque := exterieur.find_child("Fuselage", true, false) as MeshInstance3D
+	if vitre and coque:
+		var b: AABB = lumiere.objets.boite(vitre, pilote)
+		b = b.grow(0.05)
+		b.position.y -= 0.6
+		b.size.y += 1.6
+		lumiere.objets.percer_ombre(coque, b, pilote)
+	if lampe_ancienne:
+		lampe_ancienne.queue_free()   # remplacée par la vraie lampe du système
+		lampe_ancienne = null
+	# le sol de la physique suit le relief de la planète dessinée
+	vaisseau.relief = lumiere.hauteur_sol
+	_creer_casque()
+	_appliquer_vue()
+
+
+## Bord du casque, vu de l'intérieur : la visière ne laisse voir qu'un grand ovale, le reste est l'intérieur
+## sombre du casque. (La couleur de la visière, elle, passe par l'œil : oeil_filtre.)
+func _creer_casque() -> void:
+	casque = CanvasLayer.new()
+	casque.layer = 0
+	add_child(casque)
+	var r := ColorRect.new()
+	r.set_anchors_preset(Control.PRESET_FULL_RECT)
+	r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sh := Shader.new()
+	sh.code = """shader_type canvas_item;
+void fragment() {
+	vec2 p = (UV - 0.5) * vec2(2.0, 2.0);
+	p.x *= 0.80;
+	p.y *= 1.10;
+	float d = length(p);
+	COLOR = vec4(0.0, 0.0, 0.0, smoothstep(1.02, 1.22, d) * 0.97);
+}"""
+	var m := ShaderMaterial.new()
+	m.shader = sh
+	r.material = m
+	casque.add_child(r)
 
 
 func _creer_environnement() -> void:
@@ -184,6 +257,7 @@ func _creer_pilote_et_cockpit() -> void:
 	lampe.light_energy = 0.25
 	lampe.omni_range = 2.0
 	cockpit.add_child(lampe)
+	lampe_ancienne = lampe
 	_appliquer_vue()
 	_animer_modele()
 
@@ -192,6 +266,19 @@ func _creer_pilote_et_cockpit() -> void:
 ## tout noir). Vue extérieure : le cockpit est caché, la coque fait de nouveau ses ombres.
 func _appliquer_vue() -> void:
 	cockpit.visible = vue_interieure
+	tete = Vector2.ZERO
+	if casque:
+		casque.visible = vue_interieure and lumiere.visiere != 0
+	if avec_lumiere:
+		# système de lumière : la coque fait toujours ses ombres (la verrière, jamais : on voit à travers)
+		for m in maillages_exterieurs:
+			var nom := String((m as Node).name).to_lower()
+			var vitre := nom.contains("verriere") and not nom.contains("cadre")
+			(m as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if vitre else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			if vitre:
+				# la verrière vue de dehors (opaque, teintée) : en vue cockpit, c'est la vitre du cockpit qu'on voit
+				(m as Node3D).visible = not vue_interieure
+		return
 	var ombre := GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if vue_interieure else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	for m in maillages_exterieurs:
 		(m as GeometryInstance3D).cast_shadow = ombre
@@ -236,7 +323,7 @@ func _creer_hud() -> void:
 	aide.anchor_top = 1.0
 	aide.anchor_bottom = 1.0
 	aide.offset_left = 16
-	aide.offset_top = -210
+	aide.offset_top = -232
 	couche.add_child(aide)
 	_ecrire_aide()
 	message = _label(28, Color(1.0, 0.45, 0.4))
@@ -264,6 +351,7 @@ func _ecrire_aide() -> void:
 		+ "%s : remettre en orbite   %s : recommencer   %s : tests   %s : cacher l'aide\n" % [c.resume("remettre_orbite"), c.resume("recommencer"), c.resume("tests"), c.resume("aide")]
 		+ "%s : ailes   %s : train d'atterrissage   %s : vue cockpit / extérieure\n" % [c.resume("ailes"), c.resume("train"), c.resume("vue")]
 		+ "Tourner la tête (ou la caméra) : %s   %s : regarder droit devant\n" % [_aide_tete(), c.resume("regard_centre")]
+		+ "%s : projecteur   %s : casque et visière   %s : tête qui bouge avec les G\n" % [c.resume("phares"), c.resume("visiere"), c.resume("tete_g")]
 		+ "%s : configurer les commandes (clavier et manette)" % c.resume("ecran_touches"))
 
 ## « stick droit » si les 4 directions de la tête sont sur le stick droit, sinon la liste.
@@ -317,6 +405,13 @@ func _lire_boutons() -> void:
 		vue_interieure = not vue_interieure
 		_appliquer_vue()
 	if Input.is_action_just_pressed("pause"): en_pause = not en_pause
+	if Input.is_action_just_pressed("tete_g"):
+		tete_g = not tete_g
+	if avec_lumiere and Input.is_action_just_pressed("phares"):
+		lumiere.projecteur = not lumiere.projecteur
+	if avec_lumiere and Input.is_action_just_pressed("visiere"):
+		lumiere.changer_visiere()
+		casque.visible = vue_interieure and lumiere.visiere != 0
 	if Input.is_action_just_pressed("aide"):
 		aide_visible = not aide_visible
 		aide.visible = aide_visible
@@ -358,7 +453,7 @@ func _bouger_tete(delta: float) -> void:
 		else:
 			tete.y = wrapf(tete.y + dy * TETE_VITESSE * delta, -PI, PI)   # dehors : on peut faire le tour
 	if vue_interieure:
-		camera.position = oeil_pilote
+		camera.position = oeil_pilote + tete_g_pos
 		camera.rotation = Vector3(tete.x, tete.y, 0.0)
 	else:
 		# caméra derrière le vaisseau, qui tourne autour de lui ; elle regarde toujours son centre
@@ -406,12 +501,60 @@ func _physics_process(delta: float) -> void:
 # =====================================================================
 func _process(delta: float) -> void:
 	_lire_boutons()
-	_bouger_tete(delta)
 	pilote.basis = Basis(vaisseau.orientation)
+	_suivre_g(delta)
+	_bouger_tete(delta)
 	_animer_modele()
-	_placer_planete()
+	if avec_lumiere:
+		_placer_lumiere(delta)
+	else:
+		_placer_planete()
 	_mettre_a_jour_hud()
 	_placer_marqueurs()
+
+
+## La tête du pilote, sur son cou (ressort amorti), recule quand le vaisseau accélère : on sent les G.
+## Elle ne touche qu'à la caméra, jamais à la physique du vaisseau.
+func _suivre_g(delta: float) -> void:
+	var cible := Vector3.ZERO
+	if tete_g and not en_pause:
+		cible = cible_tete_g(pilote.basis.inverse() * vaisseau.acceleration_ressentie)
+	var r := pas_tete_g(tete_g_pos, tete_g_vit, cible, delta)
+	tete_g_pos = r[0]
+	tete_g_vit = r[1]
+
+
+## Où la tête irait, à l'équilibre, sous l'accélération ressentie a_local (m/s², repère du vaisseau) :
+## à l'opposé de l'accélération (on est poussé dans le siège), 1,5 cm par g, au plus 8 cm.
+static func cible_tete_g(a_local: Vector3) -> Vector3:
+	return (-a_local / VaisseauPhysique.G0 * TETE_G_METRES_PAR_G).limit_length(TETE_G_MAX)
+
+
+## Un pas du cou (ressort amorti) : renvoie [position, vitesse].
+static func pas_tete_g(pos: Vector3, vit: Vector3, cible: Vector3, delta: float) -> Array:
+	var w := TAU * TETE_G_FREQUENCE
+	var dt := minf(delta, 0.05)
+	vit += (w * w * (cible - pos) - 2.0 * TETE_G_AMORTI * w * vit) * dt
+	pos += vit * dt
+	return [pos.limit_length(TETE_G_MAX), vit]
+
+
+## Étape 8 : l'affichage est centré sur l'œil (la caméra reste à l'origine, comme dans le labo) ; la
+## position de l'œil par rapport à la planète est calculée en 64 bits (centre du vaisseau + œil).
+func _placer_lumiere(delta: float) -> void:
+	var oeil_local := camera.position
+	var decalage := pilote.basis * oeil_local
+	pilote.position = -decalage
+	var oeil64 := PackedFloat64Array([vaisseau.px + float(decalage.x), vaisseau.py + float(decalage.y),
+		vaisseau.pz + float(decalage.z)])
+	var gaz_moteurs := 0.0
+	for m in vaisseau.moteurs:
+		gaz_moteurs += float(m["actuel"])
+	gaz_moteurs /= maxf(vaisseau.moteurs.size(), 1)
+	var t0 := Time.get_ticks_usec()
+	lumiere.mettre_a_jour(delta, oeil64, Vector3(vaisseau.vx, vaisseau.vy, vaisseau.vz), pilote.basis,
+		oeil_local, gaz_moteurs)
+	temps_lumiere_ms = lerpf(temps_lumiere_ms, (Time.get_ticks_usec() - t0) / 1000.0, 0.05)
 
 
 func _placer_planete() -> void:
@@ -522,6 +665,9 @@ func _mettre_a_jour_hud() -> void:
 	lignes.append("AILES         %s      TRAIN %s      VUE %s" % [_etat(vaisseau.ailes, vaisseau.ailes_consigne, "ouvertes", "repliées"),
 		_etat(vaisseau.train, vaisseau.train_consigne, "sorti", "rentré"), "cockpit" if vue_interieure else "extérieure"])
 	lignes.append("STABILISATEUR %s      TEMPS x%d%s" % ["activé" if stabilisateur else "désactivé", acc_temps, "   (PAUSE)" if en_pause else ""])
+	if avec_lumiere:
+		lignes.append(lumiere.infos())
+		lignes.append("TÊTE          %s (déplacement %.1f cm)      calcul de la lumière %.1f ms par image" % ["bouge avec les G" if tete_g else "fixe", tete_g_pos.length() * 100.0, temps_lumiere_ms])
 	hud.text = "\n".join(lignes)
 	if vaisseau.ecrase:
 		message.text = "ÉCRASÉ (impact à %.0f m/s)\nR pour recommencer" % vaisseau.vitesse_impact

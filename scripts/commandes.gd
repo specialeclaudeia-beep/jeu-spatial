@@ -53,6 +53,9 @@ const ACTIONS := [
 	["regard_haut", "Lever la tête", "", "a:3:-1"],                   # stick droit haut
 	["regard_bas", "Baisser la tête", "", "a:3:1"],                   # stick droit bas
 	["regard_centre", "Regarder droit devant", "l:67", "b:8"],        # C, R3
+	["phares", "Projecteur du vaisseau", "l:74", ""],                  # J
+	["visiere", "Casque : visière claire / solaire / sans casque", "l:85", ""],   # U
+	["tete_g", "Tête qui bouge avec les G (oui / non)", "l:73", ""],   # I
 	["tests", "Tests de physique", "p:4194332", ""],                  # F1
 	["ecran_touches", "Configurer les commandes", "p:4194333", "b:6"], # F2, Options
 ]

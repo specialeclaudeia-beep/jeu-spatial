@@ -4,6 +4,9 @@ extends Control
 
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
 const Commandes = preload("res://scripts/commandes.gd")
+const Jeu = preload("res://scripts/jeu.gd")
+const LumiereJeu = preload("res://scripts/lumiere_jeu.gd")
+const Objets = preload("res://scripts/lumiere/objets.gd")
 const R := 600000.0
 const GM := 9.81 * 600000.0 * 600000.0
 
@@ -275,6 +278,7 @@ func _lancer() -> void:
 	_tests_position_valide()
 	_tests_commandes()
 	_tests_modele_v12()
+	_tests_lumiere()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
@@ -539,3 +543,143 @@ func _tests_commandes() -> void:
 	c = Commandes.new()
 	c.charger()
 	c.appliquer()
+
+
+# =====================================================================
+# TESTS : LE SYSTÈME DE LUMIÈRE DANS LE JEU (étape 8)
+# =====================================================================
+func _tests_lumiere() -> void:
+	# 27. Le système de lumière du jeu est une copie exacte de celui du labo
+	var labo := "res://labo-lumiere/scripts/lumiere/"
+	var differents := PackedStringArray()
+	var nb := 0
+	var d := DirAccess.open(labo)
+	if d != null:
+		for f in _fichiers(labo, ""):
+			nb += 1
+			if FileAccess.get_md5(labo + f) != FileAccess.get_md5("res://scripts/lumiere/" + f):
+				differents.append(f)
+		for f in _fichiers("res://scripts/lumiere/", ""):
+			if not FileAccess.file_exists(labo + f):
+				differents.append(f + " (en trop)")
+	_resultat(differents.is_empty(), "Lumière : copie exacte du labo",
+		("%d fichiers de labo-lumiere/scripts/lumiere identiques dans scripts/lumiere." % nb) if d != null and differents.is_empty()
+		else ("Labo absent : rien à comparer." if d == null else "Différents : %s" % ", ".join(differents)))
+
+	# 28. Le sol de la physique suit le relief : posé sur une montagne de 1 234 m
+	var v = _nouveau(true)
+	v.relief = func(_x: float, _y: float, _z: float) -> float: return 1234.0
+	v.placer_en_orbite(0.0)
+	v.px = R + 1234.0 + v.hauteur_contact() + 0.3
+	v.py = 0.0
+	v.pz = 0.0
+	v.vx = 0.0
+	v.vy = 0.0
+	v.vz = 0.0
+	for i in 600:
+		v.pas(1.0 / 120.0)
+	var hauteur: float = v.distance_centre() - R - 1234.0
+	var ok28: bool = v.au_sol and not v.ecrase and absf(hauteur - v.hauteur_contact()) < 0.01 and absf(v.altitude() - v.hauteur_contact()) < 0.01
+	_resultat(ok28, "Lumière : le vaisseau se pose sur le relief dessiné",
+		"Sol à 1 234 m : posé %s, centre à %.3f m au-dessus du sol (roues : %.3f m), altitude affichée %.3f m." % [
+			"oui" if v.au_sol else "NON", hauteur, v.hauteur_contact(), v.altitude()])
+
+	# 29. La tête bouge avec les G : 3 g de poussée vers l'avant → la tête recule de 4,5 cm, sans trop osciller
+	var cible: Vector3 = Jeu.cible_tete_g(Vector3(0.0, 0.0, -3.0 * VaisseauPhysique.G0))
+	var pos := Vector3.ZERO
+	var vit := Vector3.ZERO
+	var depasse := 0.0
+	for i in 360:
+		var r: Array = Jeu.pas_tete_g(pos, vit, cible, 1.0 / 120.0)
+		pos = r[0]
+		vit = r[1]
+		depasse = maxf(depasse, pos.z - cible.z)
+	var max10: Vector3 = Jeu.cible_tete_g(Vector3(0.0, 0.0, -10.0 * VaisseauPhysique.G0))
+	var ok29: bool = absf(cible.z - 0.045) < 1e-6 and pos.distance_to(cible) < 0.002 and depasse < 0.2 * cible.z and absf(max10.length() - 0.08) < 1e-6
+	_resultat(ok29, "Lumière : la tête suit les forces G",
+		"3 g vers l'avant : la tête recule de %.1f cm (au bout de 3 s : %.1f cm, dépassement %.1f mm). À 10 g : %.0f cm au plus." % [
+			cible.z * 100.0, pos.z * 100.0, depasse * 1000.0, max10.length() * 100.0])
+
+	# 30-32 : le système complet (partie C++ nécessaire)
+	if not ClassDB.class_exists("ArbreLumiere"):
+		_resultat(false, "Lumière : partie C++", "La partie C++ (ArbreLumiere) n'est pas chargée.")
+		return
+	var scene := Node3D.new()
+	add_child(scene)
+	var cam := Camera3D.new()
+	scene.add_child(cam)
+	var l = LumiereJeu.new()
+	scene.add_child(l)
+	var pret: bool = l.preparer(cam, R)
+	var s: Vector3 = Vector3(1.0, 0.25, 0.2).normalized()
+	var jour := PackedFloat64Array([s.x * (R + 100000.0), s.y * (R + 100000.0), s.z * (R + 100000.0)])
+	l.mettre_a_jour(1.0 / 60.0, jour, Vector3.ZERO, Basis.IDENTITY, Vector3.ZERO)
+	var e_jour: float = l.eclairement_vaisseau
+	var nuit := PackedFloat64Array([-jour[0], -jour[1], -jour[2]])
+	l.mettre_a_jour(1.0 / 60.0, nuit, Vector3.ZERO, Basis.IDENTITY, Vector3.ZERO)
+	var e_nuit: float = l.eclairement_vaisseau
+	var lampe_nuit: bool = l.lampe_cockpit
+	var ok30: bool = pret and absf(e_jour - 126573.0) < 0.01 * 126573.0 and e_nuit == 0.0 and lampe_nuit
+	_resultat(ok30, "Lumière : le vrai Soleil sur le vaisseau",
+		"Côté jour, à 100 km : %d lux (attendu ≈ 126 600). Côté nuit : %d lux, la lampe du cockpit s'allume seule : %s." % [
+			roundi(e_jour), roundi(e_nuit), "oui" if lampe_nuit else "NON"])
+
+	# 31. L'œil à 2 m du vrai sol (relief compris), calculé en 64 bits
+	var g := Vector3(0.3, 0.8, -0.52).normalized()
+	var h: float = l.hauteur_sol(g.x, g.y, g.z)
+	var gx := float(g.x)
+	var gy := float(g.y)
+	var gz := float(g.z)
+	var k: float = (R + h + 2.0) / sqrt(gx * gx + gy * gy + gz * gz)   # en 64 bits (g est en 32 bits)
+	var sol := PackedFloat64Array([gx * k, gy * k, gz * k])
+	l.mettre_a_jour(1.0 / 60.0, sol, Vector3.ZERO, Basis.IDENTITY, Vector3.ZERO)
+	var ok31: bool = absf(l.altitude_oeil - 2.0) < 0.001
+	_resultat(ok31, "Lumière : altitude de l'œil au-dessus du relief",
+		"Relief ici : %.1f m. Œil placé à 2 m du sol : altitude calculée %.4f m." % [h, l.altitude_oeil])
+
+	# 32. Les matières du vaisseau passent au système, et le posemètre voit le cockpit
+	var pilote := Node3D.new()
+	scene.add_child(pilote)
+	var ext: Node3D = (load("res://modeles/vaisseau/vaisseau_exterieur.glb") as PackedScene).instantiate()
+	var cpt: Node3D = (load("res://modeles/vaisseau/cockpit.glb") as PackedScene).instantiate()
+	pilote.add_child(ext)
+	pilote.add_child(cpt)
+	var o = Objets.new()
+	o.convertir(ext, pilote)
+	o.convertir(cpt, pilote)
+	var mauvais := 0
+	var vitres := 0
+	for mi in pilote.find_children("*", "MeshInstance3D", true, false):
+		for i in (mi as MeshInstance3D).mesh.get_surface_count():
+			var m := (mi as MeshInstance3D).get_surface_override_material(i) as ShaderMaterial
+			if m == null or not m.shader.resource_path.begins_with("res://scripts/lumiere/"):
+				mauvais += 1
+			elif m.shader.resource_path.ends_with("vitre.gdshader"):
+				vitres += 1
+	var oeil_p := Vector3(0.0, 0.58, 0.38)
+	var marqueur := cpt.find_child("Oeil_pilote", true, false) as Node3D
+	if marqueur:
+		oeil_p = marqueur.position
+	var tableau: Dictionary = o.toucher(oeil_p, Vector3(0.0, -0.5, -1.0).normalized())
+	var ciel: Dictionary = o.toucher(oeil_p, Vector3(0.0, 1.0, -0.3).normalized())
+	var dessous: Dictionary = o.toucher(oeil_p, Vector3.DOWN)
+	var ok32: bool = mauvais == 0 and vitres >= 1 and o.nb_faces > 1000 and not tableau.is_empty() and ciel.is_empty() and not dessous.is_empty()
+	_resultat(ok32, "Lumière : vaisseau et cockpit dans le système",
+		"%d matières à remplacer oubliées, %d vitre(s), %d faces pour le posemètre. Regard vers le tableau de bord : %s ; vers le ciel (à travers la verrière) : %s ; Soleil sous le vaisseau caché par la coque : %s." % [
+			mauvais, vitres, o.nb_faces, "touché" if not tableau.is_empty() else "RIEN",
+			"libre" if ciel.is_empty() else "BLOQUÉ", "oui" if not dessous.is_empty() else "NON"])
+	o.liberer()
+	scene.queue_free()
+
+
+## Liste des fichiers d'un dossier et de ses sous-dossiers (chemins relatifs).
+func _fichiers(base: String, sous: String) -> PackedStringArray:
+	var res := PackedStringArray()
+	var d := DirAccess.open(base + sous)
+	if d == null:
+		return res
+	for f in d.get_files():
+		res.append(sous + f)
+	for sd in d.get_directories():
+		res.append_array(_fichiers(base, sous + sd + "/"))
+	return res

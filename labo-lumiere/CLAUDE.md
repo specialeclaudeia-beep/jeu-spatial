@@ -192,6 +192,23 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
 - Pas encore : rebonds (ombres noires), ombres projetées plus fines que 4 azimuts, lune : sa rotation est
   un `Basis` 32 bits (≈ 1 cm d'erreur au sol de la lune).
 
+## Branchement dans le jeu (étape 8)
+- `scripts/lumiere/` est copié TEL QUEL dans le jeu (`scripts/lumiere/`), un test du jeu compare les md5.
+  On change toujours le labo d'abord, on importe le labo (pour ses .uid), puis on recopie.
+  Le jeu reçoit aussi la section `[shader_globals]` du `project.godot` du labo (à recopier si elle change).
+- Nouveaux fichiers : `objets.gd` (convertit les matières du modèle Blender, posemètre du cockpit par
+  rayons dans un PhysicsServer3D à part, `percer_ombre` pour la coque sous la verrière), `objet.gdshader` /
+  `objet_double.gdshader` + `objet_commun.gdshaderinc` (tout l'éclairage dans `light()` : le
+  DirectionalLight de Godot ne sert qu'à l'ombre, ALBEDO = 1, résultat passé par l'œil dans
+  DIFFUSE_LIGHT ; passe d'ombre reconnue par `PROJECTION_MATRIX[3][3] > 0.5`), `vitre.gdshader` (reflet
+  du Soleil seulement), `lampes.gdshaderinc` (2 lampes en candelas, aussi sur la planète),
+  `objets.gdshaderinc` (profondeur log, lumière renvoyée par la planète). `oeil_filtre` = visière.
+- Côté jeu : `scripts/lumiere_jeu.gd`. Le DirectionalLight reste TOUJOURS allumé (sinon `light()` n'est
+  plus appelée et tout devient noir la nuit) ; la nuit, c'est `objets_soleil_visible` = 0.
+- Coût mesuré dans le cloud : environ 8 ms par image pour la lumière (planète 1-7 ms, posemètre 2-5 ms).
+- Pas encore : ombre du vaisseau sur le sol, ombres de la planète et de la compagne dans le cockpit,
+  lune absente du jeu, planète qui ne tourne pas, rebonds.
+
 ## Organisation
 | Chemin | Contenu |
 |---|---|

@@ -46,6 +46,10 @@ var vitesse_impact := 0.0
 # planète
 var gm := 0.0              # constante gravitationnelle × masse de la planète (m³/s²)
 var rayon_planete := 0.0   # m (0 = pas de sol)
+## Relief du sol (étape 8 du système de lumière) : fonction (x, y, z) → hauteur du sol en mètres au-dessus de
+## rayon_planete dans cette direction. Vide = sol lisse (sphère). Le jeu y branche le relief de la planète
+## dessinée (partie C++), pour que le vaisseau se pose sur le sol qu'on voit.
+var relief := Callable()
 
 # autres astres (lunes, étoiles…) : chacun = { nom, gm, x, y, z } (position en m, double précision).
 # Pour l'instant ils restent immobiles : leur propre mouvement viendra plus tard.
@@ -453,7 +457,7 @@ func ordres_stabilisateur(duree_s: float) -> Vector3:
 func _contact_sol(dt: float, g: Array) -> void:
 	var r := sqrt(px * px + py * py + pz * pz)
 	# le centre du vaisseau reste au-dessus du sol de la hauteur des roues (ou du ventre, train rentré)
-	var r_sol := rayon_planete + hauteur_contact()
+	var r_sol := rayon_planete + hauteur_sol(px, py, pz) + hauteur_contact()
 	if r >= r_sol:
 		return
 	au_sol = true
@@ -490,7 +494,14 @@ func distance_centre() -> float:
 
 
 func altitude() -> float:
-	return distance_centre() - rayon_planete
+	return distance_centre() - rayon_planete - hauteur_sol(px, py, pz)
+
+
+## Hauteur du sol (m au-dessus de rayon_planete) sous la direction (x, y, z) ; 0 sans relief.
+func hauteur_sol(x: float, y: float, z: float) -> float:
+	if relief.is_valid():
+		return float(relief.call(x, y, z))
+	return 0.0
 
 
 func vitesse() -> float:

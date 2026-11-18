@@ -18,6 +18,7 @@ render_mode unshaded, cull_disabled, skip_vertex_transform;
 
 #include "res://scripts/lumiere/oeil.gdshaderinc"
 #include "res://scripts/lumiere/compagnon.gdshaderinc"
+#include "res://scripts/lumiere/lampes.gdshaderinc"
 
 uniform sampler2D coins : filter_nearest;      // RGBA 32 bits flottants, 90 × places
 uniform sampler2D rayons : filter_nearest;     // RGBA 8 bits, 225 × places (5 texels par coin)
@@ -197,6 +198,8 @@ void fragment() {
 		e += compagnon_couleur * compagnon_eclairement * eclairage(n, sb, compagnon_direction) * compagnon_visible
 			* part_horizon(horizon_v, compagnon_lieu, compagnon_rayon_angle);
 	}
+	// Étape 8 : les lampes du vaisseau (projecteur) éclairent aussi le sol.
+	e += lampes_eclairement(pos_monde, n);
 	vec3 l = albedo * (e + lux_fond) / PI;
 	ALBEDO = oeil_vers_ecran(l + voile_v, FRAGCOORD.xy, TIME);
 	DEPTH = 1.0 - clamp(log2(max(profondeur, profondeur_pres) / profondeur_pres) / log2(profondeur_loin / profondeur_pres), 0.0, 1.0);

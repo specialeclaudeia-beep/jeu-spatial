@@ -20,6 +20,8 @@ global uniform vec3 oeil_droite;             // repère de la tête : vers la dr
 global uniform vec3 oeil_haut;               // … et vers le haut (le halo tourne avec la tête)
 global uniform vec3 soleil_direction_vue;    // direction où l'œil VOIT le Soleil (= soleil_direction, sauf
                                               // à très grande vitesse : aberration, étape 6)
+global uniform vec3 oeil_filtre;             // étape 8 : part de la lumière que laisse passer la visière du
+                                              // casque, par couleur (1 = pas de visière)
 
 // Bruit fixe par pixel, entre 0 et 1.
 float oeil_hasard(vec2 p) {
@@ -55,7 +57,8 @@ vec3 oeil_voile(vec3 d, float temps) {
 // Luminance réelle (cd/m², lumière linéaire) → couleur d'écran, comme l'œil la voit.
 // pixel = coordonnées du pixel (pour le tramage), temps = secondes (pour le grain de la nuit).
 vec3 oeil_vers_ecran(vec3 l, vec2 pixel, float temps) {
-	l = max(l, vec3(0.0));
+	// Étape 8 : toute la lumière traverse la visière avant d'entrer dans l'œil.
+	l = max(l, vec3(0.0)) * oeil_filtre;
 	// Jour : réponse des cônes (loi de Naka-Rushton), un canal par couleur.
 	vec3 x = l * oeil_gain;
 	vec3 jour = x / (x + 1.0);
