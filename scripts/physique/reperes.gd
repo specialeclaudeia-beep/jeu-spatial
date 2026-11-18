@@ -92,6 +92,24 @@ func _init() -> void:
 	proxima["lumiere_compagne"] = 0
 	systemes.append(proxima)
 
+	# --- Einstein B : Gaia BH1, le trou noir connu le plus proche (El-Badry et al. 2023, Gaia DR3 ;
+	#     masse : Nagarajan et al. 2023, ESPRESSO). 17 h 28 min 41,1 s, −0° 34′ 52″, parallaxe 2,09 mas
+	#     (1 560 al), mouvement propre −7,70 / −25,85 mas/an, vitesse radiale du système ≈ 46,6 km/s.
+	#     Un trou noir de 9,27 Soleils, éteint (rien ne tombe dedans), et une étoile jumelle du Soleil
+	#     (0,93 Soleil, 5 850 K) qui tourne autour de lui en 185 jours, à 1,4 UA (ici immobile).
+	var c := _depuis_catalogue(p_soleil, 262.171236, -0.581001, 2.09, -7.70, -25.85, 46.6)
+	var bh := _systeme("Gaia BH1", false, c[0], c[1])
+	var trou := _etoile("Gaia BH1 (trou noir)", 9.27, 0.0, 0.0, PackedFloat64Array([0.0, 0.0, 0.0]))
+	trou["trou_noir"] = true
+	# son « rayon » : l'horizon, en coordonnées isotropes (celles de la physique) : G·M / (2c²)
+	trou["rayon"] = float(trou["gm"]) / (2.0 * C * C)
+	var e3: PackedFloat64Array = c[2]
+	bh["etoiles"] = [trou, _etoile("Gaia BH1 étoile", 0.93, 0.99, 5850.0,
+		PackedFloat64Array([e3[0] * 1.40 * UA, e3[1] * 1.40 * UA, e3[2] * 1.40 * UA]))]
+	bh["lumiere_soleil"] = 1     # l'étoile jumelle du Soleil prend sa place pour la lumière
+	bh["lumiere_compagne"] = -1  # notre Soleil, au loin (invisible à l'œil nu d'ici), dans l'autre
+	systemes.append(bh)
+
 
 static func _systeme(nom: String, maison: bool, o: PackedFloat64Array, v: PackedFloat64Array) -> Dictionary:
 	var vl := sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
@@ -268,7 +286,7 @@ func etoile_proche(v) -> Array:
 		var p: PackedFloat64Array = e["p"]
 		var d := sqrt((v.px - p[0]) ** 2 + (v.py - p[1]) ** 2 + (v.pz - p[2]) ** 2)
 		if meilleure.is_empty() or d < float(meilleure[1]):
-			meilleure = [e["nom"], d, e["rayon"]]
+			meilleure = [e["nom"], d, e["rayon"], e.get("trou_noir", false)]
 	return meilleure
 
 
@@ -277,8 +295,10 @@ func etoile_proche(v) -> Array:
 func verifier(v) -> bool:
 	var proche := etoile_proche(v)
 	if not proche.is_empty() and float(proche[1]) < float(proche[2]) and not v.ecrase:
-		v.ecrase = true   # dans une étoile : brûlé
+		v.ecrase = true   # dans une étoile : brûlé (dans un trou noir : passé l'horizon)
 		v.vitesse_impact = v.vitesse()
+		if proche.size() > 3 and proche[3]:
+			v.avale = true
 	var ev := evenement_maison(v)
 	var t_m: float = ev[0]
 	var x_m: PackedFloat64Array = ev[1]
@@ -392,7 +412,13 @@ func regler_lumiere(lumiere, oeil_m: PackedFloat64Array, t_m: float) -> void:
 			oeil_m[1] + (p[1] - oeil_m[1]) * k, oeil_m[2] + (p[2] - oeil_m[2]) * k])
 		dans_emplacement[str(courant) + ":" + str(i_s)] = true
 	var i_c: int = s["lumiere_compagne"]
-	if s["maison"]:
+	if i_c < 0:
+		# pas de seconde étoile ici : notre Soleil, à sa vraie place (de très loin, un point très faible)
+		lumiere.compagne.position = systemes[0]["etoiles"][0]["p"]
+		lumiere.compagne.rayon = RAYON_SOLEIL
+		lumiere.compagne.temperature = 5772.0
+		lumiere.compagne.nom = "Soleil"
+	elif s["maison"]:
 		lumiere.compagne.position = _compagne_maison["position"]
 		lumiere.compagne.rayon = _compagne_maison["rayon"]
 		lumiere.compagne.temperature = _compagne_maison["temperature"]
@@ -460,3 +486,55 @@ func _trouver_catalogue(lumiere) -> void:
 			var donnee := Color(log(Etoiles.lux(cat.magnitude[trouve])) / log(10.0),
 				Etoiles.temperature(cat.couleur_bv[trouve]) / 10000.0, 0.0, 0.0)
 			_yale.append({"systeme": i, "etoile": k, "indice": trouve, "donnee": donnee, "d0": d0, "lg": donnee.r})
+
+
+# =====================================================================
+# EINSTEIN B : LE TROU NOIR
+# =====================================================================
+## Indice du système de Gaia BH1.
+func systeme_trou_noir() -> int:
+	for i in systemes.size():
+		for e in systemes[i]["etoiles"]:
+			if e.get("trou_noir", false):
+				return i
+	return -1
+
+
+## Saut d'essai (touche M), comme « remettre en orbite » : ce n'est pas un voyage (il faudrait
+## 1 560 ans de l'univers, même à la vitesse de la lumière). Le vaisseau est posé en orbite circulaire
+## autour de Gaia BH1, à la distance demandée (centre du trou noir), nez pointé vers lui.
+func aller_trou_noir(v, distance_m: float) -> void:
+	var j := systeme_trou_noir()
+	if j < 0:
+		return
+	if courant != j:
+		passer(v, j)
+	v.placer_en_orbite(distance_m)
+	v.orientation = Quaternion(Vector3.UP, PI * 0.5)   # l'avant (-Z) regarde vers -X : vers le trou noir
+
+
+## Trou noir du système actuel : [indice de l'étoile, G·M] ou [] s'il n'y en a pas.
+func trou_noir_courant() -> Array:
+	var ets: Array = systemes[courant]["etoiles"]
+	for k in ets.size():
+		if ets[k].get("trou_noir", false):
+			return [k, float(ets[k]["gm"])]
+	return []
+
+
+## Lumière courbée : donne au système de lumière la direction du trou noir vue de l'œil (repère de la
+## maison, comme le ciel) et sa distance (rayon de Schwarzschild), ou coupe la lentille s'il n'y en a pas.
+## oeil = l'œil dans le repère du système (physique).
+func regler_lentille(lumiere, oeil: PackedFloat64Array) -> void:
+	var t := trou_noir_courant()
+	if t.is_empty():
+		lumiere.regler_lentille(Vector3.ZERO, 0.0, 0.0)
+		return
+	var p: PackedFloat64Array = systemes[courant]["etoiles"][t[0]]["p"]
+	var r := sqrt((oeil[0] - p[0]) ** 2 + (oeil[1] - p[1]) ** 2 + (oeil[2] - p[2]) ** 2)
+	var m: float = float(t[1]) / (C * C)
+	var r_s := r * (1.0 + 0.5 * m / r) ** 2   # isotrope → Schwarzschild
+	# direction comptée dans le repère du système (nombres petits, donc précis) : les axes sont les mêmes
+	# que ceux de la maison (l'écart d'aberration, 50 km/s, fait 0,01° : invisible)
+	var d := Vector3(p[0] - oeil[0], p[1] - oeil[1], p[2] - oeil[2]).normalized()
+	lumiere.regler_lentille(d, 2.0 * m, r_s)

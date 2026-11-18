@@ -7,6 +7,7 @@ shader_type sky;
 #include "res://scripts/lumiere/oeil.gdshaderinc"
 #include "res://scripts/lumiere/etoiles.gdshaderinc"
 #include "res://scripts/lumiere/compagnon.gdshaderinc"
+#include "res://scripts/lumiere/lentille.gdshaderinc"
 
 const float ASSOMBRISSEMENT_BORD = 0.6;   // le bord du Soleil est plus sombre que son centre
 const float T_FOND = 4500.0;              // couleur moyenne de la lumière de la Voie lactée (K)
@@ -35,6 +36,10 @@ void sky() {
 		vec4 ab = aberration(d, -oeil_vitesse);
 		vec3 n = ab.xyz;
 		float dop = 1.0 / ab.w;
+		// Einstein B : près d'un trou noir, d'où vient VRAIMENT cette lumière ? (rayon suivi à l'envers)
+		vec4 lo = lentille_origine(n);
+		bool ombre_trou_noir = lo.w < 0.5;   // aucune lumière ne vient d'ici : l'ombre du trou noir
+		n = ombre_trou_noir ? d : lo.xyz;
 		float pix = oeil_pixel_angle * dop;
 		float a = soleil_rayon_angle;
 		vec3 l = doppler_surface(vec3(1.0), T_FOND, dop) * fond_galaxie(n);
@@ -51,6 +56,9 @@ void sky() {
 		if (compagnon_eclairement > 0.0) {
 			l += doppler_surface(compagnon_couleur, compagnon_temperature, dop)
 				* astre_rond(n, compagnon_direction, compagnon_rayon_angle, compagnon_luminance / (1.0 - ASSOMBRISSEMENT_BORD / 3.0), pix);
+		}
+		if (ombre_trou_noir) {
+			l = vec3(0.0);
 		}
 		l += oeil_voile(d, TIME);
 		COLOR = oeil_vers_ecran(l, FRAGCOORD.xy, TIME);

@@ -593,12 +593,35 @@ const HAUTEUR_DECOUPE := 30.0    # m : en dessous de cette altitude, on découpe
 
 
 func pas(dt: float) -> void:
+	# Einstein B : près d'un astre très dense (trou noir), tout va très vite : pas découpé pour que
+	# chaque morceau fasse au plus 1/200 du temps qu'il faut pour tomber ou passer.
+	var n_dense := _morceaux_dense(dt)
+	if n_dense > 1:
+		for i in n_dense:
+			_pas_un(dt / n_dense)
+			if ecrase:
+				return
+		return
 	if rayon_planete > 0.0 and dt > PAS_SOL and altitude() < HAUTEUR_DECOUPE + vitesse() * dt:
 		var n := mini(int(ceil(dt / PAS_SOL)), 2000)
 		for i in n:
 			_pas_un(dt / n)
 	else:
 		_pas_un(dt)
+
+
+const DENSE_U := 1.0e-6        # au-delà de G·M/(r·c²) = 10⁻⁶ (bord du Soleil : 2·10⁻⁶), on découpe
+const MORCEAUX_DENSE_MAX := 400
+
+
+func _morceaux_dense(dt: float) -> int:
+	if gm == 0.0 or rayon_planete > 0.0:
+		return 1
+	var r := distance_centre()
+	if gm / (r * C * C) < DENSE_U:
+		return 1
+	var t_car := r / (vitesse() + sqrt(gm / r))
+	return clampi(int(ceil(dt / (0.005 * t_car))), 1, MORCEAUX_DENSE_MAX)
 
 
 func _pas_un(dt: float) -> void:
@@ -643,22 +666,34 @@ func _pas_un(dt: float) -> void:
 
 	# 3. Translation : méthode de Verlet (stable pour les orbites), appliquée à la vitesse propre u
 	#    (relativité restreinte). À petite vitesse, c'est exactement l'ancien calcul de Newton.
+	#    Einstein B : la gravité n'est plus une force, c'est la courbure de l'espace-temps (voir _pousser_u).
 	_lire_vitesse()
-	var inv_g0 := 1.0 / gamma()
-	var phi0 := potentiel(px, py, pz)
+	var m0 := metrique(px, py, pz)
+	var rythme0 := float(m0[0]) / gamma()
 	var h := dt * 0.5
-	_pousser_u(gravite(px, py, pz), a_p, h)
-	var ig := 1.0 / gamma()
-	px += ux * ig * dt
-	py += uy * ig * dt
-	pz += uz * ig * dt
-	_pousser_u(gravite(px, py, pz), a_p, h)
+	_pousser_u(gravite(px, py, pz), a_p, h, m0)
+	# vitesse « de coordonnées » : ce que les règles et les horloges lointaines mesurent. Près d'un
+	# astre, l'espace est étiré (A) et le temps ralenti (N) : on y avance de u·N/(A·Γ) par seconde.
+	var kx := float(m0[0]) / (float(m0[1]) * gamma())
+	px += ux * kx * dt
+	py += uy * kx * dt
+	pz += uz * kx * dt
+	var m1 := metrique(px, py, pz)
+	if float(m1[0]) <= HORIZON_N:
+		_tomber_dans_trou_noir()
+		return
+	# pendant ce trajet, c'est la quantité de mouvement p = A·u qui reste la même (géodésique)
+	var ka := float(m0[1]) / float(m1[1])
+	ux *= ka
+	uy *= ka
+	uz *= ka
+	_pousser_u(gravite(px, py, pz), a_p, h, m1)
 	_ecrire_vitesse()
-	# horloges : celle du pilote avance de dt / γ (vitesse) × √(1 + 2Φ/C²) (gravité)
-	var inv_g1 := 1.0 / gamma()
-	var phi := 0.5 * (phi0 + potentiel(px, py, pz))
+	# horloges : celle du pilote avance de dt × N / Γ (N = ralentissement du temps par la gravité,
+	# Γ = par la vitesse). Formule exacte d'Einstein (métrique de Schwarzschild), même près d'un trou noir.
+	var rythme1 := float(m1[0]) / gamma()
 	temps_univers += dt
-	temps_pilote += dt * 0.5 * (inv_g0 + inv_g1) * sqrt(maxf(0.0, 1.0 + 2.0 * phi / (C * C)))
+	temps_pilote += dt * 0.5 * (rythme0 + rythme1)
 
 	# ce que sent le pilote : poussée et sol (la gravité ne se sent pas). Posé, le sol pousse ≈ 1 g.
 	acceleration_ressentie = a_p
@@ -903,15 +938,25 @@ func _depuis_planete(v: Vector3) -> Vector3:
 # =====================================================================
 # RELATIVITÉ
 # =====================================================================
-## Change la vitesse propre pendant h secondes (temps de l'univers) :
-##   gravité : du/dt = γ·g (vu de la planète, la gravité tire comme Newton, sans jamais faire dépasser C ;
-##             l'étape B la remplacera par la vraie courbure de l'espace-temps d'Einstein) ;
-##   poussée : a_p = poussée / masse, ce que sent le pilote dans son vaisseau. Vue de la planète, elle est
-##             « transformée de Lorentz » : du/dτ = a_p + (γ − 1)(a_p·n)n, n = direction du mouvement,
-##             et du/dt = du/dτ / γ. Dans l'axe du mouvement, la vitesse propre gagne a_p par seconde
-##             du PILOTE ; de côté, a_p/γ.
-func _pousser_u(g: Array, a_p: Vector3, h: float) -> void:
+## Einstein B : LA GRAVITÉ D'EINSTEIN. Chaque astre courbe l'espace-temps autour de lui (solution exacte
+## de Schwarzschild, 1916, écrite en coordonnées « isotropes ») :
+##     ds² = −N² c² dt² + A² (dx² + dy² + dz²),   N = (1 − U/2) / (1 + U/2),   A = (1 + U/2)²,
+## avec U = Σ G·M / (r·c²) (somme sur les astres ; exact pour un astre seul, très précis pour plusieurs
+## tant que U est petit). N < 1 : le temps passe moins vite près d'un astre. A > 1 : l'espace y est étiré.
+## Le vaisseau suit une « géodésique » de cet espace-temps (le chemin le plus droit possible) : plus de
+## force de gravité. On suit p = A·u (u = vitesse propre mesurée sur place), qui change de :
+##   gravité : dp/dt = g · [Γ / (1 + U/2)² + N·u² / (c²·(1 + U/2)·Γ)]    (g = gravité de Newton)
+##             À petite vitesse et loin des trous noirs, c'est exactement Newton (dp/dt = g). Le second
+##             terme double la déviation de la lumière (Einstein, 1915) ; les deux ensemble font tourner
+##             lentement les orbites (avance du périhélie, comme celle de Mercure).
+##   poussée : a_p = poussée / masse, ce que sent le pilote. Vue sur place, elle est « transformée de
+##             Lorentz » : du/dτ = a_p + (Γ − 1)(a_p·n)n, n = direction du mouvement, puis × N/Γ (dτ/dt).
+## m = metrique(x, y, z) au point où l'on est (évite de la recalculer).
+func _pousser_u(g: Array, a_p: Vector3, h: float, m: Array) -> void:
 	var gam := gamma()
+	var n_lapse := float(m[0])
+	var a_esp := float(m[1])
+	var q := float(m[2])     # 1 + U/2
 	var axp := a_p.x
 	var ayp := a_p.y
 	var azp := a_p.z
@@ -925,9 +970,61 @@ func _pousser_u(g: Array, a_p: Vector3, h: float) -> void:
 		axp += k * nx
 		ayp += k * ny
 		azp += k * nz
-	ux += (gam * float(g[0]) + axp / gam) * h
-	uy += (gam * float(g[1]) + ayp / gam) * h
-	uz += (gam * float(g[2]) + azp / gam) * h
+	# du/dt = (dp/dt) / A ; u2/C² écrit à part pour rester précis à petite vitesse
+	var kg := (gam / (q * q) + n_lapse * u2 / (C * C * q * gam)) / a_esp
+	var kp := n_lapse / gam
+	ux += (kg * float(g[0]) + axp * kp) * h
+	uy += (kg * float(g[1]) + ayp * kp) * h
+	uz += (kg * float(g[2]) + azp * kp) * h
+
+
+## Métrique au point (x, y, z) : [N (rythme du temps), A (étirement de l'espace), 1 + U/2, U].
+## U = G·M / (r·c²) : 7·10⁻¹⁰ au sol de la Terre, 2·10⁻⁶ au bord du Soleil, 2 à l'horizon d'un trou noir.
+func metrique(x: float, y: float, z: float) -> Array:
+	var u_pot := -potentiel(x, y, z) / (C * C)
+	var q := 1.0 + 0.5 * u_pot
+	return [(1.0 - 0.5 * u_pot) / q, q * q, q, u_pot]
+
+
+## Rythme du temps ici (sans la vitesse) : secondes d'une horloge immobile ici pour une seconde loin de
+## tout astre. 1 − 7·10⁻¹⁰ sur la Terre (le GPS doit en tenir compte), 0 à l'horizon d'un trou noir.
+func rythme_gravite() -> float:
+	return float(metrique(px, py, pz)[0])
+
+
+## Rythme de l'horloge du pilote : secondes du pilote par seconde de l'univers (gravité ET vitesse).
+func rythme_pilote() -> float:
+	return rythme_gravite() / gamma()
+
+
+## Le temps « s'arrête » à l'horizon d'un trou noir (N = 0) : en dessous de ce rythme, le vaisseau est
+## considéré comme passé de l'autre côté (vu de loin, il ne finit jamais d'y tomber ; pour le pilote,
+## il le traverse en un instant, et plus rien ne peut en ressortir, pas même la lumière).
+const HORIZON_N := 1.0e-3
+var avale := false   # tombé dans un trou noir
+
+
+func _tomber_dans_trou_noir() -> void:
+	avale = true
+	ecrase = true
+	vitesse_impact = C
+	ux = 0.0
+	uy = 0.0
+	uz = 0.0
+	_ecrire_vitesse()
+
+
+## Marée (m/s² par mètre) : différence de gravité entre le nez et la queue du vaisseau, par mètre.
+## 2·G·M/r³ pour l'astre le plus proche (Newton suffit : c'est elle qui étire le vaisseau).
+func maree() -> float:
+	var m := 0.0
+	if gm != 0.0:
+		var r := distance_centre()
+		m = 2.0 * gm / (r * r * r)
+	for a in autres_astres:
+		var d := sqrt((px - float(a["x"])) ** 2 + (py - float(a["y"])) ** 2 + (pz - float(a["z"])) ** 2)
+		m = maxf(m, 2.0 * float(a["gm"]) / (d * d * d))
+	return m
 
 
 ## Si quelqu'un a changé la vitesse v de l'extérieur (placer en orbite, tests, pilote auto…),
@@ -1076,6 +1173,16 @@ func orbite() -> Dictionary:
 	return {"peri": a * (1.0 - ecc) - rayon_planete, "apo": a * (1.0 + ecc) - rayon_planete, "excentricite": ecc}
 
 
+## Vitesse d'une orbite circulaire à la distance r (coordonnées isotropes), mesurée sur place, selon
+## Einstein : v² = G·M / (R·(1 − 2·G·M/(R·c²))), R = r·(1 + G·M/(2·r·c²))² (rayon « de Schwarzschild »).
+## Loin des trous noirs, c'est √(G·M/r), comme Newton. Plus d'orbite possible sous 3 fois le rayon de
+## l'horizon (R < 6·G·M/c²) : la vitesse dépasserait la moitié de celle de la lumière et l'orbite tomberait.
+func vitesse_circulaire(r: float) -> float:
+	var m := gm / (C * C)
+	var r_s := r * (1.0 + 0.5 * m / r) ** 2
+	return sqrt(gm / (r_s * maxf(1.0 - 2.0 * m / r_s, 1e-9)))
+
+
 ## Place le vaisseau en orbite circulaire, nez dans le sens du déplacement.
 func placer_en_orbite(altitude_m: float) -> void:
 	var r := rayon_planete + altitude_m
@@ -1084,8 +1191,9 @@ func placer_en_orbite(altitude_m: float) -> void:
 	pz = 0.0
 	vx = 0.0
 	vy = 0.0
-	vz = -sqrt(gm / r)
+	vz = -vitesse_circulaire(r)
 	_lire_vitesse()
+	avale = false
 	temps_univers = 0.0
 	temps_pilote = 0.0
 	orientation = Quaternion.IDENTITY   # l'avant (-Z) est déjà dans le sens de la vitesse
