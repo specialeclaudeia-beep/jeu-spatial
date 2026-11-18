@@ -76,6 +76,7 @@ var part_visible := 1.0              # disque du Soleil visible depuis le vaisse
 var ombre_relief := 1.0
 var eclairement_vaisseau := 0.0      # lux du Soleil reçus par le vaisseau, face à lui
 var visiere := 1                     # 0 sans casque, 1 claire, 2 solaire
+var vue_interieure := true           # vue extérieure : la caméra n'est pas dans le casque (pas de visière)
 var projecteur := false
 var lampe_cockpit := false
 var _premier := true
@@ -233,7 +234,7 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	# (toujours allumée : sans elle, Godot ne calcule plus la lumière des objets, même celle des lampes)
 
 	_regler_lampes(base, oeil_local, gaz)
-	var filtre: Vector3 = VISIERES[visiere]
+	var filtre: Vector3 = VISIERES[visiere_portee()]
 	rs.global_shader_parameter_set("oeil_filtre", filtre)
 
 	# L'œil : posemètre (planète, ciel, cockpit), puis adaptation.
@@ -356,7 +357,7 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis
 			var champ := 4.0 * asin(sin(demi_h) * sin(demi_v))
 			en_plus_disque = Soleil.luminance_moyenne() * PI * alpha * alpha / champ * vis * PART_DISQUE_ADAPTATION
 	# La visière filtre toute la lumière qui arrive à l'œil : il s'y habitue.
-	var f: Vector3 = VISIERES[visiere]
+	var f: Vector3 = VISIERES[visiere_portee()]
 	var t := 0.2126 * f.x + 0.7152 * f.y + 0.0722 * f.z
 	return Oeil.luminance_scene(echantillons, poids, en_plus_disque) * t
 
@@ -376,7 +377,7 @@ func _mettre_a_jour_reflets(s: Vector3, e: float, alpha: float, vis: float, base
 	var e_visage := 0.5 * _e_autre + 0.5 * PI * reflets.luminance_cockpit()
 	if not _soleil_cache:
 		e_visage += Reflets.eclairement_visage(devant, s, e * vis)
-	reflet_visiere = Reflets.reflet_visiere(visiere, filtre, e_visage)
+	reflet_visiere = Reflets.reflet_visiere(visiere_portee(), filtre, e_visage)
 	RenderingServer.global_shader_parameter_set("oeil_reflet_visiere", reflet_visiere)
 	# L'œil voit aussi ce voile : il s'y habitue.
 	luminance_vue += 0.2126 * reflet_visiere.x + 0.7152 * reflet_visiere.y + 0.0722 * reflet_visiere.z
@@ -384,6 +385,11 @@ func _mettre_a_jour_reflets(s: Vector3, e: float, alpha: float, vis: float, base
 
 
 ## Visière suivante : claire → solaire → sans casque → claire.
+## La visière devant l'œil : aucune en vue extérieure (la caméra n'est pas dans le casque).
+func visiere_portee() -> int:
+	return visiere if vue_interieure else 0
+
+
 func changer_visiere() -> void:
 	visiere = [1, 2, 0][visiere]
 
