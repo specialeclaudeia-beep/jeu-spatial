@@ -290,6 +290,12 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
   lampes du vaisseau sur le sol calculée sans relativité ; la taille des triangles suit D au centre de la planète
   seulement (bords d'une planète immense un peu plus grossiers ou plus fins).
 
+- **Image fantôme du Soleil dans la visière** : `oeil_image_fantome` (oeil.gdshaderinc, appelée par
+  `oeil_voile`) + global `oeil_fantome` (vec4, `Reflets.fantome_visiere`) : deux réflexions (face intérieure
+  ≈ 5 % puis face extérieure ≈ 4,9 % ou film d'or 55/46/28 %), image symétrique du Soleil par rapport à
+  l'axe du regard, floue (image virtuelle à 7,5 cm, œil réglé à l'infini : rayon = rayon de pupille / 7,5 cm,
+  ~1°). Claire : 0,25 % du Soleil ; or : ~2,5 %, dorée. Rien sans casque ni dans le labo (global à 0).
+
 ## Organisation
 | Chemin | Contenu |
 |---|---|

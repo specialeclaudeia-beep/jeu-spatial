@@ -115,6 +115,10 @@ oeil_filtre={
 "type": "vec3",
 "value": Vector3(1, 1, 1)
 }
+oeil_fantome={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
 oeil_reflet_visiere={
 "type": "vec3",
 "value": Vector3(0, 0, 0)
