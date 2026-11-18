@@ -227,7 +227,7 @@ func _calculer_arret(v, duree_s: float) -> void:
 	# poussée que le pilote peut demander (pour décider) : vol vertical ou gros moteurs
 	var a_t: float
 	if urgence:
-		a_t = float(v.POUSSEE_MOTEUR) * 5.0 / v.masse
+		a_t = v.poussee_moteur() * 5.0 / v.masse
 	else:
 		a_t = UTILISATION_V * v.poussee_verticale_max / v.masse
 
@@ -420,7 +420,7 @@ func _vitesse_impact_prevue(v, e: Etat, gros_moteurs: bool, marge: float) -> flo
 	var poussee: Vector3 = Basis(v.orientation) * v.direction_poussee()
 	if gros_moteurs:
 		# le nez doit monter jusqu'à la verticale, tuyère à plat
-		var a_m: float = float(v.POUSSEE_MOTEUR) * 5.0 / v.masse
+		var a_m: float = v.poussee_moteur() * 5.0 / v.masse
 		cap = UTILISATION_URGENCE * (a_m - e.g_sol)
 		var nez: Vector3 = Basis(v.orientation) * Vector3(0.0, 0.0, -1.0)
 		t = T_REPONSE_MOTEURS + T_PIVOT * nez.angle_to(e.haut)
