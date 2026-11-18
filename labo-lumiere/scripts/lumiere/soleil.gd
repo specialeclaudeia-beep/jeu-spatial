@@ -23,6 +23,13 @@ func distance(p: PackedFloat64Array) -> float:
 	return sqrt(dx * dx + dy * dy + dz * dz)
 
 
+## Retard de la lumière (s) : la lumière du Soleil qui arrive en p est partie il y a distance / c
+## (8 min 19 s à 1 UA). Le Soleil ne bouge pas dans le repère fixe du labo : on le voit donc bien
+## à sa place, mais sa lumière a ce retard (Q « retard de la lumière des astres »).
+func retard(p: PackedFloat64Array) -> float:
+	return distance(p) / 299792458.0
+
+
 ## Direction (longueur 1) du point p vers le Soleil, calculée en 64 bits.
 func direction(p: PackedFloat64Array) -> Vector3:
 	var dx := position[0] - p[0]

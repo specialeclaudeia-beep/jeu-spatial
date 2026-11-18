@@ -705,8 +705,12 @@ PackedFloat32Array ArbreLumiere::tampon_instances(const Basis &R, const PackedFl
 // ---------------------------------------------------------------------------------------------
 
 PackedFloat32Array ArbreLumiere::posemetre(const PackedFloat64Array &p_camera, const PackedFloat32Array &p_axes,
-		double p_tan_h, double p_tan_v, const Vector3 &p_soleil, double p_eclairement, double p_fond) const {
+		double p_tan_h, double p_tan_v, const Vector3 &p_soleil, double p_eclairement, double p_fond,
+		const PackedFloat64Array &p_occulteur, double p_soleil_angle) const {
 	const int NX = 16, NY = 9;
+	const bool avec_occulteur = p_occulteur.size() >= 4 && p_occulteur[3] > 0.0;
+	Vec3d occ_c = avec_occulteur ? Vec3d(p_occulteur[0], p_occulteur[1], p_occulteur[2]) : Vec3d();
+	double occ_r = avec_occulteur ? p_occulteur[3] : 0.0;
 	std::vector<double> somme(NX * NY, 0.0), aire(NX * NY, 0.0);
 	Vec3d c(p_camera[0], p_camera[1], p_camera[2]);
 	Vec3d f = Vec3d(p_axes[0], p_axes[1], p_axes[2]).normalized();
@@ -740,6 +744,9 @@ PackedFloat32Array ArbreLumiere::posemetre(const PackedFloat64Array &p_camera, c
 			double sb = std::sqrt(std::max(1.0 - cb * cb, 0.0));
 			double direct = cs > sb ? cs : (cs < -sb ? 0.0 : (cs + sb) * (cs + sb) / (4.0 * sb + 1e-6));
 			double y_al = 0.2126 * al[0] + 0.7152 * al[1] + 0.0722 * al[2];
+			if (avec_occulteur && direct > 0.0) {
+				direct *= part_soleil_visible(c + v, occ_c, occ_r, s, p_soleil_angle);
+			}
 			double l = y_al * p_eclairement * direct / 3.14159265358979323846;
 			double ap = a_rayon * vers_oeil / (z * z);
 			somme[j * NX + i] += l * ap;
@@ -748,8 +755,10 @@ PackedFloat32Array ArbreLumiere::posemetre(const PackedFloat64Array &p_camera, c
 	}
 	PackedFloat32Array out;
 	out.resize(NX * NY);
+	derniere_couverture.resize(NX * NY);
 	for (int k = 0; k < NX * NY; k++) {
 		double cov = std::min(1.0, aire[k] / aire_case);
+		derniere_couverture.set(k, (float)cov);
 		double moy = aire[k] > 0 ? somme[k] / aire[k] : 0.0;
 		out[k] = (float)(moy * cov + p_fond * (1.0 - cov));
 	}
@@ -797,6 +806,38 @@ void ArbreLumiere::configurer(double p_rayon, int64_t p_graine, int p_places) {
 void ArbreLumiere::regler_seuils(double p_couper, double p_fusion) {
 	seuil_couper = std::max(p_couper, 0.5);
 	seuil_fusion = std::clamp(p_fusion, 0.25, seuil_couper);
+}
+
+// Part d'un disque de rayon a cachée par un disque de rayon b dont le centre est à e (même formule
+// que soleil.gd et planete.gdshader).
+double ArbreLumiere::recouvrement(double a, double b, double e) {
+	if (e >= a + b) return 0.0;
+	if (e <= b - a) return 1.0;
+	if (e <= a - b) return (b * b) / (a * a);
+	double a2 = a * a, b2 = b * b;
+	double u = std::clamp((e * e + a2 - b2) / (2.0 * e * a), -1.0, 1.0);
+	double w = std::clamp((e * e + b2 - a2) / (2.0 * e * b), -1.0, 1.0);
+	double aire = a2 * std::acos(u) + b2 * std::acos(w)
+			- 0.5 * std::sqrt(std::max((-e + a + b) * (e + a - b) * (e - a + b) * (e + a + b), 0.0));
+	return std::clamp(aire / (3.14159265358979323846 * a2), 0.0, 1.0);
+}
+
+double ArbreLumiere::part_soleil_visible(const Vec3d &p, const Vec3d &c, double r, const Vec3d &s, double a) {
+	Vec3d v = c - p;
+	double dc = v.length();
+	if (dc <= r) return 0.0;
+	double cs = std::clamp(v.dot(s) / dc, -1.0, 1.0);
+	double e = std::acos(cs);
+	double b = std::asin(std::min(r / dc, 1.0));
+	if (e >= a + b) return 1.0;
+	return 1.0 - recouvrement(a, b, e);
+}
+
+double ArbreLumiere::part_visible(const PackedFloat64Array &p, const PackedFloat64Array &o, const Vector3 &s,
+		double a) const {
+	if (p.size() < 3 || o.size() < 4) return 1.0;
+	return part_soleil_visible(Vec3d(p[0], p[1], p[2]), Vec3d(o[0], o[1], o[2]), o[3],
+			Vec3d(s.x, s.y, s.z).normalized(), a);
 }
 
 double ArbreLumiere::hauteur_sol(const PackedFloat64Array &p) const {
@@ -892,7 +933,10 @@ void ArbreLumiere::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("donnees_rayons"), &ArbreLumiere::donnees_rayons);
 	ClassDB::bind_method(D_METHOD("donnees_coins"), &ArbreLumiere::donnees_coins);
 	ClassDB::bind_method(D_METHOD("a_change"), &ArbreLumiere::a_change);
-	ClassDB::bind_method(D_METHOD("posemetre", "camera", "axes", "tan_h", "tan_v", "soleil", "eclairement", "fond"), &ArbreLumiere::posemetre);
+	ClassDB::bind_method(D_METHOD("posemetre", "camera", "axes", "tan_h", "tan_v", "soleil", "eclairement", "fond",
+			"occulteur", "soleil_angle"), &ArbreLumiere::posemetre, DEFVAL(PackedFloat64Array()), DEFVAL(0.004652));
+	ClassDB::bind_method(D_METHOD("couverture"), &ArbreLumiere::couverture);
+	ClassDB::bind_method(D_METHOD("part_visible", "point", "occulteur", "soleil", "soleil_angle"), &ArbreLumiere::part_visible);
 	ClassDB::bind_method(D_METHOD("hauteur_sol", "direction"), &ArbreLumiere::hauteur_sol);
 	ClassDB::bind_method(D_METHOD("nb_morceaux"), &ArbreLumiere::nb_morceaux);
 	ClassDB::bind_method(D_METHOD("nb_rayons"), &ArbreLumiere::nb_rayons);

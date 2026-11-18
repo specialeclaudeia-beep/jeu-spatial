@@ -108,8 +108,22 @@ public:
 	bool a_change();
 
 	// Le « posemètre » de l'œil : luminance moyenne (cd/m²) de 16 × 9 cases de l'écran.
+	// Étape 5 : occulteur = [x, y, z, rayon] d'un astre qui peut cacher le Soleil (repère de cette
+	// planète, m ; vide = aucun) et soleil_angle = rayon apparent du Soleil (rad) : chaque rayon
+	// reçoit seulement la part du disque solaire qu'il voit (ombre et pénombre d'une éclipse).
 	PackedFloat32Array posemetre(const PackedFloat64Array &p_camera, const PackedFloat32Array &p_axes,
-			double p_tan_h, double p_tan_v, const Vector3 &p_soleil, double p_eclairement, double p_fond) const;
+			double p_tan_h, double p_tan_v, const Vector3 &p_soleil, double p_eclairement, double p_fond,
+			const PackedFloat64Array &p_occulteur = PackedFloat64Array(), double p_soleil_angle = 0.004652) const;
+	// Part de chaque case (0 à 1) couverte par cette planète au dernier posemètre : sert à mettre
+	// deux astres l'un devant l'autre (la lune devant la planète, par exemple).
+	PackedFloat32Array couverture() const { return derniere_couverture; }
+	// Part du disque du Soleil (0 à 1) vue depuis le point p quand une sphère (centre c, rayon r) peut
+	// le cacher. s = direction du Soleil, a = son rayon apparent (rad). Recouvrement de deux disques.
+	static double part_soleil_visible(const lumiere::Vec3d &p, const lumiere::Vec3d &c, double r,
+			const lumiere::Vec3d &s, double a);
+	static double recouvrement(double a, double b, double e);
+	double part_visible(const PackedFloat64Array &p_point, const PackedFloat64Array &p_occulteur,
+			const Vector3 &p_soleil, double p_soleil_angle) const;
 
 	// Relief (m au-dessus du rayon de la planète) sous une direction, au détail le plus fin.
 	double hauteur_sol(const PackedFloat64Array &p_direction) const;
@@ -147,6 +161,7 @@ private:
 	double relief_max = 0;
 	double seuil_couper = 8.0;
 	double seuil_fusion = 6.0;
+	mutable PackedFloat32Array derniere_couverture;
 
 	// Arbre.
 	std::unordered_map<uint64_t, std::unique_ptr<lumiere::Morceau>> cache;
