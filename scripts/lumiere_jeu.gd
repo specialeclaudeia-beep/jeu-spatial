@@ -103,6 +103,15 @@ var _premier := true
 var _e_autre := 0.0                  # lux venus d'ailleurs que du Soleil sur le cockpit (dernier posemètre)
 var _soleil_cache := false           # Soleil caché par la coque, vu de l'œil
 var reflet_visiere := Vector3.ZERO   # étape 9 : voile renvoyé par la visière (cd/m²)
+## Temps de chaque partie du calcul (ms, dernière image) : pour trouver ce qui ralentit.
+var ms_parties := {}
+const POSE_CHAQUE := 4             # posemètre réparti sur 4 images
+var _pose_compte := 0
+var _pose_echantillons := PackedFloat32Array()
+var _pose_cases := PackedFloat32Array()
+var _pose_directions := PackedVector3Array()
+var _pose_poids := PackedFloat32Array()
+var _t_us := 0
 var ms_reflets := 0.0                # temps de calcul des reflets (ms, dernière image)
 # rotation de la planète et lune (donnés par la physique à chaque image)
 var angle_planete := 0.0             # rad : de combien la planète a tourné autour de Y
@@ -272,6 +281,7 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 		oeil_local: Vector3, gaz := 0.0) -> void:
 	temps += delta
 	pos_oeil = oeil64
+	_t_us = Time.get_ticks_usec()
 	var rel64 := PackedFloat64Array([-oeil64[0], -oeil64[1], -oeil64[2]])
 	var d := sqrt(oeil64[0] * oeil64[0] + oeil64[1] * oeil64[1] + oeil64[2] * oeil64[2])
 	altitude_oeil = d - rayon - hauteur_sol(oeil64[0], oeil64[1], oeil64[2])
@@ -306,8 +316,10 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	if lune:
 		var o := _dans_repere(rot_planete, pos_lune[0], pos_lune[1], pos_lune[2])
 		planete.occulteur = PackedFloat64Array([o[0], o[1], o[2], RAYON_LUNE])
+	_partie("préparation")
 	planete.mettre_a_jour(camera, oeil_planete, rel64, temps, chrono,
 		Vector4(rel_lune.x, rel_lune.y, rel_lune.z, RAYON_LUNE if lune else 0.0))
+	_partie("planète")
 	if lune:
 		lune.profondeur_pres = PRES
 		lune.profondeur_loin = loin
@@ -318,6 +330,7 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 		lune.mettre_a_jour(camera, oeil_lune, PackedFloat64Array([rel_lune.x, rel_lune.y, rel_lune.z]), temps,
 			chrono_lune, Vector4(rel.x, rel.y, rel.z, rayon))
 
+	_partie("lune")
 	# Le Soleil vu du vaisseau : direction, éclairement, part visible (planète + relief proche).
 	var s: Vector3 = soleil.direction(oeil64)
 	var e: float = soleil.eclairement(oeil64)
@@ -327,6 +340,7 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 		# Deux astres peuvent cacher le Soleil : on retire la part cachée par chacun (éclipse par la lune).
 		part_visible = clampf(part_visible + soleil.part_visible(oeil64, pos_lune, RAYON_LUNE) - 1.0, 0.0, 1.0)
 	ombre_relief = _ombre_relief(oeil64, s, alpha) if part_visible > 0.0 else 0.0
+	_partie("ombre du relief")
 	var vis := part_visible * ombre_relief
 	eclairement_vaisseau = e * vis
 	var sc: Vector3 = compagne.direction(oeil64)
@@ -362,13 +376,17 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	lumiere_soleil.basis = Basis.looking_at(-s, Vector3.UP if absf(s.y) < 0.99 else Vector3.RIGHT)
 	# (toujours allumée : sans elle, Godot ne calcule plus la lumière des objets, même celle des lampes)
 
+	_partie("Soleil et ciel")
 	_regler_lampes(base, oeil_local, gaz)
+	_partie("lampes")
 	var filtre: Vector3 = VISIERES[visiere_portee()]
 	rs.global_shader_parameter_set("oeil_filtre", filtre)
 
 	# L'œil : posemètre (planète, ciel, cockpit), puis adaptation.
 	luminance_vue = _poser(rel, s, e, alpha, vis, ec * vis_c, sc, base, oeil_local)
+	_partie("posemètre")
 	_mettre_a_jour_reflets(s, e, alpha, vis, base, oeil_local, filtre)
+	_partie("reflets")
 	if _premier:
 		oeil.equilibrer(luminance_vue)
 		_premier = false
@@ -379,6 +397,13 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	rs.global_shader_parameter_set("oeil_droite", b.x)
 	rs.global_shader_parameter_set("oeil_haut", b.y)
 	rs.global_shader_parameter_set("oeil_pixel_angle", deg_to_rad(camera.fov) / maxf(get_viewport().get_visible_rect().size.y, 1.0))
+	_partie("œil")
+
+
+func _partie(nom: String) -> void:
+	var t := Time.get_ticks_usec()
+	ms_parties[nom] = (t - _t_us) / 1000.0
+	_t_us = t
 
 
 ## Part visible d'une étoile (direction s, rayon apparent a) derrière la planète, vue de p.
@@ -438,19 +463,6 @@ func _regler_lampes(base: Basis, oeil_local: Vector3, gaz: float) -> void:
 func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis: float, sc: Vector3,
 		base: Basis, oeil_local: Vector3) -> float:
 	var taille := get_viewport().get_visible_rect().size
-	var cases := _posemetre_astre(planete, oeil_planete, s, e, alpha, ec_vis, sc)
-	if lune:
-		# Deux astres : celui de devant cache celui de derrière, case par case (comme le labo).
-		var cov_p: PackedFloat32Array = planete.couverture()
-		var cases_l := _posemetre_astre(lune, oeil_lune, s, e, alpha, ec_vis, sc)
-		var cov_l: PackedFloat32Array = lune.couverture()
-		var d_lune := Vector3(pos_lune[0] - pos_oeil[0], pos_lune[1] - pos_oeil[1], pos_lune[2] - pos_oeil[2]).length()
-		var lune_devant := d_lune < rel.length()
-		for k in cases.size():
-			if lune_devant:
-				cases[k] = cases_l[k] - FOND_CIEL * (1.0 - cov_l[k]) + (1.0 - cov_l[k]) * cases[k]
-			else:
-				cases[k] = cases[k] - FOND_CIEL * (1.0 - cov_p[k]) + (1.0 - cov_p[k]) * cases_l[k]
 	var inv := base.inverse()
 	var s_local := inv * s
 	# Lumière moyenne venue d'ailleurs que du Soleil sur une surface du cockpit (lux).
@@ -469,21 +481,25 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis
 		var devant := -camera.global_transform.basis.z
 		e_oeil = e * vis * Oeil.part_dans_le_champ(devant.dot(s))
 	RenderingServer.global_shader_parameter_set("soleil_eclairement_oeil", e_oeil)
-	var echantillons := PackedFloat32Array()
-	var poids := PackedFloat32Array()
+	# Les 16 × 9 cases du posemètre coûtent cher (rayons sur la planète, la lune et le cockpit) : l'œil
+	# s'adapte en plusieurs dixièmes de seconde, on les refait donc seulement une image sur POSE_CHAQUE.
+	# Le travail est réparti : planète et lune à la 1re image, puis 1/4 des rangées du cockpit par image.
+	var premiere := _pose_echantillons.is_empty()
+	if premiere or _pose_compte == 0:
+		_pose_cases = _cases_astres(rel, s, e, alpha, ec_vis, sc)
+	if premiere:
+		_pose_echantillons.resize(144)
+		_pose_directions.resize(144)
+		_pose_poids.resize(144)
 	for j in 9:
-		for i in 16:
-			var u := (i + 0.5) / 16.0 * 2.0 - 1.0
-			var v := (j + 0.5) / 9.0 * 2.0 - 1.0
-			var dir := camera.project_ray_normal(Vector2((u + 1.0) * 0.5 * taille.x, (v + 1.0) * 0.5 * taille.y))
-			var l: float = cases[j * 16 + i]
-			if objets.nb_faces > 0:
-				var lv: float = objets.luminance_vue(oeil_local, inv * dir, s_local, e * vis, e_autre)
-				if lv >= 0.0:
-					l = lv
-			l += Oeil.voile(e_oeil, rad_to_deg(dir.angle_to(s)))
-			echantillons.append(l)
-			poids.append(0.05 + exp(-(u * u + v * v) / (2.0 * 0.2 * 0.2)))   # le regard compte le plus
+		if premiere or j % POSE_CHAQUE == _pose_compte:
+			_rangee_posemetre(j, vis, e, inv, oeil_local, s_local, e_autre, taille)
+	_pose_compte = (_pose_compte + 1) % POSE_CHAQUE
+	# Le halo de l'œil (voile), lui, suit le regard à chaque image.
+	var echantillons := _pose_echantillons.duplicate()
+	if e_oeil > 0.0:
+		for k in echantillons.size():
+			echantillons[k] += Oeil.voile(e_oeil, rad_to_deg(_pose_directions[k].angle_to(s)))
 	var en_plus_disque := 0.0
 	var devant := -camera.global_transform.basis.z
 	if devant.dot(s) > 0.0 and not soleil_cache:
@@ -496,7 +512,42 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis
 	# La visière filtre toute la lumière qui arrive à l'œil : il s'y habitue.
 	var f: Vector3 = VISIERES[visiere_portee()]
 	var t := 0.2126 * f.x + 0.7152 * f.y + 0.0722 * f.z
-	return Oeil.luminance_scene(echantillons, poids, en_plus_disque) * t
+	return Oeil.luminance_scene(echantillons, _pose_poids, en_plus_disque) * t
+
+
+## Les 16 × 9 cases du posemètre tirées de la planète et de la lune (sans le cockpit ni le halo).
+func _cases_astres(rel: Vector3, s: Vector3, e: float, alpha: float, ec_vis: float, sc: Vector3) -> PackedFloat32Array:
+	var cases := _posemetre_astre(planete, oeil_planete, s, e, alpha, ec_vis, sc)
+	if lune:
+		# Deux astres : celui de devant cache celui de derrière, case par case (comme le labo).
+		var cov_p: PackedFloat32Array = planete.couverture()
+		var cases_l := _posemetre_astre(lune, oeil_lune, s, e, alpha, ec_vis, sc)
+		var cov_l: PackedFloat32Array = lune.couverture()
+		var d_lune := Vector3(pos_lune[0] - pos_oeil[0], pos_lune[1] - pos_oeil[1], pos_lune[2] - pos_oeil[2]).length()
+		var lune_devant := d_lune < rel.length()
+		for k in cases.size():
+			if lune_devant:
+				cases[k] = cases_l[k] - FOND_CIEL * (1.0 - cov_l[k]) + (1.0 - cov_l[k]) * cases[k]
+			else:
+				cases[k] = cases[k] - FOND_CIEL * (1.0 - cov_p[k]) + (1.0 - cov_p[k]) * cases_l[k]
+	return cases
+
+
+## Une rangée (16 cases) du posemètre : l'astre, ou le cockpit s'il est devant.
+func _rangee_posemetre(j: int, vis: float, e: float, inv: Basis, oeil_local: Vector3, s_local: Vector3,
+		e_autre: float, taille: Vector2) -> void:
+	for i in 16:
+		var u := (i + 0.5) / 16.0 * 2.0 - 1.0
+		var v := (j + 0.5) / 9.0 * 2.0 - 1.0
+		var dir := camera.project_ray_normal(Vector2((u + 1.0) * 0.5 * taille.x, (v + 1.0) * 0.5 * taille.y))
+		var l: float = _pose_cases[j * 16 + i]
+		if objets.nb_faces > 0:
+			var lv: float = objets.luminance_vue(oeil_local, inv * dir, s_local, e * vis, e_autre)
+			if lv >= 0.0:
+				l = lv
+		_pose_echantillons[j * 16 + i] = l
+		_pose_directions[j * 16 + i] = dir
+		_pose_poids[j * 16 + i] = 0.05 + exp(-(u * u + v * v) / (2.0 * 0.2 * 0.2))   # le regard compte le plus
 
 
 ## Posemètre d'un astre éclairé par les deux étoiles (la partie C++ n'en connaît qu'une à la fois).
