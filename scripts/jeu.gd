@@ -183,23 +183,31 @@ func _mesurer(delta: float) -> void:
 	_mesure.somme += delta
 	_mesure.pire = maxf(_mesure.pire, delta)
 	_mesure.lumiere += temps_lumiere_ms
+	var vp := get_viewport().get_viewport_rid()
+	_mesure.gpu += RenderingServer.viewport_get_measured_render_time_gpu(vp)
+	_mesure.dessin_cpu += RenderingServer.viewport_get_measured_render_time_cpu(vp)
+	_mesure.jeu += Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
+	_mesure.physique += Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
 	if avec_lumiere:
 		for k in lumiere.ms_parties:
 			_mesure.parties[k] = _mesure.parties.get(k, 0.0) + lumiere.ms_parties[k]
 	if _mesure.t >= 13.0:
-		var nom: String = ["vue cockpit", "vue extérieure"][phase]
+		var nom: String = PHASES_MESURE[phase]
 		var ligne := "MESURE %s : %.0f images/s en moyenne, pire image %.1f ms, lumière %.1f ms par image" % [
 			nom, _mesure.n / _mesure.somme, _mesure.pire * 1000.0, _mesure.lumiere / _mesure.n]
 		var detail := PackedStringArray()
 		for k in _mesure.parties:
 			detail.append("%s %.1f" % [k, _mesure.parties[k] / _mesure.n])
 		ligne += "\n   détail (ms) : " + ", ".join(detail)
+		ligne += "\n   carte graphique %.1f ms, préparation du dessin %.1f ms, scripts %.1f ms, physique %.1f ms, fenêtre %s" % [
+			_mesure.gpu / _mesure.n, _mesure.dessin_cpu / _mesure.n, _mesure.jeu / _mesure.n, _mesure.physique / _mesure.n,
+			str(get_viewport().get_visible_rect().size)]
 		print(ligne)
 		_mesure.texte += ligne + "\n"
-		if phase == 0:
-			_mesure.merge({"phase": 1, "t": 0.0, "n": 0, "somme": 0.0, "pire": 0.0, "lumiere": 0.0, "parties": {}}, true)
-			vue_interieure = false
-			_appliquer_vue()
+		if phase + 1 < PHASES_MESURE.size():
+			_mesure.merge({"phase": phase + 1, "t": 0.0, "n": 0, "somme": 0.0, "pire": 0.0, "lumiere": 0.0, "parties": {},
+				"gpu": 0.0, "dessin_cpu": 0.0, "jeu": 0.0, "physique": 0.0}, true)
+			_phase_mesure(phase + 1)
 		else:
 			var f := FileAccess.open("user://mesure.txt", FileAccess.WRITE)
 			if f:
@@ -207,10 +215,26 @@ func _mesurer(delta: float) -> void:
 			get_tree().quit()
 
 
+const PHASES_MESURE := ["vue cockpit", "vue extérieure", "vue extérieure sans ombres", "vue extérieure, image à 70 %",
+	"vue cockpit, image à 70 % sans ombres"]
+
+
+func _phase_mesure(phase: int) -> void:
+	vue_interieure = phase == 0 or phase == 4
+	_appliquer_vue()
+	if avec_lumiere and lumiere.lumiere_soleil:
+		lumiere.lumiere_soleil.shadow_enabled = phase < 2
+	get_viewport().scaling_3d_scale = 0.7 if phase >= 3 else 1.0
+	if phase == 4 and avec_lumiere and lumiere.lumiere_soleil:
+		lumiere.lumiere_soleil.shadow_enabled = false
+
+
 func _ready() -> void:
 	if "--mesure" in OS.get_cmdline_user_args():
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
-		_mesure = {"phase": 0, "t": 0.0, "n": 0, "somme": 0.0, "pire": 0.0, "lumiere": 0.0, "parties": {}, "texte": ""}
+		RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
+		_mesure = {"phase": 0, "t": 0.0, "n": 0, "somme": 0.0, "pire": 0.0, "lumiere": 0.0, "parties": {}, "texte": "",
+			"gpu": 0.0, "dessin_cpu": 0.0, "jeu": 0.0, "physique": 0.0}
 		call_deferred("_debut_mesure")
 	commandes = Commandes.new()
 	commandes.charger()      # réglages de la dernière partie (sinon : disposition par défaut)
@@ -949,8 +973,7 @@ func _physics_process(delta: float) -> void:
 # AFFICHAGE
 # =====================================================================
 func _debut_mesure() -> void:
-	vue_interieure = true
-	_appliquer_vue()
+	_phase_mesure(0)
 
 
 func _process(delta: float) -> void:
