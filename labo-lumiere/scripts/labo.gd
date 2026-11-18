@@ -156,6 +156,13 @@ func _ready() -> void:
 	var monde := WorldEnvironment.new()
 	monde.environment = env
 	add_child(monde)
+	# planete.gdshader ajoute le Soleil direct dans light() (pour l'ombre du vaisseau dans le jeu) :
+	# il faut une lumière de Godot pour que light() soit appelée. Ici, sans ombre (aucun vaisseau).
+	var lumiere_godot := DirectionalLight3D.new()
+	lumiere_godot.name = "LumiereGodot"
+	lumiere_godot.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY
+	lumiere_godot.shadow_enabled = false
+	add_child(lumiere_godot)
 
 	planete = Planete.new()
 	planete.name = "Planete"

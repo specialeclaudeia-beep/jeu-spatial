@@ -184,6 +184,11 @@ public:
 	double eclairage_rayon(const lumiere::Morceau &m, int t, const lumiere::Vec3d &p, const lumiere::Vec3d &s,
 			bool avec_occ, const lumiere::Vec3d &occ_c, double occ_r, double angle, lumiere::Vec3d &n,
 			float al[3]) const;
+	// Rebonds de la lumière sur le sol (Q38) : voir arbre_lumiere.cpp.
+	static double rebond_lieu(double cos_penche, double longueur, const float hz[lumiere::NB_AZIMUTS],
+			double haut_soleil, double albedo);
+	static double rebond_test(double p_cos_penche, double p_longueur, const PackedFloat32Array &p_horizons,
+			double p_haut_soleil, double p_albedo);
 	static double part_sous_horizon(const lumiere::Vec3d &up, const lumiere::Vec3d &t1, const lumiere::Vec3d &t2,
 			const float h[lumiere::NB_AZIMUTS], const lumiere::Vec3d &s, double a);
 	PackedFloat64Array centre_morceau(int64_t p_adresse);      // 3 nombres + rayon englobant

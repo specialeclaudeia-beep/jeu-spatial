@@ -402,7 +402,17 @@ func _creer_pilote_et_cockpit() -> void:
 func _appliquer_vue() -> void:
 	cockpit.visible = vue_interieure
 	for n in caches_en_cockpit:
-		(n as Node3D).visible = not vue_interieure
+		if avec_lumiere:
+			# Système de lumière : ces pièces restent là pour leur ombre sur le sol, mais on ne les
+			# dessine pas en vue cockpit (elles boucheraient la vue du pilote).
+			(n as Node3D).visible = true
+			var mode := GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY if vue_interieure else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			for m in (n as Node).find_children("*", "GeometryInstance3D", true, false):
+				(m as GeometryInstance3D).cast_shadow = mode
+			if n is GeometryInstance3D:
+				(n as GeometryInstance3D).cast_shadow = mode
+		else:
+			(n as Node3D).visible = not vue_interieure
 	# en vue cockpit, les informations sont sur les écrans du tableau de bord ; dehors, en surimpression
 	if hud != null:
 		hud.visible = not vue_interieure
@@ -415,6 +425,8 @@ func _appliquer_vue() -> void:
 		for m in maillages_exterieurs:
 			var nom := String((m as Node).name).to_lower()
 			var vitre := nom.contains("verriere") and not nom.contains("cadre")
+			if (m as GeometryInstance3D).cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY and not vitre:
+				continue   # pièce du nez cachée en vue cockpit (voir plus haut) : elle garde son ombre
 			(m as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if vitre else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 			if vitre:
 				# la verrière vue de dehors (opaque, teintée) : en vue cockpit, c'est la vitre du cockpit qu'on voit
