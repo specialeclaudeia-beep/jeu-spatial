@@ -160,7 +160,7 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
   Mise à 0 si < 1/10 pixel. Le ciel fait l'aberration À L'ENVERS par pixel (d'où vient sa lumière au repos),
   luminance × D⁴ × eff(D·T)/eff(T), couleur du corps noir à D·T. Les étoiles : direction penchée, éclat
   × D² × eff(D·T)/eff(T). Le halo du Soleil suit `soleil_direction_vue` (oeil.gdshaderinc).
-  PAS ENCORE : planète et lune non déformées à grande vitesse (et leur lumière pas décalée).
+  Einstein A2 (fait) : planète et lune déformées aussi, voir plus bas.
 
 ## Petite échelle jusqu'au millimètre (étape 7)
 - **64 bits partout** dans `labo.gd` : le centre de la planète vu de l'œil (`rel64`, donné à
@@ -265,6 +265,24 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
   librement dans l'axe. Le sol peut tourner (`omega_planete`, `angle_planete`, relief donné dans le repère
   de la planète). Constat : train arrière étroit (84 cm), ressorts souples, centre de gravité à 1,55 m :
   le vaisseau se couche dès ~3,5° de pente de côté.
+
+## Einstein A2 : planète et lune vues à grande vitesse
+- `planete.gdshader` (vertex) : chaque coin est déplacé là où l'œil qui va à `oeil_vitesse` reçoit sa lumière
+  (`aberration()` d'etoiles.gdshaderinc, inclus), à D × la distance (événement d'émission vu dans le repère
+  de l'œil). `doppler_v` = `doppler_surface(1, T_SOLEIL, D)` multiplie toute la lumière renvoyée (direct et
+  reste), pas le halo de l'œil. L'éclairage, les ombres et `VERTEX` (ombre du vaisseau) restent sur la vraie
+  position. Uniform `corps_noir` posé par `planete.gd` (table partagée).
+- `planete.gd` : `vitesse_oeil` (fraction de c, repère d'affichage), `champ_repos()` = champ donné à la
+  partie C++ : le cercle qui entoure l'écran, ramené « au repos » (3 points, l'aberration garde les cercles) ;
+  au-delà de 80° de rayon, moitié du ciel tournée vers la planète (tous les axes = direction du centre).
+  Hauteur en pixels × 1/D au centre (taille VUE des triangles). Posemètre : mesuré au repos (cercle ≤ 85°),
+  puis chaque case renvoyée où l'œil la voit (`_cases_vues`, poids angle solide / D², luminance × D⁴ eff).
+- Labo et jeu : `planete.vitesse_oeil` (et la lune) posés AVANT `mettre_a_jour` ; plan lointain / `affichage_loin`
+  × γ(1 + β). Essai labo : touche B (direction = où l'on regarde). Tests : `_test_champ_repos`,
+  `_test_planete_vitesse`, `_test_image_planete_vitesse`. Captures : /mnt/project-files/einstein-a2/.
+- Limites : rotation de Thomas ignorée ; carte du ciel des reflets (étape 9) pas aberrée ; lumière des
+  lampes du vaisseau sur le sol calculée sans relativité ; la taille des triangles suit D au centre de la planète
+  seulement (bords d'une planète immense un peu plus grossiers ou plus fins).
 
 ## Organisation
 | Chemin | Contenu |
