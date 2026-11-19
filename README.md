@@ -48,6 +48,8 @@ Disposition par défaut :
 | projecteur du vaisseau (allumer / éteindre) | J | — (à choisir avec F2) |
 | visière du casque : relevée, claire, teintée | U | — (à choisir avec F2) |
 | tête qui bouge avec les G (oui / non) | I | — (à choisir avec F2) |
+| toile de l'espace : la courbure d'Einstein (oui / non) | Y | — (à choisir avec F2) |
+| saut d'essai vers le trou noir Gaia BH1 | M | — (à choisir avec F2) |
 | tests de physique | F1 (Échap pour revenir) | Rond pour revenir |
 | configurer les commandes | F2 | Options |
 
@@ -133,12 +135,26 @@ ou couper la poussée, le désactive.
   Soleil ; les métaux reflètent leur entourage et la lumière rebondit dans le cockpit.
   Vaisseau v25 : écrans, voyants, lueurs et jets des moteurs passent aussi par la lumière (vraie
   luminance en cd/m², vue par l'œil). En vue extérieure, pas de visière (la caméra n'est pas dans le casque).
+- **Gravité d'Einstein** (programme Einstein, étape B) : la gravité n'est plus une force mais la courbure de
+  l'espace-temps (solution exacte de Schwarzschild pour chaque astre). Le vaisseau suit le chemin le plus droit
+  de cet espace courbé : à petite vitesse et loin des trous noirs c'est Newton, près d'un astre dense les
+  orbites tournent (avance du périhélie), la lumière est déviée deux fois plus que selon Newton, le temps
+  ralentit (ligne EINSTEIN des instruments). Vrai trou noir : Gaia BH1 (9,27 Soleils, à 1 560 années-lumière,
+  avec son étoile jumelle du Soleil) ; touche M = saut d'essai en orbite à 50 000 km. Près de lui, le ciel est
+  vraiment courbé : ombre noire, étoiles repoussées, deux images de chaque étoile, anneau d'Einstein (calcul
+  des rayons à l'envers, `scripts/physique/lentille.gd`). L'étoile jumelle éblouit l'œil comme le Soleil : pour
+  voir les étoiles courbées, il faut que l'œil s'habitue au noir (sans casque, cockpit à l'ombre). Touche Y :
+  la « toile de l'espace », l'entonnoir de Flamm (vraie forme de l'espace autour de l'astre), exagéré quand il
+  est trop petit pour être vu (le facteur est affiché), couleur = ralentissement du temps. Passer l'horizon du
+  trou noir : on ne revient pas (R pour recommencer).
 - Pas de carburant. Pas encore d'atmosphère (phase 4 de la feuille de route).
 - Marqueurs : (o) = direction où l'on va, (x) = direction d'où l'on vient.
 
 ## Organisation
 - `scripts/physique/vaisseau_physique.gd` : toute la physique (indépendante de l'affichage).
 - `scripts/physique/reperes.gd` : les systèmes d'étoile, leurs repères et les transformations de Lorentz entre eux.
+- `scripts/physique/lentille.gd` : Einstein B, la lumière courbée par un trou noir (tables pour le ciel et les étoiles).
+- `scripts/einstein/toile.gd` : Einstein B, la « toile de l'espace » (touche Y).
 - `scripts/jeu.gd` : affichage (modèle 3D, vues, animation des ailes et du train), instruments.
 - `modeles/vaisseau/` : le vaisseau (`vaisseau_exterieur.glb`), le cockpit (`cockpit.glb`) et les positions
   des propulseurs. Pour une nouvelle version du modèle, il suffit de remplacer ces fichiers (mêmes noms).

@@ -292,6 +292,7 @@ func _lancer() -> void:
 	_tests_v25()
 	_tests_relativite()
 	_tests_reperes()
+	_tests_einstein()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
@@ -1485,10 +1486,13 @@ func _tests_relativite() -> void:
 
 	# R6. Horloge au fond d'un puits de gravité (relativité générale) : au repos à une distance r d'un astre
 	#     très dense, le temps passe √(1 − 2GM/(r·C²)) fois moins vite. Ici 2GM/(rC²) = 0,2 → 0,894.
+	#     Einstein B : la physique compte en coordonnées « isotropes » (r) ; le rayon de Schwarzschild
+	#     (celui de la formule) y vaut R = r·(1 + G·M/(2·r·C²))².
 	v = _nouveau(false)
 	var r6 := 1.0e9
 	v.gm = 0.1 * r6 * c * c
-	v.px = r6
+	var m6: float = v.gm / (c * c)
+	v.px = r6 * (1.0 - m6 / r6 + sqrt(1.0 - 2.0 * m6 / r6)) / 2.0   # là, R = 1e9 m : 2GM/(R·C²) = 0,2
 	v.pas(1e-4)
 	var f6: float = v.temps_pilote / v.temps_univers
 	var ok6: bool = absf(f6 - sqrt(0.8)) < 1e-6
@@ -1770,3 +1774,220 @@ func _tests_reperes() -> void:
 	jeu.free()
 	_resultat(ligne.begins_with("REPÈRE") and ligne.contains("Alpha du Centaure") and ligne.contains("heure de la maison"),
 		"Repères : affichage", ligne)
+
+
+# =====================================================================
+# EINSTEIN B : LA GRAVITÉ D'EINSTEIN
+# =====================================================================
+## Un vaisseau seul près d'un trou noir de la masse de Gaia BH1 (9,27 Soleils).
+func _pres_trou_noir():
+	var v = _nouveau(false)
+	v.gm = 9.27 * Reperes.GM_SOLEIL
+	return v
+
+
+## Angle du point le plus proche (périastre), affiné par une parabole sur 3 points (r, angle).
+func _sommet(a0: float, a1: float, a2: float, r0: float, r1: float, r2: float) -> float:
+	var d := r0 - 2.0 * r1 + r2
+	if d == 0.0:
+		return a1
+	var h := 0.5 * (r0 - r2) / d   # en pas, par rapport au point du milieu
+	return a1 + h * 0.5 * (a2 - a0)
+
+
+func _tests_einstein() -> void:
+	var c: float = VaisseauPhysique.C
+	var Lentille = load("res://scripts/physique/lentille.gd")
+
+	# B1. Avance du périhélie (comme Mercure, mais 100 000 fois plus vite) : une orbite allongée autour
+	#     d'un trou noir ne se referme pas, elle tourne de 6π·G·M / (C²·a·(1 − e²)) à chaque tour.
+	var v = _pres_trou_noir()
+	var m: float = v.gm / (c * c)
+	var rs := 2.0 * m
+	var a_n := 100.0 * rs
+	var e_n := 0.3
+	v.px = a_n * (1.0 - e_n)
+	v.vz = -sqrt(v.gm * (1.0 + e_n) / (a_n * (1.0 - e_n)))
+	v.gamma()
+	var angles := []
+	var r_min := INF
+	var r_max := 0.0
+	var hist := []   # [angle déroulé, r] des 3 derniers points
+	var ang := 0.0
+	var ang_prec := atan2(-v.pz, v.px)
+	var dt := 2.0e-4
+	var t_max := 4.0 * TAU * sqrt(a_n * a_n * a_n / v.gm)
+	var t := 0.0
+	while t < t_max and angles.size() < 4:
+		v.pas(dt)
+		t += dt
+		var a_cour := atan2(-v.pz, v.px)
+		ang += wrapf(a_cour - ang_prec, -PI, PI)
+		ang_prec = a_cour
+		var r: float = v.distance_centre()
+		r_min = minf(r_min, r)
+		r_max = maxf(r_max, r)
+		hist.append([ang, r])
+		if hist.size() > 3:
+			hist.pop_front()
+		if hist.size() == 3 and hist[1][1] < hist[0][1] and hist[1][1] < hist[2][1]:
+			angles.append(_sommet(hist[0][0], hist[1][0], hist[2][0], hist[0][1], hist[1][1], hist[2][1]))
+	var avance := 0.0
+	var ok1 := false
+	var attendu1 := 0.0
+	if angles.size() >= 3:
+		# rayons de Schwarzschild des points extrêmes, pour la formule
+		var rp: float = r_min * (1.0 + 0.5 * m / r_min) ** 2
+		var ra: float = r_max * (1.0 + 0.5 * m / r_max) ** 2
+		var a1 := 0.5 * (rp + ra)
+		var e1 := (ra - rp) / (ra + rp)
+		attendu1 = 6.0 * PI * m / (a1 * (1.0 - e1 * e1))
+		avance = ((angles[angles.size() - 1] - angles[0]) / (angles.size() - 1)) - TAU
+		ok1 = absf(avance / attendu1 - 1.0) < 0.05
+	_resultat(ok1, "Einstein : l'orbite tourne (avance du périhélie)",
+		"Orbite allongée (e = 0,3) à 100 fois l'horizon de Gaia BH1 : le point le plus proche avance de %.4f rad par tour (formule d'Einstein %.4f rad, %d passages). Pour Mercure, la même formule donne 43″ par siècle." % [avance, attendu1, angles.size()])
+
+	# B2. La lumière courbée : un vaisseau presque aussi rapide que la lumière (γ = 100 000) qui frôle le
+	#     trou noir est dévié comme un rayon de lumière : 2·r_s / b (Einstein 1915 ; Newton aurait la moitié).
+	v = _pres_trou_noir()
+	var b2 := 300.0 * rs
+	var l2 := 60.0 * b2
+	v.px = -l2
+	v.pz = b2
+	v.ux = 1.0e5 * c
+	v._ecrire_vitesse()
+	var t2 := 0.0
+	while v.px < l2 and t2 < 10.0:
+		v.pas(2.0e-3)
+		t2 += 2.0e-3
+	var dev := atan2(-v.vz, v.vx)
+	var lent = Lentille.new()
+	var dev_lumiere: float = lent.deviation_infini(b2, rs)
+	# il manque la fin du trajet (au-delà de ±60 b) : (b/L)/1 de 2r_s/b environ, retiré de l'attendu
+	var manque := 2.0 * rs / b2 * (1.0 - l2 / sqrt(l2 * l2 + b2 * b2))
+	var att2 := dev_lumiere - manque
+	var ok2: bool = absf(dev / att2 - 1.0) < 0.005 and absf(dev_lumiere / (2.0 * rs / b2) - 1.0) < 0.01
+	_resultat(ok2, "Einstein : la lumière est déviée deux fois plus que selon Newton",
+		"Passage à %s km (300 fois l'horizon) : déviation %.6f rad ; rayon de lumière (calcul du ciel) %.6f rad ; Einstein 2·r_s/b = %.6f ; Newton r_s/b = %.6f." % [Jeu._nombre(b2 / 1000.0), dev, att2, 2.0 * rs / b2, rs / b2])
+
+	# B3. Le temps près du trou noir : une horloge immobile à R (rayon de Schwarzschild) bat
+	#     √(1 − r_s/R) fois moins vite. Au sol de la planète du jeu : 5 µs de moins par jour environ.
+	v = _pres_trou_noir()
+	var ok3 := true
+	var det3 := ""
+	for k in [1.5, 3.0, 10.0, 1000.0]:
+		var r_aire: float = k * rs
+		# isotrope correspondant
+		v.px = 0.5 * (r_aire - m + sqrt(r_aire * r_aire - 2.0 * m * r_aire))
+		v.py = 0.0
+		v.pz = 0.0
+		var n3: float = v.rythme_gravite()
+		var att3 := sqrt(1.0 - 1.0 / k)
+		ok3 = ok3 and absf(n3 - att3) < 1e-9
+		det3 += "%s fois l'horizon : %.6f (attendu %.6f)   " % [str(k), n3, att3]
+	var w3 = _nouveau(true)
+	w3.px = R
+	var jour := (1.0 - w3.rythme_gravite()) * 86400.0
+	ok3 = ok3 and absf(jour / (GM / (R * c * c) * 86400.0) - 1.0) < 1e-3
+	_resultat(ok3, "Einstein : le temps ralentit près du trou noir",
+		det3 + "Au sol de la planète du jeu : %.2f µs de moins par jour." % (jour * 1e6))
+
+	# B4. Tomber dans le trou noir : lâché sans vitesse à 20 fois l'horizon, le vaisseau franchit
+	#     l'horizon (pour le pilote, en 1/80 de seconde) et ne peut plus revenir.
+	v = _pres_trou_noir()
+	v.px = 20.0 * rs
+	var t4 := 0.0
+	while not v.ecrase and t4 < 0.1:
+		v.pas(1.0e-4)
+		t4 += 1.0e-4
+	# chute libre d'Einstein (cycloïde) : r = R0/2·(1 + cos η), τ = √(R0³/(8·G·M))·(η + sin η) ;
+	# R0 = rayon de Schwarzschild du départ, jusqu'à l'horizon (r = r_s)
+	var r0_4: float = 20.0 * rs * (1.0 + 0.5 * m / (20.0 * rs)) ** 2
+	var eta := acos(2.0 * rs / r0_4 - 1.0)
+	var att4 := sqrt(pow(r0_4, 3.0) / (8.0 * v.gm)) * (eta + sin(eta))
+	_resultat(v.avale and v.ecrase and is_finite(v.px) and absf(v.temps_pilote / att4 - 1.0) < 0.01,
+		"Einstein : on tombe dans le trou noir",
+		"Lâché à 20 fois l'horizon : %s après %.2f ms pour le pilote (Einstein : %.2f ms), %.2f ms vus de loin. Position valide : %s." % ["avalé" if v.avale else "pas tombé (erreur)", v.temps_pilote * 1000.0, att4 * 1000.0, v.temps_univers * 1000.0, "oui" if is_finite(v.px) else "non"])
+
+	# B5. Orbite circulaire d'Einstein (vitesse corrigée) autour du trou noir : elle reste ronde.
+	v = _pres_trou_noir()
+	v.placer_en_orbite(30.0 * rs)
+	var r5: float = v.distance_centre()
+	var p5 := TAU * sqrt(pow(r5, 3.0) / v.gm)
+	var mn := INF
+	var mx := 0.0
+	var t5 := 0.0
+	while t5 < p5:
+		v.pas(2.0e-4)
+		t5 += 2.0e-4
+		mn = minf(mn, v.distance_centre())
+		mx = maxf(mx, v.distance_centre())
+	_resultat((mx - mn) / r5 < 2e-3 and not v.ecrase, "Einstein : orbite circulaire autour du trou noir",
+		"À 30 fois l'horizon (%.0f km), vitesse %.3f c : le rayon varie de %.3f %% en un tour (la vitesse de Newton donnerait une orbite allongée)." % [r5 / 1000.0, v.beta(), (mx - mn) / r5 * 100.0])
+
+	# B6. L'image du trou noir : ombre (3√3/2 r_s), anneau d'Einstein, deux images de chaque étoile.
+	var lt = Lentille.new()
+	var d6 := 1800.0 * rs
+	lt.calculer(d6, rs)
+	var ombre_att := 1.5 * sqrt(3.0) * rs / d6 * sqrt(1.0 - rs / d6)
+	var th_e := sqrt(2.0 * rs / d6)   # rayon de l'anneau d'Einstein (étoiles très lointaines)
+	var psi6 := th_e
+	var img1: Array = lt._image(lt.thetas, psi6)
+	var img2: Array = lt._image(lt.thetas, -psi6)
+	var att_1 := 0.5 * (psi6 + sqrt(psi6 * psi6 + 4.0 * th_e * th_e))
+	var att_2 := 0.5 * (sqrt(psi6 * psi6 + 4.0 * th_e * th_e) - psi6)
+	var loin: Array = lt._image(lt.thetas, PI * 0.99)
+	# les formules de la « lentille mince » (att_1, att_2) sont approchées (déviation faible) : ~1 à 3 %
+	# près ici ; le calcul exact est vérifié en suivant le rayon de chaque image jusqu'à l'étoile.
+	var retour1: float = lt.angle_origine(img1[0], d6, rs)
+	var retour2: float = lt.angle_origine(img2[0], d6, rs)
+	var ok6: bool = absf(lt.ombre / ombre_att - 1.0) < 1e-6 and absf(img1[0] / att_1 - 1.0) < 0.05 \
+		and absf(img2[0] / att_2 - 1.0) < 0.05 and absf(retour1 / psi6 - 1.0) < 2e-3 and absf(retour2 / psi6 + 1.0) < 2e-3 and absf(loin[0] - PI * 0.99) < 1e-3 and absf(loin[1] - 1.0) < 0.01
+	_resultat(ok6, "Einstein : l'image du trou noir (ombre, anneau, deux images)",
+		"Vu de 50 000 km : ombre %.4f° (attendu %.4f°) ; anneau d'Einstein %.3f° ; une étoile derrière, à %.3f° du centre, vue deux fois : à %.3f° (attendu %.3f°, %.2f fois plus brillante) et de l'autre côté à %.3f° (attendu %.3f°) ; rayons suivis à l'envers : ils arrivent bien à l'étoile (%.4f° et %.4f°) ; une étoile à l'opposé ne bouge pas." % [rad_to_deg(lt.ombre), rad_to_deg(ombre_att), rad_to_deg(th_e), rad_to_deg(psi6), rad_to_deg(img1[0]), rad_to_deg(att_1), img1[1], rad_to_deg(img2[0]), rad_to_deg(att_2), rad_to_deg(retour1), rad_to_deg(-retour2)])
+
+	# B7. Gaia BH1 dans le jeu : à sa vraie place, et le saut d'essai (touche M) pose le vaisseau en orbite.
+	var vr = _vaisseau_maison()
+	v = vr[0]
+	var rp7 = vr[1]
+	var j7: int = rp7.systeme_trou_noir()
+	var soleil: PackedFloat64Array = rp7.systemes[0]["etoiles"][0]["p"]
+	var d7 := _ecart3(rp7.centre_maison(j7, 0.0), soleil) / Reperes.ANNEE_LUMIERE
+	rp7.aller_trou_noir(v, 5.0e7)
+	var tn: Array = rp7.trou_noir_courant()
+	var ok7: bool = j7 > 0 and absf(d7 - 1560.0) < 15.0 and rp7.courant == j7 and not tn.is_empty() \
+		and absf(v.distance_centre() - 5.0e7) < 1.0 and v.rayon_planete == 0.0
+	for i in 600:
+		v.pas(1.0 / 60.0)
+		rp7.verifier(v)
+	ok7 = ok7 and not v.ecrase and absf(v.distance_centre() / 5.0e7 - 1.0) < 1e-3
+	var jeu = Jeu.new()
+	jeu.vaisseau = v
+	jeu.reperes = rp7
+	var ligne: String = jeu._ligne_einstein()
+	jeu.free()
+	ok7 = ok7 and ligne.begins_with("EINSTEIN")
+	_resultat(ok7, "Einstein : le trou noir Gaia BH1",
+		"À %.0f années-lumière (vraie distance 1 560) ; saut d'essai : en orbite à 50 000 km, %s après 10 s. « %s »" % [d7, "toujours en orbite" if not v.ecrase else "tombé (erreur)", ligne])
+
+	# B8. La toile de l'espace : l'entonnoir de Flamm, exagéré près d'une planète, colorié par le temps.
+	var Toile = load("res://scripts/einstein/toile.gd")
+	var z_h: float = Toile.profondeur(rs, rs, 0.0)
+	var z_b: float = Toile.profondeur(R, 2.0 * GM / (c * c), R)
+	var z_b2: float = Toile.profondeur(R * (1.0 - 1e-9), 2.0 * GM / (c * c), R)
+	var toile = Toile.new()
+	toile.visible = true
+	toile.mettre_a_jour(Vector3.ZERO, PackedFloat64Array([R + 100000.0, 0.0, 0.0]), GM, R, Vector3.UP)
+	var ex_planete: float = toile.exageration
+	toile.mettre_a_jour(Vector3.ZERO, PackedFloat64Array([5.0e7, 0.0, 0.0]), 9.27 * Reperes.GM_SOLEIL, 0.0, Vector3.UP)
+	var ex_trou: float = toile.exageration
+	var rouge: Color = Toile.couleur(1.0 - Toile.rythme(0.51 * m, 9.27 * Reperes.GM_SOLEIL, 0.0))
+	var bleu: Color = Toile.couleur(1.0 - Toile.rythme(1.0e12, GM, R))
+	var ok8: bool = z_h == 0.0 and absf(z_b - z_b2) < 1e-3 and ex_planete >= 1000.0 and ex_trou >= 1.0 and ex_trou <= 100.0 \
+		and toile.mesh != null and rouge.r > 0.9 and rouge.b < 0.3 and bleu.b > 0.9
+	toile.free()
+	var cmd = Commandes.new()
+	ok8 = ok8 and cmd.liaisons.has("toile") and cmd.liaisons["toile"]["clavier"] != "" and cmd.liaisons.has("trou_noir")
+	_resultat(ok8, "Einstein : la toile de l'espace",
+		"Autour de la planète, la vraie courbure est minuscule : elle est exagérée x%s (affiché). Autour du trou noir : x%s. Lignes rouges près de l'horizon (temps arrêté), bleues loin. Touches Y (toile) et M (saut d'essai)." % [Jeu._nombre(ex_planete), Jeu._nombre(ex_trou)])
+
