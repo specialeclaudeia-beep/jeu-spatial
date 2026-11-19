@@ -109,7 +109,7 @@ const COUCHE_PLANETE := 1 << 18
 const COUCHE_LUNE := 1 << 19
 const ALTITUDE_OMBRE_SOL := 400.0    # m : plus haut, l'ombre du vaisseau (200 m au plus) n'atteint pas le sol
 var _ombre_sol := true
-const POSE_CHAQUE := 4             # posemètre réparti sur 4 images
+const POSE_CHAQUE := 8             # posemètre réparti sur 8 images (~0,13 s à 60 i/s)
 var _pose_compte := 0
 var _pose_echantillons := PackedFloat32Array()
 var _pose_cases := PackedFloat32Array()
@@ -331,6 +331,7 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 		var o := _dans_repere(rot_planete, pos_lune[0], pos_lune[1], pos_lune[2])
 		planete.occulteur = PackedFloat64Array([o[0], o[1], o[2], RAYON_LUNE])
 	_regler_ombre_sol(altitude_oeil < ALTITUDE_OMBRE_SOL)
+	_regler_zones_ombre()
 	_partie("préparation")
 	planete.mettre_a_jour(camera, oeil_planete, rel64, temps, chrono,
 		Vector4(rel_lune.x, rel_lune.y, rel_lune.z, RAYON_LUNE if lune else 0.0))
@@ -424,6 +425,30 @@ func _regler_ombre_sol(oui: bool) -> void:
 	else:
 		lumiere_soleil.light_cull_mask &= ~COUCHE_PLANETE
 	planete.materiau.set_shader_parameter("sans_lumiere_godot", not oui)
+
+
+## Loin du sol, l'ombre n'a plus qu'à couvrir le vaisseau : une seule zone (une carte d'ombre dessinée
+## au lieu de deux, moitié moins de travail pour la carte graphique), et plus fine. Cockpit : 12 m autour
+## de l'œil (le pilote, l'habitacle, le nez, les ailes proches) ; vue extérieure : 40 m (caméra à 24 m
+## du centre + longueur du vaisseau). Près du sol : les deux zones d'origine (0-20 m, 20-200 m).
+const OMBRE_PROCHE_COCKPIT := 12.0
+const OMBRE_PROCHE_EXTERIEUR := 40.0
+var _zones_ombre := -1.0
+
+
+func _regler_zones_ombre() -> void:
+	if not lumiere_soleil:
+		return
+	var d := 0.0 if _ombre_sol else (OMBRE_PROCHE_COCKPIT if vue_interieure else OMBRE_PROCHE_EXTERIEUR)
+	if d == _zones_ombre:
+		return
+	_zones_ombre = d
+	if d == 0.0:
+		lumiere_soleil.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		lumiere_soleil.directional_shadow_max_distance = 200.0
+	else:
+		lumiere_soleil.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+		lumiere_soleil.directional_shadow_max_distance = d
 
 
 ## Paramètre global des shaders, envoyé seulement s'il a changé (une quarantaine par image sinon).
@@ -520,7 +545,7 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis
 	_g("soleil_eclairement_oeil", e_oeil)
 	# Les 16 × 9 cases du posemètre coûtent cher (rayons sur la planète, la lune et le cockpit) : l'œil
 	# s'adapte en plusieurs dixièmes de seconde, on les refait donc seulement une image sur POSE_CHAQUE.
-	# Le travail est réparti : planète et lune à la 1re image, puis 1/4 des rangées du cockpit par image.
+	# Le travail est réparti : planète et lune à la 1re image, puis 1/8 des rangées du cockpit par image.
 	var premiere := _pose_echantillons.is_empty()
 	if premiere or _pose_compte == 0:
 		_pose_cases = _cases_astres(rel, s, e, alpha, ec_vis, sc)
