@@ -782,6 +782,35 @@ func _tests_lumiere() -> void:
 		"Lumière : la planète tourne, la lune est là",
 		"Sol sous un point tourné avec la planète : %.2f m (attendu %.2f). Lune : un tour en %.2f h." % [h_tourne, h, periode_lune])
 
+	# S-3. Étape 6 (sol) : sur la lune aussi, l'ombre du vaisseau tombe sur le sol. Œil à 2 m du sol de la
+	#      lune, sous le Soleil : la lune entre dans la lumière de Godot (ombres), et ses montagnes ne
+	#      cachent pas un Soleil au zénith. Loin d'elle, elle en ressort (pas de travail en trop).
+	var pl := PackedFloat64Array([0.0, 0.0, 0.0])
+	var cote_soleil := Vector3.ZERO
+	for essai in 3:
+		pl = l.orbite.position(l.temps_astres)
+		cote_soleil = l.soleil.direction(pl)
+		var hl: float = l.lune.hauteur_sol(LumiereJeu._dans_repere(l.rot_lune, cote_soleil.x, cote_soleil.y, cote_soleil.z))
+		var kl: float = LumiereJeu.RAYON_LUNE + hl + 2.0
+		var oeil_l := PackedFloat64Array([pl[0] + cote_soleil.x * kl, pl[1] + cote_soleil.y * kl, pl[2] + cote_soleil.z * kl])
+		l.mettre_a_jour(1.0 / 60.0, oeil_l, Vector3.ZERO, Basis.IDENTITY, Vector3.ZERO)
+	var alt_l: float = l.altitude_lune
+	var ombre_l: bool = l._ombre_lune and (l.lumiere_soleil.light_cull_mask & LumiereJeu.COUCHE_LUNE) != 0 \
+		and not bool(l.lune.materiau.get_shader_parameter("sans_lumiere_godot"))
+	var rel_l: float = l.ombre_relief_lune
+	var t_rel := Time.get_ticks_usec()
+	for i in 20:
+		l._ombre_relief_lune(l.pos_oeil, cote_soleil, 0.0047)
+	var us_rel := (Time.get_ticks_usec() - t_rel) / 20.0
+	var cote_zones: float = l.lumiere_soleil.directional_shadow_max_distance
+	l.mettre_a_jour(1.0 / 60.0, jour, Vector3.ZERO, Basis.IDENTITY, Vector3.ZERO)
+	var loin_l: bool = not l._ombre_lune and (l.lumiere_soleil.light_cull_mask & LumiereJeu.COUCHE_LUNE) == 0 \
+		and bool(l.lune.materiau.get_shader_parameter("sans_lumiere_godot"))
+	_resultat(absf(alt_l - 2.0) < 0.05 and ombre_l and rel_l > 0.99 and loin_l and cote_zones == 200.0 and us_rel < 2000.0,
+		"Sol : l'ombre du vaisseau sur la lune",
+		"Œil à %.3f m du sol de la lune (attendu 2) : la lune reçoit l'ombre du vaisseau : %s (ombres jusqu'à %.0f m). Soleil au zénith : montagnes de la lune %.0f %% visibles (calcul %.0f µs). À 100 km de la planète : la lune n'est plus dans les ombres : %s." % [
+			alt_l, "oui" if ombre_l else "NON", cote_zones, rel_l * 100.0, us_rel, "oui" if loin_l else "NON"])
+
 	# 32. Les matières du vaisseau passent au système, et le posemètre voit le cockpit
 	var pilote := Node3D.new()
 	scene.add_child(pilote)
@@ -1358,6 +1387,81 @@ func _tests_pente() -> void:
 		"Posé sur une planète qui tourne",
 		"Sol à %.1f m/s (jour de 2 h, à l'équateur) ; vaisseau à %.1f m/s dans l'espace, %.4f m/s par rapport au sol (attendu ≈ 0)." % [
 			v_sol.length(), u.vitesse(), relative])
+	_tests_roulage()
+
+
+## Étape 6 (sol) : un vaisseau posé à plat sur un grand sol lisse, train sorti, calme.
+func _pose_a_plat():
+	var v = _nouveau(true)
+	v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)   # haut du vaisseau vers +X, avant vers -Z
+	v.sortir_train(true)
+	v.train = 1.0
+	v.px = R + 1.56
+	for i in 240 * 2:
+		v.commander(0.0, 0.0, 0.0, 0.0)
+		v.pas(1.0 / 240.0)
+	return v
+
+
+## Cap du vaisseau sur le sol (degrés, positif = tourné vers la gauche), vu d'en haut (+X).
+func _cap(v) -> float:
+	var av: Vector3 = Basis(v.orientation) * Vector3(0, 0, -1)
+	return rad_to_deg(atan2(av.y, -av.z))   # la gauche du vaisseau est vers +Y ici
+
+
+func _tests_roulage() -> void:
+	# S-1. Rouler et tourner : moteurs à 5 %, la roue avant braquée à fond à gauche (lacet au sol).
+	#      Les patins arrière glissent en frottant, la roue avant roule dans sa direction : le vaisseau
+	#      tourne vers la gauche. Roue droite : il va tout droit. Rien n'est tourné « à la main » : seul
+	#      le sol pousse sur la roue (et le lacet reste à 0 : aucun propulseur ne fait tourner).
+	var caps := []
+	var distances := []
+	var restes_au_sol := true
+	for b in [0.0, 1.0, -1.0]:
+		var v = _pose_a_plat()
+		var p0 := Vector3(v.px, v.py, v.pz)
+		v.braquage_consigne = b
+		for i in 240 * 6:
+			v.commander(0.05, 0.0, 0.0, 0.0)
+			v.pas(1.0 / 240.0)
+			if i == 240 * 2:
+				caps.append(_cap(v))   # cap après 2 s (ensuite, braqué à fond, il fait plus d'un demi-tour)
+		restes_au_sol = restes_au_sol and v.au_sol and not v.ecrase and _valide(v)
+		if b == 0.0:
+			caps[0] = _cap(v)   # tout droit : cap au bout des 6 s
+		distances.append((Vector3(v.px, v.py, v.pz) - p0).length())
+	var ok1: bool = restes_au_sol and absf(float(caps[0])) < 1.0 and float(caps[1]) > 10.0 and float(caps[2]) < -10.0 \
+		and absf(float(caps[1]) + float(caps[2])) < 2.0 and float(distances[0]) > 5.0
+	_resultat(ok1, "Sol : rouler et tourner avec la roue avant",
+		"Moteurs à 5 %% : roue droite, cap %+.1f° après 6 s (%.0f m parcourus) ; braquée à gauche, %+.1f° après 2 s ; à droite, %+.1f°. Toujours sur ses roues : %s." % [
+			caps[0], distances[0], caps[1], caps[2], "oui" if restes_au_sol else "NON"])
+
+	# S-2. Le frein de la roue avant : lancé à 8 m/s puis moteurs coupés, il s'arrête plus vite frein
+	#      serré. Le frein ne fait que serrer la roue : la force reste sous frottement × poussée du sol.
+	var arrets := []
+	var decel_max := 0.0
+	for f in [0.0, 1.0]:
+		var v = _pose_a_plat()
+		var p0 := Vector3(v.px, v.py, v.pz)
+		var lance := Basis(v.orientation) * Vector3(0, 0, -8.0)
+		v.vx += lance.x
+		v.vy += lance.y
+		v.vz += lance.z
+		v._lire_vitesse()
+		v.frein = f
+		for i in 240 * 6:
+			var v_avant: float = v.vitesse()
+			v.commander(0.0, 0.0, 0.0, 0.0)
+			v.pas(1.0 / 240.0)
+			decel_max = maxf(decel_max, (v_avant - v.vitesse()) * 240.0)
+		arrets.append([(Vector3(v.px, v.py, v.pz) - p0).length(), v.vitesse()])
+	var d_libre: float = arrets[0][0]
+	var d_frein: float = arrets[1][0]
+	var ok2: bool = float(arrets[0][1]) < 0.05 and float(arrets[1][1]) < 0.05 and d_frein < 0.95 * d_libre \
+		and decel_max < (VaisseauPhysique.FROTTEMENT + VaisseauPhysique.RESISTANCE_ROULEMENT) * 9.81 * 1.05
+	_resultat(ok2, "Sol : le frein de la roue avant",
+		"Lancé à 8 m/s : arrêté en %.1f m sans frein (les patins arrière frottent), %.1f m frein serré. Freinage le plus fort : %.2f m/s² (le frottement en permet au plus %.2f)." % [
+			d_libre, d_frein, decel_max, (VaisseauPhysique.FROTTEMENT + VaisseauPhysique.RESISTANCE_ROULEMENT) * 9.81])
 
 
 # =====================================================================

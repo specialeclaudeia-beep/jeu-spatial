@@ -35,6 +35,7 @@ Disposition par défaut :
 | pilote auto : atterrir | L | — |
 | ouvrir / replier les ailes | X | croix directionnelle haut |
 | sortir / rentrer le train d'atterrissage | G | croix directionnelle bas |
+| frein de la roue avant (au sol, maintenir) | Maj | — |
 | vue cockpit / vue extérieure | V | pavé tactile |
 | vol vertical (décollage / atterrissage) | F | bouton micro |
 | zoom pour lire les instruments (maintenir) | B | L3 (enfoncer le stick gauche) |
@@ -112,6 +113,13 @@ ou couper la poussée, le désactive.
   d'environ 5 cm, et le modèle 3D les montre écrasés (ressorts compris). Le train encaisse un posé
   jusqu'à 4 m/s ; au-delà l'amortisseur arrive en bout de course et casse. Train rentré, la coque
   (ventre, nez, queue) touche le sol : écrasé au-delà de 3 m/s. Le sol frotte et freine le glissement.
+- Rouler au sol (étape 6) : au sol, le lacet tourne aussi la roue avant (jusqu'à 35°, comme les
+  palonniers d'un avion), Maj serre son frein. C'est le sol qui pousse sur la roue : la force ne dépasse
+  jamais le frottement. Les patins arrière ne roulent pas, ils glissent en frottant. Attention : vite
+  (au-delà d'environ 20 m/s) sur les patins, le vaisseau part en tête-à-queue, comme un vrai avion qui
+  « fait un cheval de bois » ; le stabilisateur (T) aide un peu, le mieux est de rouler doucement.
+- Ombre du vaisseau : sur le sol de la planète ET sur celui de la lune (sous 400 m) ; les montagnes de
+  la lune peuvent aussi cacher le Soleil au vaisseau.
 - Vue cockpit (caméra à l'œil du pilote) ou vue extérieure (caméra qui tourne autour du vaisseau) ;
   l'intérieur du cockpit n'est affiché qu'en vue cockpit.
 - Lueurs des moteurs (modèle v19/v20) : chaque sortie s'allume selon la VRAIE poussée de son moteur

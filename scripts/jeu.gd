@@ -120,6 +120,8 @@ var caches_en_cockpit: Array = []    # pièces du nez (train avant, moteurs de l
 var amortisseurs: Array = []         # [nœud Amortisseur_*, position de repos, n° de roue de la physique]
 var ressorts: Array = []             # [nœud Ressort_*, échelle de repos, n° de roue, longueur au repos (m)]
 var roue_avant: Node3D = null
+var amortisseur_avant: Node3D = null   # tourne avec le braquage de la roue avant
+var rotation_amortisseur_avant := Basis.IDENTITY
 var rayon_roue := 0.18
 var lueurs: Array = []               # [nœud, matériau, propulseur de la physique, couleur faible, couleur forte, énergie min, énergie max]
 var panaches: Array = []             # [nœud, matériau, propulseur de la physique, échelle de repos, axe (0,1,2), couleur faible, couleur forte]
@@ -612,6 +614,9 @@ func _trouver_amortisseurs_et_lueurs() -> void:
 			ressorts.append([n, n.scale, roue_de[nom], l])
 		else:
 			amortisseurs.append([n, n.position, roue_de[nom]])
+			if nom == "Amortisseur_avant":
+				amortisseur_avant = n
+				rotation_amortisseur_avant = n.basis
 	roue_avant = exterieur.find_child("Roue_avant", true, false) as Node3D
 	if roue_avant != null:
 		var e = roue_avant.get_meta("extras", {})
@@ -716,8 +721,12 @@ func _animer_amortisseurs(delta: float) -> void:
 		var sc: Vector3 = r[1]
 		sc.y *= maxf(0.05, (float(r[3]) - c[r[2]]) / float(r[3]))
 		(r[0] as Node3D).scale = sc
+	if amortisseur_avant != null:
+		# la roue avant (et sa fourche) tourne avec le braquage, autour de l'axe de l'amortisseur
+		amortisseur_avant.basis = rotation_amortisseur_avant * Basis(Vector3.UP, vaisseau.braquage)
 	if roue_avant != null and vaisseau.au_sol and c[0] > 0.0:
-		var avance: float = (Basis(vaisseau.orientation).inverse() * vaisseau.vitesse_par_rapport_au_sol()).dot(Vector3.FORWARD)
+		var dir_roue := Vector3(-sin(vaisseau.braquage), 0.0, -cos(vaisseau.braquage))
+		var avance: float = (Basis(vaisseau.orientation).inverse() * vaisseau.vitesse_par_rapport_au_sol()).dot(dir_roue)
 		roue_avant.rotate_x(-avance / rayon_roue * delta)
 
 
@@ -783,6 +792,7 @@ func _ecrire_aide() -> void:
 		+ "Puissance des moteurs (relativité) : %s moins   %s plus\n" % [c.resume("poussee_moins"), c.resume("poussee_plus")]
 		+ "%s : remettre en orbite   %s : recommencer   %s : tests   %s : cacher l'aide\n" % [c.resume("remettre_orbite"), c.resume("recommencer"), c.resume("tests"), c.resume("aide")]
 		+ "%s : ailes   %s : train d'atterrissage   %s : vol vertical   %s : vue cockpit / extérieure\n" % [c.resume("ailes"), c.resume("train"), c.resume("vol_vertical"), c.resume("vue")]
+		+ "Au sol : le lacet tourne aussi la roue avant   %s (maintenir) : frein de la roue avant\n" % c.resume("frein")
 		+ "Tourner la tête (ou la caméra) : %s   %s : regarder droit devant   %s (maintenir) : zoom\n" % [_aide_tete(), c.resume("regard_centre"), c.resume("zoom")]
 		+ "%s : projecteur   %s : casque et visière   %s : tête qui bouge avec les G\n" % [c.resume("phares"), c.resume("visiere"), c.resume("tete_g")]
 		+ "Einstein : %s toile de l'espace (courbure)   %s saut d'essai vers le trou noir Gaia BH1   %s trou de ver vers Alpha du Centaure\n" % [c.resume("toile"), c.resume("trou_noir"), c.resume("trou_de_ver")]
@@ -969,6 +979,9 @@ func _lire_ordres(delta: float) -> void:
 	var l := 0.0 if ecrit else Input.get_axis("lacet_droite", "lacet_gauche")
 	var r := 0.0 if ecrit else Input.get_axis("roulis_droite", "roulis_gauche")
 	ordres_pilote = Vector3(t, l, r)
+	# étape 6 (sol) : les palonniers du lacet tournent aussi la roue avant ; Maj serre son frein
+	vaisseau.braquage_consigne = l
+	vaisseau.frein = 0.0 if ecrit else Input.get_action_strength("frein")
 	# la poussée monte ou descend d'autant plus vite qu'on appuie fort (Z / S ou gâchettes R2 / L2)
 	if not ecrit:
 		gaz += 0.5 * delta * (Input.get_action_strength("gaz_plus") - Input.get_action_strength("gaz_moins"))
