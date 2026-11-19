@@ -42,7 +42,9 @@ const VUE_EXT_HAUTEUR := deg_to_rad(-12.0)    # un peu au-dessus du vaisseau
 const FOV_NORMAL := 75.0
 const FOV_ZOOM := 25.0        # zoom pour lire les instruments (3 fois plus gros)
 const PART_TRAPPES := 0.3     # part du mouvement du train pendant laquelle les trappes s'ouvrent
-const ACCELERATIONS_TEMPS := [1, 10, 100, 1000, 10000, 100000]
+const ACCELERATIONS_TEMPS := [1, 10, 100, 1000, 10000, 100000, 1000000, 10000000]
+## Au-delà de x100 000, le temps n'accélère autant que loin des astres (voir VaisseauPhysique.limite_temps).
+const TEMPS_TOUJOURS := 100000
 ## Puissance des moteurs principaux (touches 7 / 8) : x1 = la vraie poussée (5 × 200 kN, ≈ 12 g).
 ## Plus fort, c'est un moteur imaginaire, mais toujours une vraie force : la relativité s'applique.
 const FACTEURS_POUSSEE := [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0]
@@ -307,7 +309,7 @@ func _brancher_lumiere() -> void:
 	vaisseau.relief = lumiere.hauteur_sol_planete   # (la physique fait elle-même la rotation de la planète)
 	# la petite lune attire aussi le vaisseau (elle bouge : sa position est recalculée à chaque pas)
 	if lumiere.lune:
-		vaisseau.ajouter_astre_mobile("lune", lumiere.gm_lune(), lumiere.position_lune)
+		vaisseau.ajouter_astre_mobile("lune", lumiere.gm_lune(), lumiere.position_lune, LumiereJeu.RAYON_LUNE)
 	_creer_casque()
 	_appliquer_vue()
 
@@ -773,7 +775,7 @@ func _ecrire_aide() -> void:
 		+ "Tangage %s      Lacet %s\n" % [_paire("tangage_haut", "tangage_bas"), _paire("lacet_gauche", "lacet_droite")]
 		+ "Roulis %s\n" % _paire("roulis_gauche", "roulis_droite")
 		+ "Pilote auto : %s garder le cap   %s s'arrêter   %s atterrir (une touche de pilotage le coupe)\n" % [c.resume("pilote_cap"), c.resume("pilote_arret"), c.resume("pilote_atterrir")]
-		+ "%s : stabilisateur   %s : pause   Temps : %s %s %s %s %s %s, ou %s / %s\n" % [c.resume("stabilisateur"), c.resume("pause"), c.resume("temps_x1"), c.resume("temps_x10"), c.resume("temps_x100"), c.resume("temps_x1000"), c.resume("temps_x10000"), c.resume("temps_x100000"), c.resume("temps_moins"), c.resume("temps_plus")]
+		+ "%s : stabilisateur   %s : pause   Temps : %s %s %s %s %s %s, loin des astres %s %s, ou %s / %s\n" % [c.resume("stabilisateur"), c.resume("pause"), c.resume("temps_x1"), c.resume("temps_x10"), c.resume("temps_x100"), c.resume("temps_x1000"), c.resume("temps_x10000"), c.resume("temps_x100000"), c.resume("temps_x1000000"), c.resume("temps_x10000000"), c.resume("temps_moins"), c.resume("temps_plus")]
 		+ "Puissance des moteurs (relativité) : %s moins   %s plus\n" % [c.resume("poussee_moins"), c.resume("poussee_plus")]
 		+ "%s : remettre en orbite   %s : recommencer   %s : tests   %s : cacher l'aide\n" % [c.resume("remettre_orbite"), c.resume("recommencer"), c.resume("tests"), c.resume("aide")]
 		+ "%s : ailes   %s : train d'atterrissage   %s : vol vertical   %s : vue cockpit / extérieure\n" % [c.resume("ailes"), c.resume("train"), c.resume("vol_vertical"), c.resume("vue")]
@@ -827,6 +829,8 @@ func _lire_boutons() -> void:
 	if _appui("temps_x1000"): acc_temps = ACCELERATIONS_TEMPS[3]
 	if _appui("temps_x10000"): acc_temps = ACCELERATIONS_TEMPS[4]
 	if _appui("temps_x100000"): acc_temps = ACCELERATIONS_TEMPS[5]
+	if _appui("temps_x1000000"): acc_temps = ACCELERATIONS_TEMPS[6]
+	if _appui("temps_x10000000"): acc_temps = ACCELERATIONS_TEMPS[7]
 	if _appui("poussee_plus"): _changer_poussee(1)
 	if _appui("poussee_moins"): _changer_poussee(-1)
 	if _appui("temps_plus"):
@@ -980,7 +984,7 @@ func _lire_ordres(delta: float) -> void:
 	# Il n'agit QUE par les propulseurs (aucune rotation imposée directement).
 	# En temps accéléré, l'ordre dure plus longtemps (PAS × acc_temps) : le stabilisateur en tient compte.
 	if stabilisateur:
-		var s: Vector3 = vaisseau.ordres_stabilisateur(PAS * acc_temps)
+		var s: Vector3 = vaisseau.ordres_stabilisateur(PAS * acc_effectif)
 		if t == 0.0: t = s.x
 		if l == 0.0: l = s.y
 		if r == 0.0: r = s.z
@@ -997,13 +1001,13 @@ func _physics_process(delta: float) -> void:
 		ordinateur.activer(PiloteAuto.AUCUN, vaisseau)   # le pilote auto ne connaît que la planète
 	if vaisseau.ecrase:
 		return
+	acc_effectif = temps_permis(acc_temps)
 	_lire_ordres(delta)
-	acc_effectif = acc_temps
 	if autopilote_actif:
 		# Le pilote auto calcule ses ordres au plus toutes les 0,04 s de temps de jeu, même en temps
 		# accéléré (sinon un seul ordre durerait jusqu'à 8 s à x1000). Il limite lui-même l'accélération
 		# du temps quand c'est dangereux (près du sol).
-		acc_effectif = mini(acc_temps, ordinateur.limite_temps(vaisseau))
+		acc_effectif = mini(acc_effectif, ordinateur.limite_temps(vaisseau))
 		var duree: float = PAS * acc_effectif
 		var n_ap: int = maxi(1, ceili(duree / ordinateur.periode_controle(vaisseau)))
 		var dt_ap: float = duree / n_ap
@@ -1018,14 +1022,29 @@ func _physics_process(delta: float) -> void:
 				break
 		return
 	vaisseau.commander(gaz, ordres.x, ordres.y, ordres.z, force_cote)
-	if acc_temps == 1:
+	if acc_effectif == 1:
 		vaisseau.pas(PAS)
 	else:
 		# au-delà de x1000, plus de petits pas (au plus 8 s chacun à x100 000) pour rester précis
-		var n: int = mini(acc_temps, 25) if acc_temps <= 1000 else 100
-		var dt: float = PAS * acc_temps / n
+		var n: int = mini(acc_effectif, 25) if acc_effectif <= 1000 else 100
+		var dt: float = PAS * acc_effectif / n
 		for i in n:
 			vaisseau.pas(dt)
+
+
+## Grandes distances : accélération du temps vraiment appliquée. Jusqu'à x100 000, comme demandé.
+## Au-delà, seulement loin des astres : en une image, le vaisseau ne doit pas faire plus de 5 % du chemin
+## qui le sépare d'un astre (sinon il pourrait sauter par-dessus une planète, ou mal suivre une orbite).
+## Rien de magique : le temps passe plus vite, la physique est la même (des pas plus longs).
+func temps_permis(acc: int) -> int:
+	if acc <= TEMPS_TOUJOURS:
+		return acc
+	var maxi_acc: float = vaisseau.limite_temps(0.05) / PAS
+	var permis := TEMPS_TOUJOURS
+	for a in ACCELERATIONS_TEMPS:
+		if a <= acc and a > permis and a <= maxi_acc:
+			permis = a
+	return permis
 
 # =====================================================================
 # AFFICHAGE
@@ -1401,9 +1420,13 @@ func _mettre_a_jour_hud() -> void:
 	lignes.append("VOL VERTICAL  %s   (tuyère %.0f°)" % [_etat(vaisseau.vertical, vaisseau.vertical_consigne, "activé", "désactivé"), vaisseau.angle_tuyere()])
 	lignes.append("PUISSANCE     x%s   poussée max %s (%s g)%s" % [_nombre(vaisseau.facteur_poussee), _force_txt(vaisseau.poussee_avant_max), _nombre(vaisseau.poussee_avant_max / vaisseau.masse / VaisseauPhysique.G0, 1), "   (vrais moteurs)" if vaisseau.facteur_poussee == 1.0 else "   (moteurs imaginaires)"])
 	lignes.append("PILOTE AUTO   %s" % ordinateur.nom_mode())
-	var temps_txt := "x%d" % acc_temps
+	var temps_txt := "x%s" % _nombre(acc_temps)
 	if acc_effectif < acc_temps:
-		temps_txt += " (pilote auto : x%d)" % acc_effectif
+		var permis := temps_permis(acc_temps)
+		if acc_effectif < permis:
+			temps_txt += " (pilote auto : x%s)" % _nombre(acc_effectif)
+		else:
+			temps_txt += " (x%s : %s trop proche)" % [_nombre(acc_effectif), vaisseau.astre_limitant]
 	lignes.append("STABILISATEUR %s      TEMPS %s%s" % ["activé" if stabilisateur else "désactivé", temps_txt, "   (PAUSE)" if en_pause else ""])
 	if avec_lumiere:
 		lignes.append(lumiere.infos())

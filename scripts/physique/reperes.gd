@@ -13,15 +13,19 @@ extends RefCounted
 ## sur la position, l'heure ET la vitesse du vaisseau. Chaque repère a sa propre horloge (« temps de
 ## l'univers » du vaisseau = l'heure de son repère) ; l'heure de la maison se retrouve à tout moment.
 ##
-## Le repère de la maison, c'est celui de la physique depuis le début : centré sur la planète (qui ne
-## bouge pas par rapport au Soleil). Les autres sont placés à leur vraie direction dans le ciel
-## (catalogue Hipparcos/Gaia), à leur vraie distance, avec leur vraie vitesse.
+## Le repère de la maison, c'est celui de la physique depuis le début : centré sur la planète. Depuis
+## l'étape « grandes distances », la planète tourne autour du Soleil, et le Soleil autour de son étoile
+## compagne (systeme_solaire.gd) : le repère de la maison tombe avec la planète. Les transformations de
+## Lorentz vers les autres systèmes passent donc par le repère « B » (centre de masse du Soleil et de la
+## compagne), qui, lui, ne bouge pas. Les autres systèmes sont placés à leur vraie direction dans le ciel
+## (catalogue Hipparcos/Gaia), à leur vraie distance, avec leur vraie vitesse (vue de B).
 ##
 ## Le vaisseau change de repère quand il est nettement plus près d'un autre système (à mi-chemin, en
 ## plein vide : rien ne change pour lui, sauf ses nombres et la gravité qu'il sent).
 
 const Etoiles = preload("res://scripts/lumiere/etoiles.gd")
 const LumiereJeu = preload("res://scripts/lumiere_jeu.gd")
+const SystemeSolaire = preload("res://scripts/physique/systeme_solaire.gd")
 
 const C := 299792458.0                   # m/s
 const UA := 1.495978707e11               # m
@@ -48,12 +52,15 @@ var _omega_maison := 0.0
 ## Catalogue d'étoiles (ciel) : les étoiles de nos systèmes, à redessiner selon où l'on est.
 var _yale: Array = []        # {systeme, etoile, indice, donnee (Color d'origine), m0, d0}
 var _compagne_maison := {}
+## Grandes distances : le Soleil, la compagne et la planète bougent (repère B, voir systeme_solaire.gd).
+var solaire = SystemeSolaire.new()
 
 
 func _init() -> void:
 	# --- La maison : la planète, le Soleil à 1 UA, l'étoile compagne à 5 UA (comme lumiere_jeu.gd).
 	var p_soleil: PackedFloat64Array = LumiereJeu._loin(LumiereJeu.VERS_SOLEIL, UA)
 	var p_compagne: PackedFloat64Array = LumiereJeu._loin(LumiereJeu.VERS_COMPAGNE, LumiereJeu.DISTANCE_COMPAGNE * UA)
+	solaire.configurer(p_soleil, p_compagne, 0.69)
 	var maison := _systeme("Soleil", true, PackedFloat64Array([0.0, 0.0, 0.0]), PackedFloat64Array([0.0, 0.0, 0.0]))
 	maison["etoiles"] = [
 		_etoile("Soleil", 1.0, 1.0, 5772.0, p_soleil),
@@ -66,7 +73,9 @@ func _init() -> void:
 	# --- Alpha du Centaure A et B (catalogue Hipparcos révisé, Gaia ; Kervella et al. 2016-2017).
 	#     Ascension droite 14 h 39 min 36,5 s, déclinaison −60° 50′ 02″, parallaxe 747,1 mas (4,37 al),
 	#     mouvement propre −3 679 / +474 mas/an, vitesse radiale −22,4 km/s (elle vient vers nous).
-	var a := _depuis_catalogue(p_soleil, 219.9021, -60.8340, 747.1, -3679.25, 473.67, -22.4)
+	var s_b: PackedFloat64Array = solaire.soleil(0.0)
+	var vs_b: PackedFloat64Array = solaire.vitesse_soleil(0.0)
+	var a := _depuis_catalogue(s_b, vs_b, 219.9021, -60.8340, 747.1, -3679.25, 473.67, -22.4)
 	var alpha := _systeme("Alpha du Centaure", false, a[0], a[1])
 	# A au centre du repère ; B à 13 UA (les deux tournent l'un autour de l'autre en 80 ans : ici immobiles).
 	var e: PackedFloat64Array = a[2]
@@ -85,7 +94,7 @@ func _init() -> void:
 
 	# --- Proxima du Centaure (naine rouge, 3 042 K) : 14 h 29 min 43 s, −62° 40′ 46″, 768,1 mas (4,25 al),
 	#     mouvement propre −3 781 / +770 mas/an, vitesse radiale −22,2 km/s.
-	var b := _depuis_catalogue(p_soleil, 217.4290, -62.6795, 768.07, -3781.3, 769.8, -22.2)
+	var b := _depuis_catalogue(s_b, vs_b, 217.4290, -62.6795, 768.07, -3781.3, 769.8, -22.2)
 	var proxima := _systeme("Proxima du Centaure", false, b[0], b[1])
 	proxima["etoiles"] = [_etoile("Proxima du Centaure", 0.1221, 0.1542, 3042.0, PackedFloat64Array([0.0, 0.0, 0.0]))]
 	proxima["lumiere_soleil"] = -1   # le Soleil, au loin, reste dans son emplacement
@@ -97,7 +106,7 @@ func _init() -> void:
 	#     (1 560 al), mouvement propre −7,70 / −25,85 mas/an, vitesse radiale du système ≈ 46,6 km/s.
 	#     Un trou noir de 9,27 Soleils, éteint (rien ne tombe dedans), et une étoile jumelle du Soleil
 	#     (0,93 Soleil, 5 850 K) qui tourne autour de lui en 185 jours, à 1,4 UA (ici immobile).
-	var c := _depuis_catalogue(p_soleil, 262.171236, -0.581001, 2.09, -7.70, -25.85, 46.6)
+	var c := _depuis_catalogue(s_b, vs_b, 262.171236, -0.581001, 2.09, -7.70, -25.85, 46.6)
 	var bh := _systeme("Gaia BH1", false, c[0], c[1])
 	var trou := _etoile("Gaia BH1 (trou noir)", 9.27, 0.0, 0.0, PackedFloat64Array([0.0, 0.0, 0.0]))
 	trou["trou_noir"] = true
@@ -132,9 +141,9 @@ static func _direction(ad_deg: float, dec_deg: float) -> PackedFloat64Array:
 	return PackedFloat64Array([cos(dec) * cos(ad), sin(dec), -cos(dec) * sin(ad)])
 
 
-## Position (repère de la maison, au temps 0) et vitesse d'une étoile à partir du catalogue :
-## [position, vitesse, direction « est », direction « nord »].
-static func _depuis_catalogue(p_soleil: PackedFloat64Array, ad_deg: float, dec_deg: float, parallaxe_mas: float,
+## Position (repère B, au temps 0) et vitesse (vue de B) d'une étoile à partir du catalogue (positions et
+## vitesses comptées depuis le Soleil) : [position, vitesse, direction « est », direction « nord »].
+static func _depuis_catalogue(p_soleil: PackedFloat64Array, v_soleil: PackedFloat64Array, ad_deg: float, dec_deg: float, parallaxe_mas: float,
 		pm_ad_mas: float, pm_dec_mas: float, vr_km_s: float) -> Array:
 	var d_pc := 1000.0 / parallaxe_mas
 	var n := _direction(ad_deg, dec_deg)
@@ -149,19 +158,20 @@ static func _depuis_catalogue(p_soleil: PackedFloat64Array, ad_deg: float, dec_d
 	var v := PackedFloat64Array()
 	for k in 3:
 		o.append(p_soleil[k] + n[k] * d_pc * PARSEC)
-		v.append(vr * n[k] + ve * est[k] + vn * nord[k])
+		v.append(v_soleil[k] + vr * n[k] + ve * est[k] + vn * nord[k])
 	return [o, v, est, nord]
 
 
 # =====================================================================
 # TRANSFORMATIONS DE LORENTZ (repère d'un système ↔ repère de la maison)
 # =====================================================================
-## Un événement (heure t, position x) du système i → [heure, position] dans le repère de la maison.
-## Le repère i avance à la vitesse V (vue de la maison) ; son centre était en o à l'heure 0 de la maison.
-func vers_maison(i: int, t: float, x: PackedFloat64Array) -> Array:
+## Un événement (heure t, position x) du système i → [heure, position] dans le repère B (centre de
+## masse du Soleil et de la compagne, immobile). Le repère i avance à la vitesse V (vue de B) ; son centre
+## était en o à l'heure 0 de B. Pour la maison (i = 0) : simple décalage de la position de la planète.
+func vers_b(i: int, t: float, x: PackedFloat64Array) -> Array:
 	var s: Dictionary = systemes[i]
 	if s["maison"]:
-		return [t, x.duplicate()]
+		return [t, solaire.vers_b(t, x)]
 	var g: float = s["gamma"]
 	var b: float = s["vitesse"]
 	var n: PackedFloat64Array = s["n"]
@@ -172,11 +182,11 @@ func vers_maison(i: int, t: float, x: PackedFloat64Array) -> Array:
 	return [t_m, PackedFloat64Array([o[0] + x[0] + k * n[0], o[1] + x[1] + k * n[1], o[2] + x[2] + k * n[2]])]
 
 
-## L'inverse : un événement de la maison → [heure, position] dans le repère du système i.
-func depuis_maison(i: int, t_m: float, x_m: PackedFloat64Array) -> Array:
+## L'inverse : un événement de B → [heure, position] dans le repère du système i.
+func depuis_b(i: int, t_m: float, x_m: PackedFloat64Array) -> Array:
 	var s: Dictionary = systemes[i]
 	if s["maison"]:
-		return [t_m, x_m.duplicate()]
+		return [t_m, solaire.depuis_b(t_m, x_m)]
 	var g: float = s["gamma"]
 	var b: float = s["vitesse"]
 	var n: PackedFloat64Array = s["n"]
@@ -188,14 +198,44 @@ func depuis_maison(i: int, t_m: float, x_m: PackedFloat64Array) -> Array:
 	return [t, PackedFloat64Array([dx[0] + k * n[0], dx[1] + k * n[1], dx[2] + k * n[2]])]
 
 
-## Vitesse propre u (m/s du pilote, u = γv) du système i → vue de la maison. Ce sont les 3 dernières
-## composantes de la « quadrivitesse » (cU⁰, u), U⁰ = √(1 + u²/c²) : elle se transforme comme un événement.
-func vitesse_vers_maison(i: int, u: PackedFloat64Array) -> PackedFloat64Array:
-	return _booster(i, u, 1.0)
+## Un événement du système i → [heure, position] dans le repère de la maison (centré sur la planète).
+func vers_maison(i: int, t: float, x: PackedFloat64Array) -> Array:
+	if systemes[i]["maison"]:
+		return [t, x.duplicate()]
+	var e := vers_b(i, t, x)
+	return [e[0], solaire.depuis_b(float(e[0]), e[1])]
 
 
-func vitesse_depuis_maison(i: int, u: PackedFloat64Array) -> PackedFloat64Array:
-	return _booster(i, u, -1.0)
+## L'inverse : un événement de la maison → [heure, position] dans le repère du système i.
+func depuis_maison(i: int, t_m: float, x_m: PackedFloat64Array) -> Array:
+	if systemes[i]["maison"]:
+		return [t_m, x_m.duplicate()]
+	return depuis_b(i, t_m, solaire.vers_b(t_m, x_m))
+
+
+## Vitesse propre u (m/s du pilote, u = γv) du système i → vue de la maison à l'heure t_m de la maison.
+## Ce sont les 3 dernières composantes de la « quadrivitesse » (cU⁰, u), U⁰ = √(1 + u²/c²) : elle se
+## transforme comme un événement (vers B) ; puis on retire la vitesse de la planète (30 km/s).
+func vitesse_vers_maison(i: int, u: PackedFloat64Array, t_m := 0.0) -> PackedFloat64Array:
+	if systemes[i]["maison"]:
+		return u.duplicate()
+	return _propre_vers_planete(_booster(i, u, 1.0), t_m, -1.0)
+
+
+func vitesse_depuis_maison(i: int, u: PackedFloat64Array, t_m := 0.0) -> PackedFloat64Array:
+	if systemes[i]["maison"]:
+		return u.duplicate()
+	return _booster(i, _propre_vers_planete(u, t_m, 1.0), -1.0)
+
+
+## Vitesse propre : ajoute (sens +1, planète → B) ou retire (−1, B → planète) la vitesse de la planète.
+func _propre_vers_planete(u: PackedFloat64Array, t_m: float, sens: float) -> PackedFloat64Array:
+	var u0 := sqrt(1.0 + (u[0] * u[0] + u[1] * u[1] + u[2] * u[2]) / (C * C))
+	var vp := solaire.vitesse_planete(t_m)
+	var w := PackedFloat64Array([u[0] / u0 + sens * vp[0], u[1] / u0 + sens * vp[1], u[2] / u0 + sens * vp[2]])
+	var w2 := (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]) / (C * C)
+	var g := 1.0 / sqrt(maxf(1.0 - w2, 1e-30))
+	return PackedFloat64Array([w[0] * g, w[1] * g, w[2] * g])
 
 
 func _booster(i: int, u: PackedFloat64Array, sens: float) -> PackedFloat64Array:
@@ -216,7 +256,7 @@ func position_etoile_maison(i: int, e: int, t_m: float) -> PackedFloat64Array:
 	var s: Dictionary = systemes[i]
 	var p: PackedFloat64Array = s["etoiles"][e]["p"]
 	if s["maison"]:
-		return p.duplicate()
+		return solaire.soleil_vu(t_m) if e == 0 else solaire.compagne_vue(t_m)
 	var n: PackedFloat64Array = s["n"]
 	var xn := p[0] * n[0] + p[1] * n[1] + p[2] * n[2]
 	# heure de l'étoile (dans son repère) qui correspond à l'heure t_m de la maison, là où elle est
@@ -224,12 +264,23 @@ func position_etoile_maison(i: int, e: int, t_m: float) -> PackedFloat64Array:
 	return vers_maison(i, t, p)[1]
 
 
+## Position de l'étoile e du système i dans le repère de ce système, à l'heure t de ce système.
+## Chez nous, le Soleil et la compagne bougent (vus de la planète) ; ailleurs, les étoiles sont immobiles.
+func position_etoile(i: int, e: int, t: float) -> PackedFloat64Array:
+	if systemes[i]["maison"]:
+		return position_etoile_maison(i, e, t)
+	return systemes[i]["etoiles"][e]["p"]
+
+
 ## Centre du système i (son étoile principale) à l'heure t_m de la maison (repère de la maison).
+## Pour la maison : la planète (le centre du repère).
 func centre_maison(i: int, t_m: float) -> PackedFloat64Array:
 	var s: Dictionary = systemes[i]
+	if s["maison"]:
+		return PackedFloat64Array([0.0, 0.0, 0.0])
 	var o: PackedFloat64Array = s["o"]
 	var v: PackedFloat64Array = s["v"]
-	return PackedFloat64Array([o[0] + v[0] * t_m, o[1] + v[1] * t_m, o[2] + v[2] * t_m])
+	return solaire.depuis_b(t_m, PackedFloat64Array([o[0] + v[0] * t_m, o[1] + v[1] * t_m, o[2] + v[2] * t_m]))
 
 
 # =====================================================================
@@ -239,10 +290,16 @@ func centre_maison(i: int, t_m: float) -> PackedFloat64Array:
 ## Soleil et de l'étoile compagne. Le repère de la maison suit la planète, qui tombe elle aussi vers
 ## elles : on retire donc leur attraction sur la planète (« terme indirect », comme pour la lune). Il
 ## reste leur marée (minuscule près de la planète) et, loin d'elle, leur vraie attraction.
+## Grandes distances : le Soleil et la compagne bougent (vus de la planète, qui tourne autour du Soleil) :
+## leur position est recalculée à chaque pas, comme celle de la lune.
 func preparer(v) -> void:
-	for e in systemes[0]["etoiles"]:
-		var p: PackedFloat64Array = e["p"]
-		v.autres_astres.append({"nom": e["nom"], "gm": e["gm"], "x": p[0], "y": p[1], "z": p[2], "indirect": true})
+	var ets: Array = systemes[0]["etoiles"]
+	for k in ets.size():
+		var e: Dictionary = ets[k]
+		var f: Callable = solaire.soleil_vu if k == 0 else solaire.compagne_vue
+		var p: PackedFloat64Array = f.call(v.temps_univers)
+		v.autres_astres.append({"nom": e["nom"], "gm": e["gm"], "x": p[0], "y": p[1], "z": p[2], "indirect": true,
+			"position": f, "rayon": e["rayon"]})
 	courant = 0
 
 
@@ -267,7 +324,7 @@ func heure_maison(v) -> float:
 ## Vitesse du vaisseau vue de la maison (m/s, toujours < C).
 func vitesse_maison(v) -> PackedFloat64Array:
 	v.gamma()   # met la vitesse propre à jour si quelqu'un a écrit vx à la main
-	var u := vitesse_vers_maison(courant, PackedFloat64Array([v.ux, v.uy, v.uz]))
+	var u := vitesse_vers_maison(courant, PackedFloat64Array([v.ux, v.uy, v.uz]), heure_maison(v))
 	var g := sqrt(1.0 + (u[0] * u[0] + u[1] * u[1] + u[2] * u[2]) / (C * C))
 	return PackedFloat64Array([u[0] / g, u[1] / g, u[2] / g])
 
@@ -282,8 +339,10 @@ func angle_planete_maison(v, t_m: float) -> float:
 ## Étoile la plus proche du système actuel : [nom, distance au centre (m), rayon (m)].
 func etoile_proche(v) -> Array:
 	var meilleure := []
-	for e in systemes[courant]["etoiles"]:
-		var p: PackedFloat64Array = e["p"]
+	var ets: Array = systemes[courant]["etoiles"]
+	for k in ets.size():
+		var e: Dictionary = ets[k]
+		var p := position_etoile(courant, k, v.temps_univers)
 		var d := sqrt((v.px - p[0]) ** 2 + (v.py - p[1]) ** 2 + (v.pz - p[2]) ** 2)
 		if meilleure.is_empty() or d < float(meilleure[1]):
 			meilleure = [e["nom"], d, e["rayon"], e.get("trou_noir", false)]
@@ -328,7 +387,7 @@ func passer(v, j: int) -> void:
 		return
 	var ev := evenement_maison(v)
 	var t_m: float = ev[0]
-	var u_m := vitesse_vers_maison(courant, PackedFloat64Array([v.ux, v.uy, v.uz]))
+	var u_m := vitesse_vers_maison(courant, PackedFloat64Array([v.ux, v.uy, v.uz]), t_m)
 	if a_la_maison():
 		_maison = {"gm": v.gm, "rayon_planete": v.rayon_planete, "relief": v.relief, "omega_planete": v.omega_planete,
 			"autres_astres": v.autres_astres}
@@ -337,7 +396,7 @@ func passer(v, j: int) -> void:
 		_t_depart = t_m
 	var ev_j := depuis_maison(j, t_m, ev[1])
 	var p: PackedFloat64Array = ev_j[1]
-	var u := vitesse_depuis_maison(j, u_m)
+	var u := vitesse_depuis_maison(j, u_m, t_m)
 	v.px = p[0]
 	v.py = p[1]
 	v.pz = p[2]
@@ -427,7 +486,7 @@ func regler_lumiere(lumiere, oeil_m: PackedFloat64Array, t_m: float) -> void:
 	# étoile plus grande y est mise plus loin (même taille et même éclairement vus de l'œil).
 	var i_s: int = s["lumiere_soleil"]
 	if i_s < 0:
-		lumiere.soleil.position = systemes[0]["etoiles"][0]["p"]
+		lumiere.soleil.position = position_etoile_maison(0, 0, t_m)
 	else:
 		var e: Dictionary = s["etoiles"][i_s]
 		var p := position_etoile_maison(courant, i_s, t_m)
@@ -438,12 +497,12 @@ func regler_lumiere(lumiere, oeil_m: PackedFloat64Array, t_m: float) -> void:
 	var i_c: int = s["lumiere_compagne"]
 	if i_c < 0:
 		# pas de seconde étoile ici : notre Soleil, à sa vraie place (de très loin, un point très faible)
-		lumiere.compagne.position = systemes[0]["etoiles"][0]["p"]
+		lumiere.compagne.position = position_etoile_maison(0, 0, t_m)
 		lumiere.compagne.rayon = RAYON_SOLEIL
 		lumiere.compagne.temperature = 5772.0
 		lumiere.compagne.nom = "Soleil"
 	elif s["maison"]:
-		lumiere.compagne.position = _compagne_maison["position"]
+		lumiere.compagne.position = position_etoile_maison(0, 1, t_m)
 		lumiere.compagne.rayon = _compagne_maison["rayon"]
 		lumiere.compagne.temperature = _compagne_maison["temperature"]
 		lumiere.compagne.nom = _compagne_maison["nom"]
