@@ -224,18 +224,22 @@ func _mesurer(delta: float) -> void:
 			get_tree().quit()
 
 
-const PHASES_MESURE := ["vue cockpit", "vue extérieure", "vue extérieure sans ombres", "vue extérieure, image à 70 %",
-	"vue cockpit, image à 70 % sans ombres"]
+const PHASES_MESURE := ["vue cockpit", "vue extérieure", "vue extérieure sans ombres",
+	"vue extérieure, image à 70 %", "vue extérieure, carte d'ombre 2048", "vue extérieure, carte d'ombre 1024",
+	"vue cockpit, image à 70 %, carte d'ombre 2048"]
+# [cockpit, ombres, échelle de l'image, taille de la carte d'ombre] pour chaque phase
+const REGLAGES_MESURE := [[true, true, 1.0, 4096], [false, true, 1.0, 4096], [false, false, 1.0, 4096],
+	[false, true, 0.7, 4096], [false, true, 1.0, 2048], [false, true, 1.0, 1024], [true, true, 0.7, 2048]]
 
 
 func _phase_mesure(phase: int) -> void:
-	vue_interieure = phase == 0 or phase == 4
+	var r: Array = REGLAGES_MESURE[phase]
+	vue_interieure = r[0]
 	_appliquer_vue()
 	if avec_lumiere and lumiere.lumiere_soleil:
-		lumiere.lumiere_soleil.shadow_enabled = phase < 2
-	get_viewport().scaling_3d_scale = 0.7 if phase >= 3 else 1.0
-	if phase == 4 and avec_lumiere and lumiere.lumiere_soleil:
-		lumiere.lumiere_soleil.shadow_enabled = false
+		lumiere.lumiere_soleil.shadow_enabled = r[1]
+	get_viewport().scaling_3d_scale = r[2]
+	RenderingServer.directional_shadow_atlas_set_size(r[3], true)
 
 
 func _ready() -> void:
@@ -522,6 +526,8 @@ func _appliquer_vue() -> void:
 	# en vue cockpit, les informations sont sur les écrans du tableau de bord ; dehors, en surimpression
 	if hud != null:
 		hud.visible = not vue_interieure
+	if compteur != null:
+		compteur.visible = vue_interieure   # dehors, le tableau a sa propre ligne IMAGES/S
 	tete = Vector2.ZERO
 	if casque:
 		casque.visible = vue_interieure and lumiere.visiere != 0
@@ -1376,6 +1382,7 @@ func _mettre_a_jour_hud() -> void:
 	var w: Vector3 = vaisseau.omega * (180.0 / PI)
 	var m: Array = vaisseau.moteurs
 	var lignes := PackedStringArray()
+	lignes.append("IMAGES/S      %d   (%.1f ms par image)   image 3D à %d %%" % [roundi(Engine.get_frames_per_second()), 1000.0 / maxf(Engine.get_frames_per_second(), 1.0), roundi(echelle_image * 100.0)])
 	lignes.append("VITESSE       %s   (verticale %s   horizontale %s)   par rapport au sol %s (horizontale %s)" % [_vitesse_txt(vaisseau.vitesse()), _vitesse_txt(vaisseau.vitesse_verticale(), true), _vitesse_txt(vaisseau.vitesse_horizontale()), _vitesse_txt(vaisseau.vitesse_par_rapport_au_sol().length()), _vitesse_txt(vaisseau.vitesse_horizontale_sol())])
 	lignes.append("RELATIVITÉ    %s c   γ = %s   rapidité %.4f" % [_fraction_c(vaisseau.beta()), _gamma_txt(vaisseau.gamma()), vaisseau.rapidite()])
 	lignes.append("HORLOGES      pilote %s   univers %s   (le pilote a %s de moins)" % [_duree(vaisseau.temps_pilote), _duree(vaisseau.temps_univers), _duree_courte(vaisseau.temps_univers - vaisseau.temps_pilote)])
