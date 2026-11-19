@@ -166,6 +166,8 @@ var calotte: MeshInstance3D
 var materiau_planete: ShaderMaterial
 var hud: Label
 var aide: Label
+var compteur: Label                  # images/s, en haut à droite
+var _compteur_t := 0.0
 var message: Label
 var marqueur_avant: Label
 var marqueur_arriere: Label
@@ -243,6 +245,10 @@ func _ready() -> void:
 		_mesure = {"phase": 0, "t": 0.0, "n": 0, "somme": 0.0, "pire": 0.0, "lumiere": 0.0, "parties": {}, "texte": "",
 			"gpu": 0.0, "dessin_cpu": 0.0, "jeu": 0.0, "physique": 0.0}
 		call_deferred("_debut_mesure")
+	else:
+		# Synchronisation « adaptative » : à 60 i/s, l'image attend l'écran (pas de déchirure) ; en dessous,
+		# elle part tout de suite au lieu d'attendre l'image suivante de l'écran (sinon 50 i/s tombent à 30-45).
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ADAPTIVE)
 	commandes = Commandes.new()
 	commandes.charger()      # réglages de la dernière partie (sinon : disposition par défaut)
 	commandes.appliquer()
@@ -723,6 +729,15 @@ func _creer_hud() -> void:
 	hud = _label(15)
 	hud.position = Vector2(16, 12)
 	couche.add_child(hud)
+	# compteur d'images/s, en haut à droite, visible dans les deux vues
+	compteur = _label(14, Color(0.8, 0.85, 1.0))
+	compteur.anchor_left = 1.0
+	compteur.anchor_right = 1.0
+	compteur.offset_left = -300
+	compteur.offset_right = -16
+	compteur.offset_top = 12
+	compteur.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	couche.add_child(compteur)
 	aide = _label(14, Color(0.8, 0.85, 1.0))
 	aide.anchor_top = 1.0
 	aide.anchor_bottom = 1.0
@@ -1036,7 +1051,8 @@ func _regler_resolution(delta: float) -> void:
 		return
 	_resolution_t = 0.0001
 	var avant := echelle_image
-	if _gpu_lisse > GPU_TROP:
+	var lent := Engine.get_frames_per_second() < 57.0
+	if _gpu_lisse > GPU_TROP and lent:
 		echelle_image = maxf(RESOLUTION_MIN, echelle_image - 0.05)
 	elif echelle_image < 1.0 and _gpu_lisse * pow((echelle_image + 0.05) / echelle_image, 2.0) < GPU_MARGE:
 		# remonte seulement si l'image un peu plus grande tiendrait encore large dans le temps
@@ -1060,7 +1076,13 @@ func _process(delta: float) -> void:
 		_placer_lumiere(delta)
 	else:
 		_placer_planete()
-	_mettre_a_jour_hud()
+	if hud != null and hud.visible:   # caché en vue cockpit : inutile de recomposer ses 20 lignes à chaque image
+		_mettre_a_jour_hud()
+	_mettre_a_jour_message()
+	_compteur_t += delta
+	if compteur and _compteur_t >= 0.25:
+		_compteur_t = 0.0
+		compteur.text = "%d images/s   image 3D à %d %%" % [roundi(Engine.get_frames_per_second()), roundi(echelle_image * 100.0)]
 	_placer_marqueurs()
 
 
@@ -1354,7 +1376,6 @@ func _mettre_a_jour_hud() -> void:
 	var w: Vector3 = vaisseau.omega * (180.0 / PI)
 	var m: Array = vaisseau.moteurs
 	var lignes := PackedStringArray()
-	lignes.append("IMAGES/S      %d   (%.1f ms par image)   image 3D à %d %%" % [roundi(Engine.get_frames_per_second()), 1000.0 / maxf(Engine.get_frames_per_second(), 1.0), roundi(echelle_image * 100.0)])
 	lignes.append("VITESSE       %s   (verticale %s   horizontale %s)   par rapport au sol %s (horizontale %s)" % [_vitesse_txt(vaisseau.vitesse()), _vitesse_txt(vaisseau.vitesse_verticale(), true), _vitesse_txt(vaisseau.vitesse_horizontale()), _vitesse_txt(vaisseau.vitesse_par_rapport_au_sol().length()), _vitesse_txt(vaisseau.vitesse_horizontale_sol())])
 	lignes.append("RELATIVITÉ    %s c   γ = %s   rapidité %.4f" % [_fraction_c(vaisseau.beta()), _gamma_txt(vaisseau.gamma()), vaisseau.rapidite()])
 	lignes.append("HORLOGES      pilote %s   univers %s   (le pilote a %s de moins)" % [_duree(vaisseau.temps_pilote), _duree(vaisseau.temps_univers), _duree_courte(vaisseau.temps_univers - vaisseau.temps_pilote)])
@@ -1381,6 +1402,9 @@ func _mettre_a_jour_hud() -> void:
 		lignes.append(lumiere.infos())
 		lignes.append("TÊTE          %s (déplacement %.1f cm)      calcul de la lumière %.1f ms par image" % ["bouge avec les G" if tete_g else "fixe", tete_g_pos.length() * 100.0, temps_lumiere_ms])
 	hud.text = "\n".join(lignes)
+
+
+func _mettre_a_jour_message() -> void:
 	if vaisseau.avale:
 		message.text = "TOMBÉ DANS LE TROU NOIR\n(l'horizon est franchi : rien n'en ressort, pas même la lumière)\nR pour recommencer"
 	elif vaisseau.ecrase:
