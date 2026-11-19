@@ -201,7 +201,7 @@ func depuis_b(i: int, t_m: float, x_m: PackedFloat64Array) -> Array:
 ## Un événement du système i → [heure, position] dans le repère de la maison (centré sur la planète).
 func vers_maison(i: int, t: float, x: PackedFloat64Array) -> Array:
 	if systemes[i]["maison"]:
-		return [t, x.duplicate()]
+		return [t, lune_vers_planete(t, x) if sur_lune else x.duplicate()]
 	var e := vers_b(i, t, x)
 	return [e[0], solaire.depuis_b(float(e[0]), e[1])]
 
@@ -209,7 +209,7 @@ func vers_maison(i: int, t: float, x: PackedFloat64Array) -> Array:
 ## L'inverse : un événement de la maison → [heure, position] dans le repère du système i.
 func depuis_maison(i: int, t_m: float, x_m: PackedFloat64Array) -> Array:
 	if systemes[i]["maison"]:
-		return [t_m, x_m.duplicate()]
+		return [t_m, planete_vers_lune(t_m, x_m) if sur_lune else x_m.duplicate()]
 	return depuis_b(i, t_m, solaire.vers_b(t_m, x_m))
 
 
@@ -218,13 +218,13 @@ func depuis_maison(i: int, t_m: float, x_m: PackedFloat64Array) -> Array:
 ## transforme comme un événement (vers B) ; puis on retire la vitesse de la planète (30 km/s).
 func vitesse_vers_maison(i: int, u: PackedFloat64Array, t_m := 0.0) -> PackedFloat64Array:
 	if systemes[i]["maison"]:
-		return u.duplicate()
+		return _propre_lune(u, t_m, 1.0) if sur_lune else u.duplicate()
 	return _propre_vers_planete(_booster(i, u, 1.0), t_m, -1.0)
 
 
 func vitesse_depuis_maison(i: int, u: PackedFloat64Array, t_m := 0.0) -> PackedFloat64Array:
 	if systemes[i]["maison"]:
-		return u.duplicate()
+		return _propre_lune(u, t_m, -1.0) if sur_lune else u.duplicate()
 	return _booster(i, _propre_vers_planete(u, t_m, 1.0), -1.0)
 
 
@@ -268,7 +268,8 @@ func position_etoile_maison(i: int, e: int, t_m: float) -> PackedFloat64Array:
 ## Chez nous, le Soleil et la compagne bougent (vus de la planète) ; ailleurs, les étoiles sont immobiles.
 func position_etoile(i: int, e: int, t: float) -> PackedFloat64Array:
 	if systemes[i]["maison"]:
-		return position_etoile_maison(i, e, t)
+		var p := position_etoile_maison(i, e, t)
+		return planete_vers_lune(t, p) if sur_lune else p
 	return systemes[i]["etoiles"][e]["p"]
 
 
@@ -304,7 +305,7 @@ func preparer(v) -> void:
 
 
 func nom_courant() -> String:
-	return String(systemes[courant]["nom"])
+	return String(systemes[courant]["nom"]) + (" (repère de la lune)" if sur_lune else "")
 
 
 func a_la_maison() -> bool:
@@ -332,6 +333,8 @@ func vitesse_maison(v) -> PackedFloat64Array:
 ## Angle de rotation de la planète de la maison à l'heure t_m de la maison.
 func angle_planete_maison(v, t_m: float) -> float:
 	if a_la_maison():
+		if sur_lune:
+			return fposmod(float(_avant_lune["angle_planete"]) + float(_avant_lune["omega_planete"]) * (t_m - float(_avant_lune["t"])), TAU)
 		return v.angle_planete
 	return fposmod(_angle_depart + _omega_maison * (t_m - _t_depart), TAU)
 
@@ -352,6 +355,14 @@ func etoile_proche(v) -> Array:
 ## À chaque image : le vaisseau entre-t-il dans une étoile ? Est-il plus près d'un autre système ?
 ## Renvoie vrai si le repère a changé.
 func verifier(v) -> bool:
+	if a_la_maison() and lune_orbite != null and not v.ecrase:
+		if sur_lune:
+			if v.distance_centre() > SORTIE_LUNE * rayon_soi:
+				sortir_lune(v)
+		else:
+			var pl: PackedFloat64Array = lune_orbite.position(v.temps_univers)
+			if sqrt((v.px - pl[0]) ** 2 + (v.py - pl[1]) ** 2 + (v.pz - pl[2]) ** 2) < rayon_soi:
+				entrer_lune(v)
 	var proche := etoile_proche(v)
 	if not proche.is_empty() and float(proche[1]) < float(proche[2]) and not v.ecrase:
 		v.ecrase = true   # dans une étoile : brûlé (dans un trou noir : passé l'horizon)
@@ -385,6 +396,8 @@ func _distance_systeme(i: int, t_m: float, x_m: PackedFloat64Array) -> float:
 func passer(v, j: int) -> void:
 	if j == courant:
 		return
+	if sur_lune:
+		sortir_lune(v)
 	var ev := evenement_maison(v)
 	var t_m: float = ev[0]
 	var u_m := vitesse_vers_maison(courant, PackedFloat64Array([v.ux, v.uy, v.uz]), t_m)
@@ -440,6 +453,8 @@ func _regler_gravite(v, t_m: float) -> void:
 ## (déjà dans le repère de j). Pas de transformation de Lorentz : la bouche d'arrivée est immobile dans
 ## son système, le vaisseau en sort avec la vitesse qu'il a par rapport à elle. Même heure de l'univers.
 func sauter(v, j: int, p: PackedFloat64Array, u: PackedFloat64Array) -> void:
+	if sur_lune:
+		sortir_lune(v)
 	if a_la_maison() and j != 0:
 		_maison = {"gm": v.gm, "rayon_planete": v.rayon_planete, "relief": v.relief, "omega_planete": v.omega_planete,
 			"autres_astres": v.autres_astres}
@@ -462,6 +477,8 @@ func sauter(v, j: int, p: PackedFloat64Array, u: PackedFloat64Array) -> void:
 
 ## Retour immédiat à la maison (touche « remettre en orbite ») : gravité de la maison remise.
 func revenir_maison(v) -> void:
+	if sur_lune:
+		sortir_lune(v)
 	if a_la_maison():
 		return
 	courant = 0
@@ -621,3 +638,217 @@ func regler_lentille(lumiere, oeil: PackedFloat64Array) -> void:
 	# que ceux de la maison (l'écart d'aberration, 50 km/s, fait 0,01° : invisible)
 	var d := Vector3(p[0] - oeil[0], p[1] - oeil[1], p[2] - oeil[2]).normalized()
 	lumiere.regler_lentille(d, 2.0 * m, r_s)
+
+
+# =====================================================================
+# GRANDES DISTANCES : LE REPÈRE DE LA LUNE (pour s'y poser)
+# =====================================================================
+## Près de la lune, le vaisseau compte depuis le centre de la lune, avec des axes qui tournent avec elle
+## (comme ceux de la planète) : son sol devient le sol de la physique (train, ressorts, pilote auto), sa
+## gravité la gravité principale, et la planète, le Soleil, la compagne des astres qui bougent autour.
+## On y entre dans la « sphère d'influence » de la lune (Laplace : a·(m/M)^(2/5)), on en sort un peu
+## plus loin (pas d'aller-retour sans fin). La lune avance de 170 m/s : passage de Galilée (même heure).
+## Axes : X = direction de la lune au temps 0, Y = axe de son orbite (elle tourne autour de Y, comme la
+## planète), Z = X × Y. Tout est calculé en 64 bits.
+const SORTIE_LUNE := 1.1
+var lune_orbite = null           # scripts/lumiere/orbite.gd de la lune (vraie orbite)
+var lune_rayon := 0.0
+var lune_gm := 0.0
+var lune_relief := Callable()    # hauteur du sol (repère propre de la lune, axes de la planète)
+var rayon_soi := 0.0             # m, rayon de la sphère d'influence
+var sur_lune := false
+var changements_lune := 0
+var _avant_lune := {}
+var _bx := PackedFloat64Array([1.0, 0.0, 0.0])   # axes de la lune (colonnes), en 64 bits
+var _by := PackedFloat64Array([0.0, 1.0, 0.0])
+var _bz := PackedFloat64Array([0.0, 0.0, 1.0])
+
+
+func configurer_lune(orbite, rayon: float, gm_l: float, gm_planete: float, relief: Callable) -> void:
+	lune_orbite = orbite
+	lune_rayon = rayon
+	lune_gm = gm_l
+	lune_relief = relief
+	rayon_soi = float(orbite.rayon_orbite) * pow(gm_l / gm_planete, 0.4)
+	# axes orthonormés en 64 bits (Gram-Schmidt sur les axes de l'orbite)
+	var u: Vector3 = orbite.u
+	var w: Vector3 = orbite.v
+	var x := PackedFloat64Array([u.x, u.y, u.z])
+	_normer(x)
+	var v2 := PackedFloat64Array([w.x, w.y, w.z])
+	var d := v2[0] * x[0] + v2[1] * x[1] + v2[2] * x[2]
+	for k in 3:
+		v2[k] -= d * x[k]
+	_normer(v2)
+	var n := _vectoriel(x, v2)     # axe de l'orbite (comme lumiere_jeu : u × v)
+	_normer(n)
+	_bx = x
+	_by = n
+	_bz = _vectoriel(x, n)
+
+
+static func _normer(a: PackedFloat64Array) -> void:
+	var l := sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
+	for k in 3:
+		a[k] /= l
+
+
+static func _vectoriel(a: PackedFloat64Array, b: PackedFloat64Array) -> PackedFloat64Array:
+	return PackedFloat64Array([a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]])
+
+
+## Axes de la lune → axes de la planète (vecteur).
+func _vers_axes_planete(q: PackedFloat64Array) -> PackedFloat64Array:
+	return PackedFloat64Array([_bx[0] * q[0] + _by[0] * q[1] + _bz[0] * q[2], _bx[1] * q[0] + _by[1] * q[1] + _bz[1] * q[2],
+		_bx[2] * q[0] + _by[2] * q[1] + _bz[2] * q[2]])
+
+
+func _vers_axes_lune(q: PackedFloat64Array) -> PackedFloat64Array:
+	return PackedFloat64Array([_bx[0] * q[0] + _bx[1] * q[1] + _bx[2] * q[2], _by[0] * q[0] + _by[1] * q[1] + _by[2] * q[2],
+		_bz[0] * q[0] + _bz[1] * q[1] + _bz[2] * q[2]])
+
+
+## Orientation : axes de la lune → axes de la planète (pour l'affichage).
+func base_lune() -> Basis:
+	return Basis(Vector3(_bx[0], _bx[1], _bx[2]), Vector3(_by[0], _by[1], _by[2]), Vector3(_bz[0], _bz[1], _bz[2]))
+
+
+## Axes du repère actuel → axes du repère de la maison (pour dessiner le vaisseau tourné comme il faut).
+func base_affichage() -> Basis:
+	return base_lune() if sur_lune else Basis.IDENTITY
+
+
+func vitesse_lune(t: float) -> PackedFloat64Array:
+	var a: float = lune_orbite.angle(t)
+	var k: float = lune_orbite.vitesse_angulaire() * lune_orbite.rayon_orbite
+	var u: Vector3 = lune_orbite.u
+	var w: Vector3 = lune_orbite.v
+	return PackedFloat64Array([k * (-sin(a) * u.x + cos(a) * w.x), k * (-sin(a) * u.y + cos(a) * w.y),
+		k * (-sin(a) * u.z + cos(a) * w.z)])
+
+
+func lune_vers_planete(t: float, x: PackedFloat64Array) -> PackedFloat64Array:
+	var p: PackedFloat64Array = lune_orbite.position(t)
+	var q := _vers_axes_planete(x)
+	return PackedFloat64Array([q[0] + p[0], q[1] + p[1], q[2] + p[2]])
+
+
+func planete_vers_lune(t: float, x: PackedFloat64Array) -> PackedFloat64Array:
+	var p: PackedFloat64Array = lune_orbite.position(t)
+	return _vers_axes_lune(PackedFloat64Array([x[0] - p[0], x[1] - p[1], x[2] - p[2]]))
+
+
+## Vitesse propre : lune → planète (sens +1) ou planète → lune (−1), à l'heure t (Galilée sur la vitesse).
+func _propre_lune(u: PackedFloat64Array, t: float, sens: float) -> PackedFloat64Array:
+	var u0 := sqrt(1.0 + (u[0] * u[0] + u[1] * u[1] + u[2] * u[2]) / (C * C))
+	var w := PackedFloat64Array([u[0] / u0, u[1] / u0, u[2] / u0])
+	var vl := vitesse_lune(t)
+	if sens > 0.0:
+		w = _vers_axes_planete(w)
+		for k in 3:
+			w[k] += vl[k]
+	else:
+		for k in 3:
+			w[k] -= vl[k]
+		w = _vers_axes_lune(w)
+	var g := 1.0 / sqrt(maxf(1.0 - (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]) / (C * C), 1e-30))
+	return PackedFloat64Array([w[0] * g, w[1] * g, w[2] * g])
+
+
+func _changer_etat(v, vers_lune: bool) -> void:
+	var t: float = v.temps_univers
+	v.gamma()
+	var x := PackedFloat64Array([v.px, v.py, v.pz])
+	var u := PackedFloat64Array([v.ux, v.uy, v.uz])
+	var x2 := planete_vers_lune(t, x) if vers_lune else lune_vers_planete(t, x)
+	var u2 := _propre_lune(u, t, -1.0 if vers_lune else 1.0)
+	v.px = x2[0]
+	v.py = x2[1]
+	v.pz = x2[2]
+	v.ux = u2[0]
+	v.uy = u2[1]
+	v.uz = u2[2]
+	v._ecrire_vitesse()
+	var b := base_lune()
+	v.orientation = (Quaternion(b.transposed()) * v.orientation if vers_lune else Quaternion(b) * v.orientation).normalized()
+	v._touchait.clear()
+	v._accroches.clear()
+
+
+## Un astre vu depuis le repère de la lune : position(t) dans ce repère, à partir de sa position vue de
+## la planète (fonction ou point fixe).
+func _astre_vu_de_la_lune(a: Dictionary) -> Callable:
+	if a.has("position"):
+		var f: Callable = a["position"]
+		return func(t: float) -> PackedFloat64Array: return planete_vers_lune(t, f.call(t))
+	var p := PackedFloat64Array([float(a["x"]), float(a["y"]), float(a["z"])])
+	return func(t: float) -> PackedFloat64Array: return planete_vers_lune(t, p)
+
+
+func entrer_lune(v) -> void:
+	if sur_lune or lune_orbite == null:
+		return
+	var t: float = v.temps_univers
+	_avant_lune = {"gm": v.gm, "rayon_planete": v.rayon_planete, "relief": v.relief, "omega_planete": v.omega_planete,
+		"angle_planete": v.angle_planete, "autres_astres": v.autres_astres, "t": t}
+	_changer_etat(v, true)
+	sur_lune = true
+	changements_lune += 1
+	# Les astres vus de la lune. Le repère de la lune n'est pas « tiré » comme un astre libre : il suit
+	# l'orbite (ronde) de la lune autour de la planète, qui elle-même tombe vers le Soleil, la compagne et
+	# la lune. Son accélération exacte est retirée à part (acceleration_repere), plus de « terme indirect ».
+	var maison_astres: Array = v.autres_astres
+	var autres := []
+	var planete := {"nom": "planète", "gm": v.gm, "x": 0.0, "y": 0.0, "z": 0.0, "rayon": v.rayon_planete}
+	for a in [planete] + maison_astres:
+		if String(a["nom"]) == "lune":
+			continue
+		var f := _astre_vu_de_la_lune(a)
+		var p: PackedFloat64Array = f.call(t)
+		autres.append({"nom": a["nom"], "gm": a["gm"], "x": p[0], "y": p[1], "z": p[2], "position": f,
+			"rayon": a.get("rayon", 0.0)})
+	var w2: float = lune_orbite.vitesse_angulaire() ** 2
+	v.acceleration_repere = func(tt: float) -> Array:
+		# planète : attirée par les astres de la maison (terme indirect du repère de la planète)
+		var ax := 0.0
+		var ay := 0.0
+		var az := 0.0
+		for a in maison_astres:
+			if not a.get("indirect", false):
+				continue
+			var q: PackedFloat64Array = (a["position"] as Callable).call(tt) if a.has("position") else PackedFloat64Array([a["x"], a["y"], a["z"]])
+			var r2: float = q[0] * q[0] + q[1] * q[1] + q[2] * q[2]
+			var k: float = float(a["gm"]) / (r2 * sqrt(r2))
+			ax += k * q[0]
+			ay += k * q[1]
+			az += k * q[2]
+		# plus la lune sur son orbite ronde : −ω² × sa position
+		var pl: PackedFloat64Array = lune_orbite.position(tt)
+		var tot := _vers_axes_lune(PackedFloat64Array([ax - w2 * pl[0], ay - w2 * pl[1], az - w2 * pl[2]]))
+		return [tot[0], tot[1], tot[2]]
+	v.autres_astres = autres
+	v.gm = lune_gm
+	v.rayon_planete = lune_rayon
+	v.omega_planete = lune_orbite.vitesse_angulaire()
+	v.angle_planete = fposmod(lune_orbite.angle(t), TAU)
+	if lune_relief.is_valid():
+		var rel := lune_relief
+		v.relief = func(x: float, y: float, z: float) -> float: return float(rel.call(_vers_axes_planete(PackedFloat64Array([x, y, z]))))
+	else:
+		v.relief = Callable()
+
+
+func sortir_lune(v) -> void:
+	if not sur_lune:
+		return
+	var t: float = v.temps_univers
+	_changer_etat(v, false)
+	sur_lune = false
+	changements_lune += 1
+	v.gm = _avant_lune["gm"]
+	v.rayon_planete = _avant_lune["rayon_planete"]
+	v.relief = _avant_lune["relief"]
+	v.omega_planete = _avant_lune["omega_planete"]
+	v.autres_astres = _avant_lune["autres_astres"]
+	v.acceleration_repere = Callable()
+	v.angle_planete = fposmod(float(_avant_lune["angle_planete"]) + v.omega_planete * (t - float(_avant_lune["t"])), TAU)

@@ -504,9 +504,17 @@ func ajouter_astre_mobile(nom: String, gm_astre: float, position: Callable, rayo
 		"indirect": true, "rayon": rayon})
 
 
+## Repère qui accélère autrement que « tiré par les astres » (repère de la lune, qui suit son orbite autour
+## de la planète) : acceleration_repere(t) → [ax, ay, az], retirée de la gravité (force d'inertie exacte).
+var acceleration_repere := Callable()
+var _a_repere := [0.0, 0.0, 0.0]
+
+
 func _placer_astres(t := NAN) -> void:
 	if is_nan(t):
 		t = temps_univers
+	if acceleration_repere.is_valid():
+		_a_repere = acceleration_repere.call(t)
 	for a in autres_astres:
 		if a.has("position"):
 			var p: PackedFloat64Array = (a["position"] as Callable).call(t)
@@ -544,6 +552,10 @@ func gravite(x: float, y: float, z: float) -> Array:
 			ax -= k3 * float(a["x"])
 			ay -= k3 * float(a["y"])
 			az -= k3 * float(a["z"])
+	if acceleration_repere.is_valid():
+		ax -= float(_a_repere[0])
+		ay -= float(_a_repere[1])
+		az -= float(_a_repere[2])
 	return [ax, ay, az]
 
 

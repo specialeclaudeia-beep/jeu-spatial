@@ -6,6 +6,8 @@ const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
 const Commandes = preload("res://scripts/commandes.gd")
 const Jeu = preload("res://scripts/jeu.gd")
 const LumiereJeu = preload("res://scripts/lumiere_jeu.gd")
+const Etoiles = preload("res://scripts/lumiere/etoiles.gd")
+const OrbiteLune = preload("res://scripts/lumiere/orbite.gd")
 const Objets = preload("res://scripts/lumiere/objets.gd")
 const Reflets = preload("res://scripts/lumiere/reflets.gd")
 const PiloteAuto = preload("res://scripts/physique/pilote_auto.gd")
@@ -295,6 +297,7 @@ func _lancer() -> void:
 	_tests_einstein()
 	_tests_trou_de_ver()
 	_tests_grandes_distances()
+	_tests_lune()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
@@ -2334,3 +2337,190 @@ func _tests_grandes_distances() -> void:
 	var ok5: bool = lim_orbite < 1.0e5 and lim_loin > 1.0e6 and lim_etoiles > 1.0e7
 	_resultat(ok5, "Grandes distances : le temps accéléré loin des astres",
 		"Accélération permise (une image = 5 %% du chemin jusqu'à l'astre) : en orbite basse x%.0f (limitée par « %s » ; x100 000 reste toujours possible, comme avant) ; à 450 000 km de la planète x%s ; entre les étoiles à 0,9 c x%s (x10 millions possible : Alpha du Centaure en quelques minutes)." % [lim_orbite, nom_orbite, "%.0f" % lim_loin, "%.0f" % lim_etoiles])
+
+	# GD-6. De loin, la planète devient un point brillant (comme Vénus vue de la Terre) : lumière du Soleil
+	#       renvoyée par une boule mate, selon la phase.
+	var l = LumiereJeu.new()
+	l.soleil.position = PackedFloat64Array([Reperes.UA, 0.0, 0.0])
+	var rp := 600000.0
+	var d6 := 3.0e9
+	var plein: float = l.lux_astre(PackedFloat64Array([d6, 0.0, 0.0]), PackedFloat64Array([0.0, 0.0, 0.0]), rp, 0.12)
+	var quartier: float = l.lux_astre(PackedFloat64Array([0.0, 0.0, d6]), PackedFloat64Array([0.0, 0.0, 0.0]), rp, 0.12)
+	var nouvelle: float = l.lux_astre(PackedFloat64Array([-d6, 0.0, 0.0]), PackedFloat64Array([0.0, 0.0, 0.0]), rp, 0.12)
+	var attendu6: float = l.soleil.eclairement(PackedFloat64Array([0.0, 0.0, 0.0])) * (2.0 / 3.0) * 0.12 * (rp / d6) ** 2
+	var mag := -2.5 * log(plein / Etoiles.LUX_MAGNITUDE_0) / log(10.0)
+	var pixels := asin(rp / d6) / (deg_to_rad(75.0) / 720.0)
+	var ok6: bool = absf(plein / attendu6 - 1.0) < 1e-6 and absf(quartier / plein - 1.0 / PI) < 1e-6 and nouvelle < 1e-12 * plein
+	_resultat(ok6, "Grandes distances : la planète vue de loin",
+		"À 3 millions de km, son disque ne fait que %.2f pixel de rayon : on la voit comme un point de magnitude %.1f (pleine), %.0f %% de cet éclat en quartier, rien quand elle tourne sa face de nuit vers nous. Le point s'allume doucement quand le disque passe sous 3 pixels." % [pixels, mag, quartier / plein * 100.0])
+	l.free()
+
+
+# =====================================================================
+# TESTS : SE POSER SUR LA LUNE (repère de la lune)
+# =====================================================================
+## La maison avec sa lune (comme dans le jeu) : [vaisseau, repères, orbite de la lune].
+func _maison_avec_lune(relief := Callable()) -> Array:
+	var v = _nouveau(true)
+	v.omega_planete = TAU / 7200.0
+	v.placer_en_orbite(100000.0)
+	var o = OrbiteLune.new()
+	var s0: Vector3 = LumiereJeu.VERS_SOLEIL.normalized()
+	o.configurer(GM, LumiereJeu.ORBITE_LUNE, s0, Vector3.UP.cross(s0))
+	o.phase = LumiereJeu.PHASE_LUNE
+	var gm_l: float = OrbiteLune.gm_boule(LumiereJeu.RAYON_LUNE, LumiereJeu.MASSE_VOLUMIQUE_LUNE)
+	v.ajouter_astre_mobile("lune", gm_l, o.position, LumiereJeu.RAYON_LUNE)
+	var r = Reperes.new()
+	r.preparer(v)
+	r.configurer_lune(o, LumiereJeu.RAYON_LUNE, gm_l, GM, relief)
+	return [v, r, o]
+
+
+## Place le vaisseau (repère de la planète) à l'altitude h au-dessus de la lune, dans la direction d (axes de
+## la planète), immobile par rapport au centre de la lune.
+func _au_dessus_de_la_lune(v, r, o, h: float, d: Vector3) -> void:
+	var t: float = v.temps_univers
+	var pl: PackedFloat64Array = o.position(t)
+	var vl: PackedFloat64Array = r.vitesse_lune(t)
+	var n := d.normalized()
+	var k := LumiereJeu.RAYON_LUNE + h
+	v.px = pl[0] + n.x * k
+	v.py = pl[1] + n.y * k
+	v.pz = pl[2] + n.z * k
+	v.vx = vl[0]
+	v.vy = vl[1]
+	v.vz = vl[2]
+	v._lire_vitesse()
+
+
+func _tests_lune() -> void:
+	var bosses := func(p: PackedFloat64Array) -> float:
+		var l := sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2])
+		return 800.0 * p[0] / l + 300.0 * p[2] / l
+
+	# L-1. Entrer dans le repère de la lune et en ressortir ne déplace rien : même endroit, même vitesse,
+	#      même orientation (vus de la planète). Et le repère est choisi tout seul (sphère d'influence).
+	var a := _maison_avec_lune(bosses)
+	var v = a[0]
+	var r = a[1]
+	var o = a[2]
+	v.temps_univers = 12345.0
+	_au_dessus_de_la_lune(v, r, o, 400000.0, Vector3(0.3, 0.8, -0.5))
+	var dehors = r.verifier(v)
+	var dedans_avant: bool = r.sur_lune
+	_au_dessus_de_la_lune(v, r, o, 50000.0, Vector3(0.3, 0.8, -0.5))
+	v.vx += 12.0
+	v.vy -= 3.0
+	v._lire_vitesse()
+	v.orientation = Quaternion(Vector3(0.2, 1.0, 0.4).normalized(), 1.1)
+	var x0 := PackedFloat64Array([v.px, v.py, v.pz])
+	var u0 := PackedFloat64Array([v.vx, v.vy, v.vz])
+	var q0: Quaternion = v.orientation
+	r.verifier(v)
+	var entre: bool = r.sur_lune
+	var alt_lune: float = v.altitude()
+	var x_vu: PackedFloat64Array = r.vers_maison(0, v.temps_univers, PackedFloat64Array([v.px, v.py, v.pz]))[1]
+	var u_vu: PackedFloat64Array = r.vitesse_maison(v)
+	var q_vu: Quaternion = Quaternion(r.base_affichage()) * v.orientation
+	r.sortir_lune(v)
+	var ecart_x := _ecart3(x0, PackedFloat64Array([v.px, v.py, v.pz]))
+	var ecart_vu := _ecart3(x0, x_vu)
+	var ecart_v := _ecart3(u0, PackedFloat64Array([v.vx, v.vy, v.vz])) + _ecart3(u0, u_vu)
+	var ecart_q := _ecart_angle(q0, v.orientation) + _ecart_angle(q0, q_vu)
+	var ok1: bool = not dehors and not dedans_avant and entre and absf(alt_lune - 50000.0 - float(bosses.call(PackedFloat64Array([0.3, 0.8, -0.5])))) > -1.0 \
+		and ecart_x < 1e-6 and ecart_vu < 1e-6 and ecart_v < 1e-9 and ecart_q < 1e-3 and v.gm == GM
+	_resultat(ok1, "Lune : entrer dans son repère et en sortir",
+		"Sphère d'influence de la lune : %.0f km autour d'elle (à 400 km du sol : repère de la planète ; à 50 km : repère de la lune). Altitude lue dans le repère de la lune : %.0f m (le relief compte). Aller-retour : écart %s m, vitesse %s m/s, orientation %.5f°." % [r.rayon_soi / 1000.0, alt_lune, String.num_scientific(ecart_x), String.num_scientific(ecart_v), ecart_q])
+
+	# L-2. Le mouvement est le même dans les deux repères : chute de 10 min depuis 60 km au-dessus de la
+	#      lune (avec 40 m/s de côté), calculée dans le repère de la planète (lune = astre qui bouge) puis
+	#      dans celui de la lune (qui suit son orbite : son accélération exacte est retirée).
+	var ecarts := []
+	var chute2 := 0.0
+	for pas_l in [0.5, 0.125]:
+		var resultats := []
+		for avec_repere in [false, true]:
+			var b := _maison_avec_lune()
+			var w = b[0]
+			var rw = b[1]
+			w.temps_univers = 5000.0
+			_au_dessus_de_la_lune(w, rw, b[2], 60000.0, Vector3(-0.4, 0.2, 0.9))
+			var cote := Vector3(0.9, 0.0, 0.4).normalized() * 40.0
+			w.vx += cote.x
+			w.vz += cote.z
+			w._lire_vitesse()
+			if avec_repere:
+				rw.entrer_lune(w)
+			for i in int(600.0 / pas_l):
+				w.pas(pas_l)
+			if avec_repere:
+				rw.sortir_lune(w)
+			var xf := PackedFloat64Array([w.px, w.py, w.pz])
+			var alt: float = _ecart3(xf, b[2].position(w.temps_univers)) - LumiereJeu.RAYON_LUNE
+			resultats.append(xf)
+			chute2 = 60000.0 - alt
+		ecarts.append(_ecart3(resultats[0], resultats[1]))
+	var ok2: bool = chute2 > 5000.0 and float(ecarts[0]) < 0.5 and float(ecarts[1]) < 0.5
+	_resultat(ok2, "Lune : même chute dans les deux repères",
+		"Lâché à 60 km de la lune : après 10 min, il est descendu de %.1f km. Calculé dans le repère de la planète ou dans celui de la lune : %.3f m d'écart avec des pas de 0,5 s, %.3f m avec des pas de 0,125 s." % [chute2 / 1000.0, ecarts[0], ecarts[1]])
+
+	# L-3. Se poser : à l'équateur de la lune (qui tourne une fois par tour autour de la planète), train sorti,
+	#      lâché à 1,5 m au-dessus du sol : il se pose sur ses roues et reste posé (sans glisser).
+	var c := _maison_avec_lune()
+	v = c[0]
+	r = c[1]
+	o = c[2]
+	r.entrer_lune(v)
+	v.reactivite_moteurs = 0.3
+	v.train = 1.0
+	v.train_consigne = 1.0
+	v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)   # le haut du vaisseau vers +X
+	v.px = LumiereJeu.RAYON_LUNE + VaisseauPhysique.HAUTEUR_TRAIN + 1.5
+	v.py = 0.0
+	v.pz = 0.0
+	var vs: Vector3 = v.vitesse_sol(v.px, v.py, v.pz)
+	v.vx = vs.x
+	v.vy = vs.y
+	v.vz = vs.z
+	v._lire_vitesse()
+	v.omega = Vector3.ZERO
+	var touche := -1.0
+	for i in 240 * 40:
+		v.commander(0.0, 0.0, 0.0, 0.0)
+		v.pas(1.0 / 240.0)
+		if v.au_sol and touche < 0.0:
+			touche = i / 240.0
+	var glisse: float = v.vitesse_par_rapport_au_sol().length()
+	var ok3: bool = v.au_sol and not v.ecrase and glisse < 0.05 and touche > 0.0
+	_resultat(ok3, "Lune : se poser sur ses roues",
+		"Lâché à 1,5 m (gravité de la lune %.3f m/s², 78 fois moins que sur Terre) : touché après %.1f s, puis posé : %s, glisse à %.3f m/s, sol de la lune à %.1f m/s dans l'espace." % [v.gm / (LumiereJeu.RAYON_LUNE ** 2), touche, "oui" if v.au_sol else "non", glisse, vs.length()])
+
+	# L-4. Le pilote auto sait se poser sur la lune (touche L), depuis 1 000 m.
+	var e := _maison_avec_lune()
+	v = e[0]
+	r = e[1]
+	r.entrer_lune(v)
+	v.reactivite_moteurs = 0.3
+	v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)
+	v.px = LumiereJeu.RAYON_LUNE + 1000.0
+	v.py = 0.0
+	v.pz = 0.0
+	var vs4: Vector3 = v.vitesse_sol(v.px, v.py, v.pz)
+	v.vx = vs4.x - 4.0
+	v.vy = vs4.y
+	v.vz = vs4.z - 15.0
+	v._lire_vitesse()
+	var p = PiloteAuto.new()
+	p.activer(PiloteAuto.ATTERRIR, v)
+	var touche4 := 0.0
+	var duree4 := 0.0
+	for i in 120 * 400:
+		var rel_avant: float = v.vitesse_par_rapport_au_sol().length()
+		_image_pilote(v, p, 1)
+		duree4 += 1.0 / 120.0
+		if v.au_sol and touche4 == 0.0:
+			touche4 = rel_avant
+		if (v.au_sol and v.vitesse_par_rapport_au_sol().length() < 0.05) or v.ecrase:
+			break
+	_resultat(v.au_sol and not v.ecrase and touche4 < 2.0, "Lune : le pilote auto s'y pose",
+		"Depuis 1 000 m, 15 m/s de côté : %s après %.0f s, touché à %.2f m/s." % ["écrasé" if v.ecrase else ("posé" if v.au_sol else "pas posé"), duree4, touche4])
