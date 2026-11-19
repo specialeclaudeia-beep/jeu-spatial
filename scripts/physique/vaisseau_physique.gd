@@ -592,7 +592,21 @@ const PAS_SOL := 1.0 / 240.0     # s, pas le plus long quand le vaisseau est pr�
 const HAUTEUR_DECOUPE := 30.0    # m : en dessous de cette altitude, on découpe
 
 
+## Einstein C : le trou de ver (scripts/physique/trou_de_ver.gd), ou null. Près de sa gorge, c'est lui
+## qui fait avancer le vaisseau (l'espace y est courbé autrement qu'autour d'un astre).
+var trou_de_ver = null
+
+
 func pas(dt: float) -> void:
+	# Einstein C : à grande vitesse, découper le pas pour ne pas sauter par-dessus la gorge
+	if trou_de_ver != null:
+		var n_t: int = trou_de_ver.morceaux(self, dt)
+		if n_t > 1:
+			for i in n_t:
+				_pas_un(dt / n_t)
+				if ecrase:
+					return
+			return
 	# Einstein B : près d'un astre très dense (trou noir), tout va très vite : pas découpé pour que
 	# chaque morceau fasse au plus 1/200 du temps qu'il faut pour tomber ou passer.
 	var n_dense := _morceaux_dense(dt)
@@ -667,6 +681,9 @@ func _pas_un(dt: float) -> void:
 	# 3. Translation : méthode de Verlet (stable pour les orbites), appliquée à la vitesse propre u
 	#    (relativité restreinte). À petite vitesse, c'est exactement l'ancien calcul de Newton.
 	#    Einstein B : la gravité n'est plus une force, c'est la courbure de l'espace-temps (voir _pousser_u).
+	if trou_de_ver != null and trou_de_ver.translater(self, a_p, dt):
+		_tourner(couple, dt)   # près de la gorge du trou de ver : c'est lui qui a fait avancer le vaisseau
+		return
 	_lire_vitesse()
 	var m0 := metrique(px, py, pz)
 	var rythme0 := float(m0[0]) / gamma()

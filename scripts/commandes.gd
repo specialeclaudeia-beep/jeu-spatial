@@ -66,6 +66,7 @@ const ACTIONS := [
 	["tete_g", "Tête qui bouge avec les G (oui / non)", "l:73", ""],   # I
 	["toile", "Toile de l'espace : la courbure d'Einstein (oui / non)", "l:89", ""],   # Y
 	["trou_noir", "Aller au trou noir Gaia BH1 (saut d'essai)", "l:77", ""],          # M
+	["trou_de_ver", "Aller au trou de ver (saut d'essai, il mène à Alpha du Centaure)", "l:87", ""],   # W
 	["zoom", "Zoom (lire les instruments)", "l:66", "b:7"],          # B, L3 (maintenir)
 	["tests", "Tests de physique", "p:4194332", ""],                  # F1
 	["ecran_touches", "Configurer les commandes", "p:4194333", "b:6"], # F2, Options

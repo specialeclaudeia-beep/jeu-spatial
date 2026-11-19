@@ -43,19 +43,31 @@ void sky() {
 		float pix = oeil_pixel_angle * dop;
 		float a = soleil_rayon_angle;
 		vec3 l = doppler_surface(vec3(1.0), T_FOND, dop) * fond_galaxie(n);
-		// Disque du Soleil à sa vraie taille, bord adouci sur un pixel.
-		float disque = astre_rond(n, soleil_direction, a, soleil_luminance, pix);
-		// La couronne du Soleil (gaz très chaud autour de lui), un millionième de son éclat :
-		// formule de Baumbach. Invisible à côté du disque, elle apparaît quand un astre le cache.
-		float th = atan(length(cross(n, soleil_direction)), dot(n, soleil_direction));
-		float r = max(th / a, 1.0);
-		float couronne = 1e-8 * (0.0532 / pow(r, 2.5) + 1.425 / pow(r, 7.0) + 2.565 / pow(r, 17.0));
-		float couvre = clamp((a - th) / max(pix, 1e-9) + 0.5, 0.0, 1.0);
-		l += doppler_surface(soleil_couleur, T_SOLEIL, dop) * (disque + soleil_luminance * couronne * (1.0 - couvre));
-		// L'étoile compagne : un point orangé (plus petit qu'un pixel à 5 UA).
-		if (compagnon_eclairement > 0.0) {
-			l += doppler_surface(compagnon_couleur, compagnon_temperature, dop)
-				* astre_rond(n, compagnon_direction, compagnon_rayon_angle, compagnon_luminance / (1.0 - ASSOMBRISSEMENT_BORD / 3.0), pix);
+		// Einstein C : ce pixel voit À TRAVERS le trou de ver : le ciel d'en face, avec son étoile
+		// (et pas les nôtres).
+		bool en_face = lo.w > 1.5;
+		if (en_face && trou_soleil_lum.a > 0.0) {
+			// la gorge rapetisse le ciel d'en face : un pixel y couvre un plus grand angle (mesuré
+			// d'un pixel à l'autre), sinon une étoile plus petite qu'un pixel passerait entre deux pixels
+			float pix_face = max(pix, 0.7 * length(fwidth(n)));
+			l += doppler_surface(trou_soleil_lum.rgb, trou_soleil_t, dop)
+				* astre_rond(n, trou_soleil.xyz, trou_soleil.w, trou_soleil_lum.a, pix_face);
+		}
+		if (!en_face) {
+			// Disque du Soleil à sa vraie taille, bord adouci sur un pixel.
+			float disque = astre_rond(n, soleil_direction, a, soleil_luminance, pix);
+			// La couronne du Soleil (gaz très chaud autour de lui), un millionième de son éclat :
+			// formule de Baumbach. Invisible à côté du disque, elle apparaît quand un astre le cache.
+			float th = atan(length(cross(n, soleil_direction)), dot(n, soleil_direction));
+			float r = max(th / a, 1.0);
+			float couronne = 1e-8 * (0.0532 / pow(r, 2.5) + 1.425 / pow(r, 7.0) + 2.565 / pow(r, 17.0));
+			float couvre = clamp((a - th) / max(pix, 1e-9) + 0.5, 0.0, 1.0);
+			l += doppler_surface(soleil_couleur, T_SOLEIL, dop) * (disque + soleil_luminance * couronne * (1.0 - couvre));
+			// L'étoile compagne : un point orangé (plus petit qu'un pixel à 5 UA).
+			if (compagnon_eclairement > 0.0) {
+				l += doppler_surface(compagnon_couleur, compagnon_temperature, dop)
+					* astre_rond(n, compagnon_direction, compagnon_rayon_angle, compagnon_luminance / (1.0 - ASSOMBRISSEMENT_BORD / 3.0), pix);
+			}
 		}
 		if (ombre_trou_noir) {
 			l = vec3(0.0);

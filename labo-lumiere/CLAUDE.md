@@ -298,6 +298,15 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
   l'axe du regard, floue (image virtuelle à 7,5 cm, œil réglé à l'infini : rayon = rayon de pupille / 7,5 cm,
   ~1°). Claire : 0,25 % du Soleil ; or : ~2,5 %, dorée. Rien sans casque ni dans le labo (global à 0).
 
+## Einstein C : trou de ver (partie C++ `TrouDeVer`)
+- `cpp/src/trou_de_ver.cpp` : trou de ver d'Ellis, angles de la lumière EXACTS (intégrales elliptiques F et K,
+  forme de Carlson R_F) : `angle_origine(θ, l_o, a)` → (ψ, côté), `angle_gorge`, `deviation(b, a)` = 2K(a/b) − π,
+  `table(l_o, a)` = 512 × 4 × RGBA (ligne 0 dans la gorge, 1 hors de la gorge, 2 et 3 images des étoiles), 0,4 ms.
+- `lentille.gdshaderinc` : `lentille.w = 2` = trou de ver (`trou_origine`, `trou_image`, `trou_symetrie`,
+  uniforms `trou_axe`, `trou_soleil*`). `ciel.gdshader` : un pixel « d'en face » ne montre que la Voie lactée et
+  l'étoile principale d'en face (taille de pixel mesurée avec `fwidth`, sinon une étoile y passe entre deux pixels).
+- Côté jeu : `scripts/physique/trou_de_ver.gd` (physique et réglage de la lumière), `lumiere_jeu.regler_trou_de_ver`.
+
 ## Organisation
 | Chemin | Contenu |
 |---|---|

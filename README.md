@@ -50,6 +50,7 @@ Disposition par défaut :
 | tête qui bouge avec les G (oui / non) | I | — (à choisir avec F2) |
 | toile de l'espace : la courbure d'Einstein (oui / non) | Y | — (à choisir avec F2) |
 | saut d'essai vers le trou noir Gaia BH1 | M | — (à choisir avec F2) |
+| saut d'essai devant le trou de ver (vers Alpha du Centaure) | W | — (à choisir avec F2) |
 | tests de physique | F1 (Échap pour revenir) | Rond pour revenir |
 | configurer les commandes | F2 | Options |
 
@@ -147,6 +148,14 @@ ou couper la poussée, le désactive.
   la « toile de l'espace », l'entonnoir de Flamm (vraie forme de l'espace autour de l'astre), exagéré quand il
   est trop petit pour être vu (le facteur est affiché), couleur = ralentissement du temps. Passer l'horizon du
   trou noir : on ne revient pas (R pour recommencer).
+- **Trou de ver fixe** (programme Einstein, étape C) : un trou de ver d'Ellis (celui d'Interstellar, gorge de
+  1 km de rayon) relie un point à 20 000 km de la planète à Alpha du Centaure (à 1,25 UA de son étoile A).
+  Il n'attire rien (pas de gravité) : seul l'espace est courbé. Le vaisseau y suit le chemin le plus droit, et ce
+  chemin peut passer par la gorge : on ressort 4,37 années-lumière plus loin, avec la même vitesse. Passé à côté,
+  il est dévié exactement comme la lumière. Touche W = saut d'essai à 30 km de la gorge, nez vers elle : mettre
+  les gaz. Dans la gorge, on voit le ciel d'en face (Alpha du Centaure A au centre quand on est dans l'axe),
+  autour, notre ciel déformé et un anneau brillant (la lumière qui a tourné autour de la gorge). Angles de la
+  lumière calculés exactement en C++ (intégrales elliptiques, `TrouDeVer`, 0,4 ms quand l'œil bouge).
 - Pas de carburant. Pas encore d'atmosphère (phase 4 de la feuille de route).
 - Marqueurs : (o) = direction où l'on va, (x) = direction d'où l'on vient.
 
@@ -155,6 +164,7 @@ ou couper la poussée, le désactive.
 - `scripts/physique/reperes.gd` : les systèmes d'étoile, leurs repères et les transformations de Lorentz entre eux.
 - `scripts/physique/lentille.gd` : Einstein B, la lumière courbée par un trou noir (tables pour le ciel et les étoiles).
 - `scripts/einstein/toile.gd` : Einstein B, la « toile de l'espace » (touche Y).
+- `scripts/physique/trou_de_ver.gd` : Einstein C, le trou de ver (trajet du vaisseau, lumière, touche W) ; calcul de la lumière en C++ (`labo-lumiere/cpp/src/trou_de_ver.cpp`).
 - `scripts/jeu.gd` : affichage (modèle 3D, vues, animation des ailes et du train), instruments.
 - `modeles/vaisseau/` : le vaisseau (`vaisseau_exterieur.glb`), le cockpit (`cockpit.glb`) et les positions
   des propulseurs. Pour une nouvelle version du modèle, il suffit de remplacer ces fichiers (mêmes noms).
