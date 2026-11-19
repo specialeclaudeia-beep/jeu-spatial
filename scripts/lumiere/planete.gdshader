@@ -35,6 +35,9 @@ render_mode cull_disabled, skip_vertex_transform, ambient_light_disabled, fog_di
 
 uniform sampler2D coins : filter_nearest;      // RGBA 32 bits flottants, 90 × places
 uniform sampler2D rayons : filter_nearest;     // RGBA 8 bits, 225 × places (5 texels par coin)
+// Vitesse : loin du sol, l'ombre du vaisseau ne peut pas l'atteindre. Le jeu retire alors l'astre de la
+// lumière de Godot (une passe de dessin en moins) et la couleur passe par EMISSION.
+uniform bool sans_lumiere_godot = false;
 uniform float maintenant = 0.0;                // horloge du labo (s), la même que la partie C++
 uniform float duree_glissement = 0.5;          // s
 uniform float lux_fond = 2.0e-4;               // lumière des étoiles et du fond du ciel (lux)
@@ -260,6 +263,9 @@ void fragment() {
 	// Godot multiplie la lumière par ALBEDO : on lui donne 1, la vraie couleur est dans notre calcul.
 	ALBEDO = vec3(1.0);
 	ROUGHNESS = 1.0;
+	if (sans_lumiere_godot) {
+		EMISSION = oeil_vers_ecran(reste_v + soleil_direct_v, FRAGCOORD.xy, TIME);   // EMISSION n'est pas reconvertie par Godot (vérifié)
+	}
 	DEPTH = 1.0 - clamp(log2(max(profondeur, profondeur_pres) / profondeur_pres) / log2(profondeur_loin / profondeur_pres), 0.0, 1.0);
 }
 

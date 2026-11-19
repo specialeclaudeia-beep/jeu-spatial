@@ -105,7 +105,11 @@ var _soleil_cache := false           # Soleil caché par la coque, vu de l'œil
 var reflet_visiere := Vector3.ZERO   # étape 9 : voile renvoyé par la visière (cd/m²)
 ## Temps de chaque partie du calcul (ms, dernière image) : pour trouver ce qui ralentit.
 var ms_parties := {}
-const POSE_CHAQUE := 4             # posemètre réparti sur 4 images
+const COUCHE_PLANETE := 1 << 18
+const COUCHE_LUNE := 1 << 19
+const ALTITUDE_OMBRE_SOL := 400.0    # m : plus haut, l'ombre du vaisseau (200 m au plus) n'atteint pas le sol
+var _ombre_sol := true
+const POSE_CHAQUE := 8             # posemètre réparti sur 8 images (~0,13 s à 60 i/s)
 var _pose_compte := 0
 var _pose_echantillons := PackedFloat32Array()
 var _pose_cases := PackedFloat32Array()
@@ -209,14 +213,24 @@ func preparer(p_camera: Camera3D, p_rayon: float, gm_planete := 0.0) -> bool:
 	lumiere_soleil.shadow_bias = 0.03
 	lumiere_soleil.shadow_normal_bias = 1.0
 	add_child(lumiere_soleil)
+	# Les astres ont leur propre couche : la planète n'entre dans la lumière de Godot (une passe de dessin
+	# de plus, ~9 ms sur un PC modeste) que près du sol, là où l'ombre du vaisseau peut tomber dessus ;
+	# la lune n'y entre jamais.
+	if planete:
+		planete.layers = COUCHE_PLANETE
+	if lune:
+		lune.layers = COUCHE_LUNE
+		lune.materiau.set_shader_parameter("sans_lumiere_godot", true)
+	lumiere_soleil.light_cull_mask = 0xFFFFF & ~COUCHE_LUNE
+	_regler_ombre_sol(true)
 
 	reflets.preparer()
 
 	camera.near = CAMERA_PRES
 	camera.far = CAMERA_LOIN
-	RenderingServer.global_shader_parameter_set("planete_rayon", rayon)
-	RenderingServer.global_shader_parameter_set("planete_albedo", ALBEDO_PLANETE)
-	RenderingServer.global_shader_parameter_set("affichage_pres", PRES)
+	_g("planete_rayon", rayon)
+	_g("planete_albedo", ALBEDO_PLANETE)
+	_g("affichage_pres", PRES)
 	return true
 
 
@@ -310,12 +324,14 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	planete.profondeur_pres = PRES
 	planete.profondeur_loin = loin
 	var rs := RenderingServer
-	rs.global_shader_parameter_set("affichage_loin", loin)
-	rs.global_shader_parameter_set("planete_centre", rel)
+	_g("affichage_loin", loin)
+	_g("planete_centre", rel)
 	planete.rotation_astre = rot_planete
 	if lune:
 		var o := _dans_repere(rot_planete, pos_lune[0], pos_lune[1], pos_lune[2])
 		planete.occulteur = PackedFloat64Array([o[0], o[1], o[2], RAYON_LUNE])
+	_regler_ombre_sol(altitude_oeil < ALTITUDE_OMBRE_SOL)
+	_regler_zones_ombre()
 	_partie("préparation")
 	planete.mettre_a_jour(camera, oeil_planete, rel64, temps, chrono,
 		Vector4(rel_lune.x, rel_lune.y, rel_lune.z, RAYON_LUNE if lune else 0.0))
@@ -346,26 +362,26 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	var sc: Vector3 = compagne.direction(oeil64)
 	var ec: float = compagne.eclairement(oeil64)
 	var vis_c := _part_sphere(oeil64, sc, compagne.rayon_angle(oeil64))
-	rs.global_shader_parameter_set("soleil_direction", s)
-	rs.global_shader_parameter_set("soleil_eclairement", e)
-	rs.global_shader_parameter_set("soleil_luminance", Soleil.luminance_centre())
-	rs.global_shader_parameter_set("soleil_rayon_angle", alpha)
+	_g("soleil_direction", s)
+	_g("soleil_eclairement", e)
+	_g("soleil_luminance", Soleil.luminance_centre())
+	_g("soleil_rayon_angle", alpha)
 	var c := Soleil.COULEUR
-	rs.global_shader_parameter_set("soleil_couleur", Vector3(c.r, c.g, c.b))
-	rs.global_shader_parameter_set("objets_soleil_visible", vis)
-	rs.global_shader_parameter_set("objets_compagnon_visible", vis_c)
-	rs.global_shader_parameter_set("compagnon_direction", sc)
-	rs.global_shader_parameter_set("compagnon_eclairement", ec)
-	rs.global_shader_parameter_set("compagnon_luminance", compagne.luminance_moyenne() if compagne.allumee else 0.0)
-	rs.global_shader_parameter_set("compagnon_rayon_angle", compagne.rayon_angle(oeil64))
-	rs.global_shader_parameter_set("compagnon_temperature", compagne.temperature)
+	_g("soleil_couleur", Vector3(c.r, c.g, c.b))
+	_g("objets_soleil_visible", vis)
+	_g("objets_compagnon_visible", vis_c)
+	_g("compagnon_direction", sc)
+	_g("compagnon_eclairement", ec)
+	_g("compagnon_luminance", compagne.luminance_moyenne() if compagne.allumee else 0.0)
+	_g("compagnon_rayon_angle", compagne.rayon_angle(oeil64))
+	_g("compagnon_temperature", compagne.temperature)
 	var cc: Color = compagne.couleur()
-	rs.global_shader_parameter_set("compagnon_couleur", Vector3(cc.r, cc.g, cc.b))
-	rs.global_shader_parameter_set("ciel_pole_galaxie", Etoiles.pole_galaxie())
-	rs.global_shader_parameter_set("ciel_centre_galaxie", Etoiles.centre_galaxie())
-	rs.global_shader_parameter_set("oeil_vitesse", beta)
+	_g("compagnon_couleur", Vector3(cc.r, cc.g, cc.b))
+	_g("ciel_pole_galaxie", Etoiles.pole_galaxie())
+	_g("ciel_centre_galaxie", Etoiles.centre_galaxie())
+	_g("oeil_vitesse", beta)
 	var vu: Array = Etoiles.aberration(s, beta)
-	rs.global_shader_parameter_set("soleil_direction_vue", vu[0])
+	_g("soleil_direction_vue", vu[0])
 	if noeud_etoiles:
 		for nd in [noeud_etoiles, noeud_etoiles_2]:
 			var m := nd.material_override as ShaderMaterial
@@ -380,7 +396,7 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	_regler_lampes(base, oeil_local, gaz)
 	_partie("lampes")
 	var filtre: Vector3 = VISIERES[visiere_portee()]
-	rs.global_shader_parameter_set("oeil_filtre", filtre)
+	_g("oeil_filtre", filtre)
 
 	# L'œil : posemètre (planète, ciel, cockpit), puis adaptation.
 	luminance_vue = _poser(rel, s, e, alpha, vis, ec * vis_c, sc, base, oeil_local)
@@ -391,13 +407,59 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 		oeil.equilibrer(luminance_vue)
 		_premier = false
 	oeil.avancer(luminance_vue, delta)
-	rs.global_shader_parameter_set("oeil_gain", oeil.gain())
-	rs.global_shader_parameter_set("oeil_nuit", oeil.nuit())
+	_g("oeil_gain", oeil.gain())
+	_g("oeil_nuit", oeil.nuit())
 	var b := camera.global_transform.basis
-	rs.global_shader_parameter_set("oeil_droite", b.x)
-	rs.global_shader_parameter_set("oeil_haut", b.y)
-	rs.global_shader_parameter_set("oeil_pixel_angle", deg_to_rad(camera.fov) / maxf(get_viewport().get_visible_rect().size.y, 1.0))
+	_g("oeil_droite", b.x)
+	_g("oeil_haut", b.y)
+	_g("oeil_pixel_angle", deg_to_rad(camera.fov) / maxf(get_viewport().get_visible_rect().size.y, 1.0))
 	_partie("œil")
+
+
+func _regler_ombre_sol(oui: bool) -> void:
+	if oui == _ombre_sol or not planete or not lumiere_soleil:
+		return
+	_ombre_sol = oui
+	if oui:
+		lumiere_soleil.light_cull_mask |= COUCHE_PLANETE
+	else:
+		lumiere_soleil.light_cull_mask &= ~COUCHE_PLANETE
+	planete.materiau.set_shader_parameter("sans_lumiere_godot", not oui)
+
+
+## Loin du sol, l'ombre n'a plus qu'à couvrir le vaisseau : une seule zone (une carte d'ombre dessinée
+## au lieu de deux, moitié moins de travail pour la carte graphique), et plus fine. Cockpit : 12 m autour
+## de l'œil (le pilote, l'habitacle, le nez, les ailes proches) ; vue extérieure : 40 m (caméra à 24 m
+## du centre + longueur du vaisseau). Près du sol : les deux zones d'origine (0-20 m, 20-200 m).
+const OMBRE_PROCHE_COCKPIT := 12.0
+const OMBRE_PROCHE_EXTERIEUR := 40.0
+var _zones_ombre := -1.0
+
+
+func _regler_zones_ombre() -> void:
+	if not lumiere_soleil:
+		return
+	var d := 0.0 if _ombre_sol else (OMBRE_PROCHE_COCKPIT if vue_interieure else OMBRE_PROCHE_EXTERIEUR)
+	if d == _zones_ombre:
+		return
+	_zones_ombre = d
+	if d == 0.0:
+		lumiere_soleil.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		lumiere_soleil.directional_shadow_max_distance = 200.0
+	else:
+		lumiere_soleil.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+		lumiere_soleil.directional_shadow_max_distance = d
+
+
+## Paramètre global des shaders, envoyé seulement s'il a changé (une quarantaine par image sinon).
+var _globaux := {}
+
+
+func _g(nom: StringName, valeur: Variant) -> void:
+	if _globaux.has(nom) and typeof(_globaux[nom]) == typeof(valeur) and _globaux[nom] == valeur:
+		return
+	_globaux[nom] = valeur
+	RenderingServer.global_shader_parameter_set(nom, valeur)
 
 
 func _partie(nom: String) -> void:
@@ -442,18 +504,18 @@ func _regler_lampes(base: Basis, oeil_local: Vector3, gaz: float) -> void:
 	var rs := RenderingServer
 	# Le vaisseau est dessiné autour de l'œil : son centre est à -base × oeil_local.
 	var centre := -(base * oeil_local)
-	rs.global_shader_parameter_set("lampe_a_position", centre + base * PROJECTEUR_POSITION)
-	rs.global_shader_parameter_set("lampe_a_direction", (base * PROJECTEUR_AXE).normalized())
-	rs.global_shader_parameter_set("lampe_a_intensite", PROJECTEUR_INTENSITE if projecteur else 0.0)
-	rs.global_shader_parameter_set("lampe_a_cos_bord", PROJECTEUR_COS)
-	rs.global_shader_parameter_set("lampe_a_couleur", Vector3(1.0, 0.97, 0.92))
+	_g("lampe_a_position", centre + base * PROJECTEUR_POSITION)
+	_g("lampe_a_direction", (base * PROJECTEUR_AXE).normalized())
+	_g("lampe_a_intensite", PROJECTEUR_INTENSITE if projecteur else 0.0)
+	_g("lampe_a_cos_bord", PROJECTEUR_COS)
+	_g("lampe_a_couleur", Vector3(1.0, 0.97, 0.92))
 	lampe_cockpit = eclairement_vaisseau < LAMPE_COCKPIT_SEUIL
 	var pos_lampe := oeil_local + Vector3(0.0, 0.3, -0.6)
-	rs.global_shader_parameter_set("lampe_b_position", centre + base * pos_lampe)
-	rs.global_shader_parameter_set("lampe_b_direction", base * Vector3.DOWN)
-	rs.global_shader_parameter_set("lampe_b_intensite", LAMPE_COCKPIT_INTENSITE if lampe_cockpit else 0.0)
-	rs.global_shader_parameter_set("lampe_b_cos_bord", Vector2(-0.2, -0.6))
-	rs.global_shader_parameter_set("lampe_b_couleur", Vector3(1.0, 0.8, 0.55))
+	_g("lampe_b_position", centre + base * pos_lampe)
+	_g("lampe_b_direction", base * Vector3.DOWN)
+	_g("lampe_b_intensite", LAMPE_COCKPIT_INTENSITE if lampe_cockpit else 0.0)
+	_g("lampe_b_cos_bord", Vector2(-0.2, -0.6))
+	_g("lampe_b_couleur", Vector3(1.0, 0.8, 0.55))
 	objets.regler_emission("Lampe", LAMPE_LUMINANCE if lampe_cockpit else 0.0)
 	objets.regler_emission("Tuyere", TUYERE_LUMINANCE * clampf(gaz, 0.0, 1.0))
 
@@ -480,10 +542,10 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis
 	if oeil.halo and not soleil_cache:
 		var devant := -camera.global_transform.basis.z
 		e_oeil = e * vis * Oeil.part_dans_le_champ(devant.dot(s))
-	RenderingServer.global_shader_parameter_set("soleil_eclairement_oeil", e_oeil)
+	_g("soleil_eclairement_oeil", e_oeil)
 	# Les 16 × 9 cases du posemètre coûtent cher (rayons sur la planète, la lune et le cockpit) : l'œil
 	# s'adapte en plusieurs dixièmes de seconde, on les refait donc seulement une image sur POSE_CHAQUE.
-	# Le travail est réparti : planète et lune à la 1re image, puis 1/4 des rangées du cockpit par image.
+	# Le travail est réparti : planète et lune à la 1re image, puis 1/8 des rangées du cockpit par image.
 	var premiere := _pose_echantillons.is_empty()
 	if premiere or _pose_compte == 0:
 		_pose_cases = _cases_astres(rel, s, e, alpha, ec_vis, sc)
@@ -586,9 +648,9 @@ func _mettre_a_jour_reflets(s: Vector3, e: float, alpha: float, vis: float, base
 	if not _soleil_cache:
 		e_visage += Reflets.eclairement_visage(devant, s, e * vis)
 	reflet_visiere = Reflets.reflet_visiere(visiere_portee(), filtre, e_visage)
-	RenderingServer.global_shader_parameter_set("oeil_reflet_visiere", reflet_visiere)
+	_g("oeil_reflet_visiere", reflet_visiere)
 	# Image fantôme du Soleil (deux réflexions dans la visière), floue selon la pupille.
-	RenderingServer.global_shader_parameter_set("oeil_fantome",
+	_g("oeil_fantome",
 		Reflets.fantome_visiere(visiere_portee(), oeil.pupille_mm, alpha))
 	# L'œil voit aussi ce voile : il s'y habitue.
 	luminance_vue += 0.2126 * reflet_visiere.x + 0.7152 * reflet_visiere.y + 0.0722 * reflet_visiere.z

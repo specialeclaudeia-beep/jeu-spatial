@@ -23,9 +23,9 @@ const HAUTEUR_CIEL := 32
 const LARGEUR_COCKPIT := 32
 const HAUTEUR_COCKPIT := 16
 ## Cases de la sonde du cockpit recalculées à chaque image (1 à 2 rayons chacune, quelques µs).
-const RAYONS_PAR_IMAGE := 48
+const RAYONS_PAR_IMAGE := 24
 ## La carte du ciel est refaite une image sur N (la planète bouge lentement vue du vaisseau).
-const CIEL_TOUTES_LES := 6
+const CIEL_TOUTES_LES := 12
 ## Rayon (m) de la boule autour de la tête sur laquelle on « pose » la sonde du cockpit, pour corriger
 ## le décalage entre la tête et le point de la vitre (correction de parallaxe).
 const RAYON_SONDE := 0.9

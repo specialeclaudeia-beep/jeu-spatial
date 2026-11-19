@@ -23,14 +23,14 @@ const C := 299792458.0  # m/s, vitesse de la lumière : rien ne peut l'atteindre
 # CARACTÉRISTIQUES DU VAISSEAU (modifiables)
 # =====================================================================
 ## Masse, centre de gravité et inertie calculés dans Blender à partir des vraies matières de chaque
-## pièce (modele3d/v25_cockpit_detaille/masses_godot.json) : ailes ouvertes, train rentré, droïde à
+## pièce (modele3d/v26_train_arriere_large/masses_godot.json) : ailes ouvertes, train rentré, droïde à
 ## bord, sans carburant (le jeu n'en a pas, la masse ne change donc jamais).
-var masse := 8458.5                                    # kg
-var inertie := Vector3(68054.9, 81433.9, 19250.2)      # kg·m² autour du centre de gravité : tangage (X), lacet (Y), roulis (Z)
-## Centre de gravité dans le repère du modèle 3D : 1,45 m derrière son origine (moteurs lourds à l'arrière).
+var masse := 8534.1                                    # kg
+var inertie := Vector3(67922.4, 81280.5, 19305.1)      # kg·m² autour du centre de gravité : tangage (X), lacet (Y), roulis (Z)
+## Centre de gravité dans le repère du modèle 3D : 1,43 m derrière son origine (moteurs lourds à l'arrière).
 ## Le vaisseau tourne autour de ce point : tous les couples (propulseurs, sol) sont calculés par rapport à lui.
 ## px, py, pz = position du centre de gravité.
-const CENTRE_GRAVITE := Vector3(0.0, 0.02, 1.448)
+const CENTRE_GRAVITE := Vector3(0.0, 0.0132, 1.431)
 var reactivite_moteurs := 0.3                          # secondes pour que la poussée suive la consigne
 const POUSSEE_MOTEUR := 200000.0   # N, chacun des 5 moteurs arrière (seul, il pousse 2 fois le poids de 10 t)
 const POUSSEE_RCS := 6000.0        # N, chacun des 12 propulseurs d'orientation et des 10 buses encastrées
@@ -785,11 +785,15 @@ func ordres_stabilisateur(duree_s: float) -> Vector3:
 ## Le sol frotte (il freine le glissement, sans dépasser frottement × poussée du sol).
 ## Si la jambe arrive en bout de course trop vite, ou si la coque tape le sol trop fort : écrasé.
 ## Rien n'est déplacé ou arrêté directement : le sol ne fait que pousser.
-## Train du modèle v20 : bas de la roue avant et des patins arrière, train sorti, amortisseurs détendus.
-const ROUES := [Vector3(0.0, -1.6, -4.4), Vector3(-0.42, -1.6, 2.4), Vector3(0.42, -1.6, 2.4)]   # avant, arrière gauche, arrière droit
+## Train du modèle v26 : bas de la roue avant et des patins arrière, train sorti, amortisseurs détendus.
+## Les jambes arrière partent en biais vers l'extérieur (40° de la verticale, elles passent sous les
+## réacteurs d'aile) : les patins sont à 2,09 m l'un de l'autre (84 cm avant la v26, le vaisseau se
+## couchait dès 3,5° de pente de côté). Le ressort de chaque jambe est compté ici comme un ressort
+## vertical équivalent sous le patin.
+const ROUES := [Vector3(0.0, -1.6, -4.4), Vector3(-1.044, -1.6, 2.4), Vector3(1.044, -1.6, 2.4)]   # avant, arrière gauche, arrière droit
 const COURSE_TRAIN := [0.15, 0.12, 0.12]           # m : course des amortisseurs du modèle
 ## Amortisseurs dimensionnés pour le poids que porte chaque jambe : le centre de gravité réel est
-## à 1,45 m derrière l'origine, tout près des jambes arrière, qui portent donc 86 % du vaisseau.
+## à 1,43 m derrière l'origine, tout près des jambes arrière, qui portent donc 86 % du vaisseau.
 const RAIDEUR_TRAIN := [250000.0, 700000.0, 700000.0]  # N/m (posé : environ 5 cm à l'avant, 5 cm à l'arrière)
 const AMORTI_TRAIN := [30000.0, 80000.0, 80000.0]  # N·s/m (amortisseur un peu sous le critique : pas de rebond)
 const COQUE := [Vector3(-0.9, -1.0, -2.5), Vector3(0.9, -1.0, -2.5), Vector3(-0.9, -1.0, 2.5),

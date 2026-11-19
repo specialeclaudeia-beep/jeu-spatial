@@ -1,0 +1,122 @@
+{
+ "moteur haut gauche": [
+  -1.637,
+  0.424,
+  4.0
+ ],
+ "rcs bout aile haut gauche": [
+  -5.461,
+  2.248,
+  1.475
+ ],
+ "moteur haut droit": [
+  1.637,
+  0.424,
+  4.0
+ ],
+ "rcs bout aile haut droit": [
+  5.461,
+  2.248,
+  1.475
+ ],
+ "moteur bas gauche": [
+  -1.637,
+  -0.424,
+  4.0
+ ],
+ "rcs bout aile bas gauche": [
+  -5.461,
+  -2.248,
+  1.475
+ ],
+ "moteur bas droit": [
+  1.637,
+  -0.424,
+  4.0
+ ],
+ "rcs bout aile bas droit": [
+  5.461,
+  -2.248,
+  1.475
+ ],
+ "moteur central": [
+  0.0,
+  0.0,
+  5.05
+ ],
+ "rcs nez haut": [
+  0.0,
+  0.2,
+  -5.2
+ ],
+ "rcs nez bas": [
+  0.0,
+  -0.26,
+  -5.2
+ ],
+ "rcs nez gauche": [
+  -0.29,
+  0.0,
+  -5.2
+ ],
+ "rcs nez droit": [
+  0.29,
+  0.0,
+  -5.2
+ ],
+ "rcs queue haut": [
+  0.0,
+  1.01,
+  4.0
+ ],
+ "rcs queue bas": [
+  0.0,
+  -1.01,
+  4.0
+ ],
+ "rcs queue gauche": [
+  -0.91,
+  0.0,
+  4.0
+ ],
+ "rcs queue droit": [
+  0.91,
+  0.0,
+  4.0
+ ],
+ "oeil pilote": [
+  0.0,
+  0.58,
+  0.38
+ ],
+ "moteur central oriente vers le bas": [
+  0.0,
+  -0.635,
+  4.605
+ ],
+ "moteur levage gauche (sorti)": [
+  -0.27,
+  -0.72,
+  -3.0
+ ],
+ "moteur levage droit (sorti)": [
+  0.27,
+  -0.72,
+  -3.0
+ ],
+ "pivot tuyere centrale (axe X)": [
+  0.0,
+  0.0,
+  4.25
+ ],
+ "pivot tuyere centrale 2 (axe X)": [
+  0.0,
+  0.0,
+  4.51
+ ],
+ "pivot tuyere centrale 3 (axe X)": [
+  0.0,
+  0.0,
+  4.77
+ ]
+}

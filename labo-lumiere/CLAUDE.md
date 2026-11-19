@@ -265,6 +265,8 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
   librement dans l'axe. Le sol peut tourner (`omega_planete`, `angle_planete`, relief donné dans le repère
   de la planète). Constat : train arrière étroit (84 cm), ressorts souples, centre de gravité à 1,55 m :
   le vaisseau se couche dès ~3,5° de pente de côté.
+  **Corrigé par le modèle v26** (`modele3d/v26_train_arriere_large`) : jambes arrière obliques (40°), patins à 2,09 m
+  l'un de l'autre ; posé, il tient jusqu'à ~24° de côté ; se poser à plat à 1 m/s : jusqu'à ~10° de côté.
 - **Planète qui tourne et lune dans le jeu** : jour de 2 h (`DUREE_JOUR` dans jeu.gd → `omega_planete`) ;
   `lumiere_jeu.gd` tourne la planète (`rotation_astre`) et crée la lune (rayon 150 km, orbite 6 000 km,
   masse volumique 3 000 kg/m³, retard de la lumière, éclipses dans les deux sens, reflets). La lune attire

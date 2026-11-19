@@ -1,39 +1,39 @@
 {
- "masse_totale_kg": 8458.5,
- "masse_structure_kg": 4073.5,
+ "masse_totale_kg": 8534.1,
+ "masse_structure_kg": 4149.1,
  "masse_equipements_kg": 4385.0,
  "centre_gravite_godot_m": [
-  -0.0,
-  0.02,
-  1.448
+  0.0,
+  0.0132,
+  1.431
  ],
  "inertie_godot_kg_m2": [
   [
-   68054.9,
-   -0.0,
+   67922.4,
+   0.0,
    -2.0
   ],
   [
-   -0.0,
-   81433.9,
-   136.8
+   0.0,
+   81280.5,
+   17.1
   ],
   [
    -2.0,
-   136.8,
-   19250.2
+   17.1,
+   19305.1
   ]
  ],
  "inertie_principale_godot_kg_m2": {
-  "x_tangage": 68054.9,
-  "y_lacet": 81433.9,
-  "z_roulis": 19250.2
+  "x_tangage": 67922.4,
+  "y_lacet": 81280.5,
+  "z_roulis": 19305.1
  },
  "masse_par_matiere_kg": {
   "composite fibre de carbone (ailes)": 1480.7,
-  "alliage aluminium-lithium (coque, trappes)": 929.5,
+  "alliage aluminium-lithium (coque, trappes)": 984.5,
   "titane (tuyères, moteur, carters chauds)": 708.4,
-  "acier haute résistance (trains d'atterrissage)": 419.8,
+  "acier haute résistance (trains d'atterrissage)": 440.4,
   "verre aluminosilicate feuilleté (verrière)": 342.9,
   "aluminium (habillage du cockpit)": 192.2
  },
@@ -346,24 +346,6 @@
     -0.337
    ]
   },
-  "Cylindre_arriere_droit": {
-   "matiere": "acier haute résistance (trains d'atterrissage)",
-   "masse_kg": 45.0,
-   "centre_godot": [
-    0.42,
-    -0.721,
-    2.39
-   ]
-  },
-  "Cylindre_arriere_gauche": {
-   "matiere": "acier haute résistance (trains d'atterrissage)",
-   "masse_kg": 45.0,
-   "centre_godot": [
-    -0.42,
-    -0.721,
-    2.39
-   ]
-  },
   "Ecran_centre": {
    "matiere": "aluminium (habillage du cockpit)",
    "masse_kg": 0.2,
@@ -438,7 +420,7 @@
   },
   "Fuselage": {
    "matiere": "alliage aluminium-lithium (coque, trappes)",
-   "masse_kg": 798.5,
+   "masse_kg": 758.9,
    "centre_godot": [
     0.0,
     0.036,
@@ -519,20 +501,20 @@
   },
   "Jambe_arriere_droit": {
    "matiere": "acier haute résistance (trains d'atterrissage)",
-   "masse_kg": 19.9,
+   "masse_kg": 30.2,
    "centre_godot": [
-    0.42,
-    -0.588,
-    2.4
+    0.44,
+    -0.76,
+    1.911
    ]
   },
   "Jambe_arriere_gauche": {
    "matiere": "acier haute résistance (trains d'atterrissage)",
-   "masse_kg": 19.9,
+   "masse_kg": 30.2,
    "centre_godot": [
-    -0.42,
-    -0.588,
-    2.4
+    -0.44,
+    -0.76,
+    1.911
    ]
   },
   "Jambe_avant": {
@@ -620,18 +602,18 @@
    "matiere": "acier haute résistance (trains d'atterrissage)",
    "masse_kg": 71.7,
    "centre_godot": [
-    0.42,
-    -0.997,
-    2.4
+    0.44,
+    -0.827,
+    1.46
    ]
   },
   "Pied_arriere_gauche": {
    "matiere": "acier haute résistance (trains d'atterrissage)",
    "masse_kg": 71.7,
    "centre_godot": [
-    -0.42,
-    -0.997,
-    2.4
+    -0.44,
+    -0.827,
+    1.46
    ]
   },
   "Poignee_recommencer_piece": {
@@ -755,18 +737,18 @@
    "matiere": "acier haute résistance (trains d'atterrissage)",
    "masse_kg": 13.9,
    "centre_godot": [
-    0.42,
-    -0.84,
-    2.4
+    0.44,
+    -0.76,
+    1.55
    ]
   },
   "Ressort_arriere_gauche": {
    "matiere": "acier haute résistance (trains d'atterrissage)",
    "masse_kg": 13.9,
    "centre_godot": [
-    -0.42,
-    -0.84,
-    2.4
+    -0.44,
+    -0.76,
+    1.55
    ]
   },
   "Roue_avant": {
@@ -957,7 +939,62 @@
     -0.185,
     -1.123
    ]
+  },
+  "Pivot_train_arriere_droit": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 45.0,
+   "centre_godot": [
+    0.44,
+    -0.76,
+    2.4
+   ]
+  },
+  "Puits_train_arriere_droit": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 29.3,
+   "centre_godot": [
+    0.395,
+    -0.678,
+    1.865
+   ]
+  },
+  "Trappe_arriere_droit": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 18.0,
+   "centre_godot": [
+    0.558,
+    -0.861,
+    1.865
+   ]
+  },
+  "Pivot_train_arriere_gauche": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 45.0,
+   "centre_godot": [
+    -0.44,
+    -0.76,
+    2.4
+   ]
+  },
+  "Puits_train_arriere_gauche": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 29.3,
+   "centre_godot": [
+    -0.395,
+    -0.678,
+    1.865
+   ]
+  },
+  "Trappe_arriere_gauche": {
+   "matiere": "alliage aluminium-lithium (coque, trappes)",
+   "masse_kg": 18.0,
+   "centre_godot": [
+    -0.558,
+    -0.861,
+    1.865
+   ]
   }
  },
- "note": "configuration de vol : ailes ouvertes, train rentre, sans carburant (le jeu n'en a pas). Masses des pieces = surface x epaisseur equivalente x densite."
+ "note": "configuration de vol : ailes ouvertes, train rentre, sans carburant (le jeu n'en a pas). Masses des pieces = surface x epaisseur equivalente x densite.",
+ "note_v26": "v26 : train arriere elargi (jambes obliques, puits, trappes). Calcul par difference avec la v25 (pieces du train en masses ponctuelles), ailes ouvertes, train rentre."
 }
