@@ -16,6 +16,7 @@ const Cockpit = preload("res://scripts/cockpit.gd")
 const EcransCockpit = preload("res://scripts/ecrans_cockpit.gd")
 const Droide = preload("res://scripts/droide.gd")
 const Reperes = preload("res://scripts/physique/reperes.gd")
+const TrouVer = preload("res://scripts/physique/trou_de_ver.gd")
 const Toile = preload("res://scripts/einstein/toile.gd")
 
 # =====================================================================
@@ -65,6 +66,7 @@ var vaisseau
 var gaz := 0.0
 var stabilisateur := false
 var reperes = Reperes.new()          # Einstein A3 : un repère par système d'étoile
+var trou_de_ver = TrouVer.new(reperes)   # Einstein C : le trou de ver fixe (touche W)
 var toile = null                     # Einstein B : la « toile de l'espace » (touche Y)
 ## Einstein B : distance (centre du trou noir) du saut d'essai vers Gaia BH1 : 50 000 km, une orbite
 ## d'une minute. L'ombre y fait 0,08° (5 pixels) et les étoiles derrière lui bougent de façon visible.
@@ -251,6 +253,7 @@ func _ready() -> void:
 	vaisseau.placer_en_orbite(ALTITUDE_DEPART)
 	_creer_pilote_et_cockpit()
 	_brancher_lumiere()
+	vaisseau.trou_de_ver = trou_de_ver
 	reperes.preparer(vaisseau)   # après la lune : ajoute la gravité du Soleil et de la compagne
 	_creer_hud()
 	_appliquer_vue()
@@ -741,7 +744,7 @@ func _ecrire_aide() -> void:
 		+ "%s : ailes   %s : train d'atterrissage   %s : vol vertical   %s : vue cockpit / extérieure\n" % [c.resume("ailes"), c.resume("train"), c.resume("vol_vertical"), c.resume("vue")]
 		+ "Tourner la tête (ou la caméra) : %s   %s : regarder droit devant   %s (maintenir) : zoom\n" % [_aide_tete(), c.resume("regard_centre"), c.resume("zoom")]
 		+ "%s : projecteur   %s : casque et visière   %s : tête qui bouge avec les G\n" % [c.resume("phares"), c.resume("visiere"), c.resume("tete_g")]
-		+ "Einstein : %s toile de l'espace (courbure)   %s saut d'essai vers le trou noir Gaia BH1\n" % [c.resume("toile"), c.resume("trou_noir")]
+		+ "Einstein : %s toile de l'espace (courbure)   %s saut d'essai vers le trou noir Gaia BH1   %s trou de ver vers Alpha du Centaure\n" % [c.resume("toile"), c.resume("trou_noir"), c.resume("trou_de_ver")]
 		+ "Dans le cockpit, on peut aussi cliquer sur les boutons et les interrupteurs\n"
 		+ "Entrée : parler au droïde R-7 (ordres calmes : train, ailes, pilote auto, questions)\n"
 		+ "%s : configurer les commandes (clavier et manette)" % c.resume("ecran_touches"))
@@ -821,6 +824,11 @@ func _lire_boutons() -> void:
 		gaz = 0.0
 		acc_temps = 1
 		reperes.aller_trou_noir(vaisseau, DISTANCE_TROU_NOIR)
+	if _appui("trou_de_ver"):
+		ordinateur.activer(PiloteAuto.AUCUN, vaisseau)
+		gaz = 0.0
+		acc_temps = 1
+		trou_de_ver.aller(vaisseau, ALTITUDE_DEPART)
 	if avec_lumiere and _appui("phares"):
 		lumiere.projecteur = not lumiere.projecteur
 	if avec_lumiere and _appui("visiere"):
@@ -1061,6 +1069,7 @@ func _placer_lumiere(delta: float) -> void:
 		oeil_local, gaz_moteurs)
 	# Einstein B : lumière courbée près d'un trou noir, et la toile de l'espace
 	reperes.regler_lentille(lumiere, oeil_sys)
+	trou_de_ver.regler_lumiere(lumiere, oeil_sys, vaisseau)
 	if toile != null and toile.visible:
 		var l := Vector3(vaisseau.py * vaisseau.vz - vaisseau.pz * vaisseau.vy, vaisseau.pz * vaisseau.vx - vaisseau.px * vaisseau.vz,
 			vaisseau.px * vaisseau.vy - vaisseau.py * vaisseau.vx)
@@ -1357,7 +1366,12 @@ func _ligne_einstein() -> String:
 	txt += "   marée %s m/s² par mètre" % _petit(vaisseau.maree())
 	if toile != null and toile.visible:
 		txt += "   toile : courbure %s" % ("à sa vraie grandeur" if toile.exageration <= 1.0 else "exagérée x%s" % _nombre(toile.exageration))
-	if lumiere != null and lumiere.lentille_active:
+	var d_trou := trou_de_ver.distance_gorge(vaisseau)
+	if d_trou < 1.0e9:
+		txt += "\n              trou de ver vers %s : gorge (rayon %s) à %s%s, %d passage%s" % [trou_de_ver.nom_en_face(),
+			_distance_courte(TrouVer.A), _distance_courte(d_trou), ("   lumière à travers (table %.1f ms)" % trou_de_ver.table_ms) if trou_de_ver.lumiere_active else "",
+			trou_de_ver.traversees, "s" if trou_de_ver.traversees > 1 else ""]
+	elif lumiere != null and lumiere.lentille_active:
 		txt += "\n              trou noir : ombre de %s° vue d'ici (lumière courbée, table %.1f ms)" % [_petit(rad_to_deg(lumiere.lentille.ombre)), lumiere.lentille_ms]
 	return txt
 
@@ -1405,3 +1419,11 @@ func _placer_un(l: Label, dir: Vector3) -> void:
 		return
 	l.visible = true
 	l.position = camera.unproject_position(cible) - l.size * 0.5
+
+
+static func _distance_courte(d: float) -> String:
+	if d < 1000.0:
+		return "%d m" % roundi(d)
+	if d < 1.0e7:
+		return "%.1f km" % (d / 1000.0)
+	return "%d km" % roundi(d / 1000.0)

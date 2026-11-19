@@ -1,5 +1,6 @@
 // Enregistre la classe ArbreLumiere auprès de Godot.
 #include "arbre_lumiere.h"
+#include "trou_de_ver.h"
 
 #include <gdextension_interface.h>
 #include <godot_cpp/core/class_db.hpp>
@@ -13,6 +14,7 @@ static void initialiser(ModuleInitializationLevel p_niveau) {
 		return;
 	}
 	GDREGISTER_CLASS(ArbreLumiere);
+	GDREGISTER_CLASS(TrouDeVer);   // Einstein C
 }
 
 static void terminer(ModuleInitializationLevel p_niveau) {}

@@ -293,6 +293,7 @@ func _lancer() -> void:
 	_tests_relativite()
 	_tests_reperes()
 	_tests_einstein()
+	_tests_trou_de_ver()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
@@ -1100,7 +1101,7 @@ func _tests_pilote_auto() -> void:
 	w.ajouter_astre_mobile("lune", gm_l, func(_t: float) -> PackedFloat64Array: return PackedFloat64Array([d_l, 0.0, 0.0]))
 	var g_face: Array = w.gravite(R, 0.0, 0.0)
 	var maree := float(g_face[0]) + GM / (R * R)
-	var attendu := gm_l / pow(d_l - R, 2.0) - gm_l / (d_l * d_l)
+	var attendu: float = gm_l / pow(d_l - R, 2.0) - gm_l / (d_l * d_l)
 	_resultat(absf(maree - attendu) < 1e-9 and absf(maree) < 1e-4,
 		"La lune : seule sa marée change le mouvement",
 		"Face à la lune : %.3f µm/s² vers elle (attendu %.3f ; son attraction entière : %.1f µm/s²)." % [maree * 1e6, attendu * 1e6, gm_l / pow(d_l - R, 2.0) * 1e6])
@@ -1873,7 +1874,7 @@ func _tests_einstein() -> void:
 	# B3. Le temps près du trou noir : une horloge immobile à R (rayon de Schwarzschild) bat
 	#     √(1 − r_s/R) fois moins vite. Au sol de la planète du jeu : 5 µs de moins par jour environ.
 	v = _pres_trou_noir()
-	var ok3 := true
+	var ok3: bool = true
 	var det3 := ""
 	for k in [1.5, 3.0, 10.0, 1000.0]:
 		var r_aire: float = k * rs
@@ -1991,3 +1992,159 @@ func _tests_einstein() -> void:
 	_resultat(ok8, "Einstein : la toile de l'espace",
 		"Autour de la planète, la vraie courbure est minuscule : elle est exagérée x%s (affiché). Autour du trou noir : x%s. Lignes rouges près de l'horizon (temps arrêté), bleues loin. Touches Y (toile) et M (saut d'essai)." % [Jeu._nombre(ex_planete), Jeu._nombre(ex_trou)])
 
+
+
+# =====================================================================
+# EINSTEIN C : LE TROU DE VER
+# =====================================================================
+## K(k) par la moyenne arithmético-géométrique (Gauss) : indépendant de la partie C++ (Carlson).
+static func _k_agm(k: float) -> float:
+	var a := 1.0
+	var b := sqrt(1.0 - k * k)
+	for i in 40:
+		var a2 := 0.5 * (a + b)
+		b = sqrt(a * b)
+		a = a2
+	return PI / (2.0 * a)
+
+
+## Vaisseau sans planète dans le repère de la maison, avec le trou de ver ; sans gravité au départ.
+func _pres_trou_de_ver(decalage: Vector3, vitesse: float) -> Array:
+	var Trou = load("res://scripts/physique/trou_de_ver.gd")
+	var v = _nouveau(false)
+	var rp = Reperes.new()
+	rp.preparer(v)
+	v.autres_astres = []   # sans le Soleil ni la compagne : on mesure la géométrie seule
+	var t = Trou.new(rp)
+	v.trou_de_ver = t
+	var c: PackedFloat64Array = t.bouches[0]["p"]
+	var k := Vector3(t.axe[0], t.axe[1], t.axe[2])
+	v.px = c[0] - 60000.0 * k.x + decalage.x
+	v.py = c[1] - 60000.0 * k.y + decalage.y
+	v.pz = c[2] - 60000.0 * k.z + decalage.z
+	v.vx = vitesse * k.x
+	v.vy = vitesse * k.y
+	v.vz = vitesse * k.z
+	v.gamma()
+	return [v, t, rp, k]
+
+
+func _tests_trou_de_ver() -> void:
+	var Trou = load("res://scripts/physique/trou_de_ver.gd")
+	var a: float = Trou.A
+	var cpp: Object = ClassDB.instantiate("TrouDeVer") if ClassDB.class_exists("TrouDeVer") else null
+	if cpp == null:
+		_resultat(false, "Trou de ver : partie C++", "La classe TrouDeVer n'est pas chargée (bibliothèque liblumiere).")
+		return
+
+	# C1. Lumière : angles exacts de la partie C++ comparés à des calculs indépendants
+	var d15: float = cpp.deviation(1.5 * a, a)
+	var d15_ref := 2.0 * _k_agm(1.0 / 1.5) - PI
+	var d100: float = cpp.deviation(100.0 * a, a)
+	var d100_ref := PI * a * a / (4.0 * 10000.0 * a * a)   # loin : π·a²/(4·b²) (Ellis, faible déviation)
+	# rayon qui traverse : Φ = ∫ b ds / √(a² − b² cos² s), s de −π/2 à atan(l_o/a) (Simpson)
+	var l_o := 10.0 * a
+	var r_o := sqrt(a * a + l_o * l_o)
+	var b := 0.6 * a
+	var th := asin(b / r_o)
+	var s0 := -0.5 * PI
+	var s1 := atan(l_o / a)
+	var nn := 4000
+	var hh := (s1 - s0) / nn
+	var somme := 0.0
+	for i in nn + 1:
+		var ss := s0 + i * hh
+		var f := b / sqrt(a * a - b * b * cos(ss) * cos(ss))
+		somme += f * (1.0 if i == 0 or i == nn else (4.0 if i % 2 == 1 else 2.0))
+	var phi_ref := somme * hh / 3.0
+	var o: Vector2 = cpp.angle_origine(th, l_o, a)
+	var dehors: Vector2 = cpp.angle_origine(asin(1.01 * a / r_o), l_o, a)
+	var ok1 := absf(d15 - d15_ref) < 1e-9 and absf(d100 / d100_ref - 1.0) < 1e-3 \
+		and absf((PI - o.x) - phi_ref) < 1e-5 and o.y < 0.0 and dehors.y > 0.0
+	_resultat(ok1, "Trou de ver : la lumière (calcul exact en C++)",
+		"Déviation à 1,5 rayon de la gorge : %.9f rad (calcul indépendant %.9f) ; à 100 rayons : %s (formule %s). Rayon à 0,6 rayon : il traverse (%s), angle parcouru %.6f rad (pas à pas : %.6f) ; juste à côté de la gorge, il reste de notre côté (%s)." % [
+			d15, d15_ref, str(d100), str(d100_ref), "oui" if o.y < 0.0 else "non", PI - o.x, phi_ref, "oui" if dehors.y > 0.0 else "non"])
+
+	# C2. La table de l'image : droit devant on voit droit à travers, derrière soi on voit derrière soi
+	var t0 := Time.get_ticks_usec()
+	var tab: PackedFloat32Array = cpp.table(l_o, a)
+	var ms := (Time.get_ticks_usec() - t0) / 1000.0
+	var nb := 512
+	var psi_centre := tab[0]                       # ligne 0, θ = 0 : la gorge en son centre
+	var psi_dos := tab[(1 * nb + nb - 1) * 4]       # ligne 1, θ = π : dos au trou
+	var mu_dos := tab[(2 * nb + nb - 1) * 4 + 1]    # étoile derrière soi : grossissement 1
+	var th_c: float = cpp.angle_gorge(l_o, a)
+	var ok2 := tab.size() == nb * 16 and absf(psi_centre - PI) < 1e-5 and absf(psi_dos - PI) < 1e-5 \
+		and absf(mu_dos - 1.0) < 0.01 and absf(th_c - asin(a / r_o)) < 1e-12 and ms < 20.0
+	_resultat(ok2, "Trou de ver : la table de la lumière",
+		"512 × 4 cases en %.2f ms. Centre de la gorge : on voit tout droit de l'autre côté (ψ = %.6f, π attendu) ; dos au trou : ψ = %.6f ; une étoile derrière soi garde son éclat (x%.4f). Gorge vue sous %.3f° à 10 km." % [
+			ms, psi_centre, psi_dos, mu_dos, rad_to_deg(th_c)])
+
+	# C3. Traversée dans l'axe à 100 km/s : on ressort à Alpha du Centaure, même sens, même vitesse,
+	#     sans avoir tourné ; la vraie distance parcourue est exactement vitesse × temps.
+	var r := _pres_trou_de_ver(Vector3.ZERO, 1.0e5)
+	var v = r[0]
+	var t = r[1]
+	var rp = r[2]
+	var k: Vector3 = r[3]
+	var q0: Quaternion = v.orientation
+	for i in 78:
+		v.pas(1.0 / 60.0)
+	var duree := 78.0 / 60.0
+	var cb: PackedFloat64Array = t.bouches[1]["p"]
+	var x := Vector3(v.px - cb[0], v.py - cb[1], v.pz - cb[2])
+	var r_zone := sqrt(a * a + Trou.L_ZONE * Trou.L_ZONE)
+	var attendu: float = r_zone + (1.0e5 * duree - (60000.0 - r_zone) - 2.0 * Trou.L_ZONE)
+	var vit := Vector3(v.vx, v.vy, v.vz)
+	var ok3: bool = rp.courant == 1 and t.traversees == 1 and absf(x.dot(k) - attendu) < 0.1 and x.cross(k).length() < 0.01 \
+		and absf(vit.length() / 1.0e5 - 1.0) < 1e-6 and vit.normalized().dot(k) > 1.0 - 1e-12 and v.orientation.angle_to(q0) < 1e-5
+	_resultat(ok3, "Trou de ver : traversée dans l'axe",
+		"Système d'arrivée : %s ; à %.3f m de la bouche (attendu %.3f), écart de côté %.4f m ; vitesse %.6f km/s (100 attendus), orientation changée de %s rad." % [
+			rp.nom_courant(), x.dot(k), attendu, x.cross(k).length(), vit.length() / 1000.0, str(v.orientation.angle_to(q0))])
+
+	# C4. Passage à côté de la gorge (2 rayons) : le vaisseau est dévié EXACTEMENT comme la lumière
+	#     (2·K(a/b) − π), quelle que soit sa vitesse : l'espace courbé guide tout ce qui bouge.
+	var perp := Vector3(1.0, 0.0, 0.0) if absf(k.x) < 0.9 else Vector3(0.0, 1.0, 0.0)
+	perp = (perp - perp.dot(k) * k).normalized()
+	r = _pres_trou_de_ver(perp * 2.0 * a, 1.0e5)
+	v = r[0]
+	t = r[1]
+	for i in 120:
+		v.pas(1.0 / 60.0)
+	var u_fin := Vector3(v.vx, v.vy, v.vz)
+	var dev := k.angle_to(u_fin)
+	var dev_ref := 2.0 * _k_agm(0.5) - PI
+	var ok4: bool = r[2].courant == 0 and t.traversees == 0 and not t.dans and absf(dev - dev_ref) < 1e-3 \
+		and absf(u_fin.length() / 1.0e5 - 1.0) < 1e-6 and u_fin.dot(perp) < 0.0
+	_resultat(ok4, "Trou de ver : un vaisseau dévié comme la lumière",
+		"Passé à 2 km du centre (gorge de 1 km) : dévié de %.5f rad vers le trou (lumière : %.5f rad), vitesse gardée (%.6f km/s), resté chez nous (%s)." % [
+			dev, dev_ref, u_fin.length() / 1000.0, "oui" if r[2].courant == 0 else "non"])
+
+	# C5. Traversée de biais (0,5 rayon de l'axe) et retour : la vitesse ne change pas, on change bien
+	#     de système à chaque passage, et la vraie distance (l) est continue.
+	r = _pres_trou_de_ver(perp * 0.5 * a, 2.0e4)
+	v = r[0]
+	t = r[1]
+	rp = r[2]
+	var l_max_saut := 0.0
+	var l_prec := INF
+	for i in 400:
+		v.pas(1.0 / 60.0)
+		if t.dans and l_prec != INF:
+			# |l| varie au plus de vitesse × pas (continu à la gorge, où l change de signe et de bouche)
+			l_max_saut = maxf(l_max_saut, absf(absf(t.l) - absf(l_prec)))
+		l_prec = t.l if t.dans else INF
+	var sys_aller: int = rp.courant
+	var vit5 := Vector3(v.vx, v.vy, v.vz).length()
+	# demi-tour : on repasse dans l'autre sens
+	v.vx = -v.vx
+	v.vy = -v.vy
+	v.vz = -v.vz
+	v.gamma()
+	for i in 400:
+		v.pas(1.0 / 60.0)
+	var ok5: bool = sys_aller == 1 and rp.courant == 0 and t.traversees == 2 and absf(vit5 / 2.0e4 - 1.0) < 1e-5 \
+		and l_max_saut <= 2.0e4 / 60.0 * 1.001 and Vector3(v.vx, v.vy, v.vz).length() > 0.0
+	_resultat(ok5, "Trou de ver : aller et retour de biais",
+		"Aller : arrivé dans %s, vitesse %.6f km/s (20 attendus) ; retour : revenu dans %s ; %d passages ; la distance à la gorge avance au plus de %.1f m par image (%.1f attendus)." % [
+			rp.systemes[sys_aller]["nom"], vit5 / 1000.0, rp.nom_courant(), t.traversees, l_max_saut, 2.0e4 / 60.0])

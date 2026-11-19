@@ -377,6 +377,30 @@ func _regler_gravite(v, t_m: float) -> void:
 	v.autres_astres = autres
 
 
+## Einstein C : arrivée par un trou de ver dans le système j, à la position p avec la vitesse propre u
+## (déjà dans le repère de j). Pas de transformation de Lorentz : la bouche d'arrivée est immobile dans
+## son système, le vaisseau en sort avec la vitesse qu'il a par rapport à elle. Même heure de l'univers.
+func sauter(v, j: int, p: PackedFloat64Array, u: PackedFloat64Array) -> void:
+	if a_la_maison() and j != 0:
+		_maison = {"gm": v.gm, "rayon_planete": v.rayon_planete, "relief": v.relief, "omega_planete": v.omega_planete,
+			"autres_astres": v.autres_astres}
+		_angle_depart = v.angle_planete
+		_omega_maison = v.omega_planete
+		_t_depart = heure_maison(v)
+	courant = j
+	v.px = p[0]
+	v.py = p[1]
+	v.pz = p[2]
+	v.ux = u[0]
+	v.uy = u[1]
+	v.uz = u[2]
+	v._ecrire_vitesse()
+	v._touchait.clear()
+	v._accroches.clear()
+	changements += 1
+	_regler_gravite(v, heure_maison(v))
+
+
 ## Retour immédiat à la maison (touche « remettre en orbite ») : gravité de la maison remise.
 func revenir_maison(v) -> void:
 	if a_la_maison():

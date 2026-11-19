@@ -628,6 +628,27 @@ func regler_lentille(dir: Vector3, rs: float, r_o: float) -> void:
 		sm.set_shader_parameter("lentille_table", lentille.table)
 
 
+## Einstein C : trou de ver dans la direction dir (centre de la gorge), gorge vue sous l'angle tc,
+## table de la partie C++ (TrouDeVer), axe des bouches, et l'étoile principale du ciel d'en face
+## (direction vue de l'autre bouche, rayon apparent, couleur, luminance au centre, température).
+## À appeler après regler_lentille (une seule lentille à la fois : le trou de ver prend la place).
+func regler_trou_de_ver(dir: Vector3, tc: float, table: Texture2D, axe: Vector3, soleil_dir: Vector3,
+		soleil_rayon: float, couleur: Vector3, luminance: float, temperature: float) -> void:
+	if not lentille_autorisee or noeud_etoiles == null:
+		return
+	lentille_active = true
+	noeud_etoiles_2.visible = true
+	for m in [mat_ciel, noeud_etoiles.material_override, noeud_etoiles_2.material_override]:
+		var sm := m as ShaderMaterial
+		sm.set_shader_parameter("lentille", Vector4(dir.x, dir.y, dir.z, 2.0))
+		sm.set_shader_parameter("lentille_ombre", tc)
+		sm.set_shader_parameter("lentille_table", table)
+		sm.set_shader_parameter("trou_axe", axe)
+		sm.set_shader_parameter("trou_soleil", Vector4(soleil_dir.x, soleil_dir.y, soleil_dir.z, soleil_rayon))
+		sm.set_shader_parameter("trou_soleil_lum", Vector4(couleur.x, couleur.y, couleur.z, luminance))
+		sm.set_shader_parameter("trou_soleil_t", temperature)
+
+
 func infos() -> String:
 	var lune_txt := ""
 	if lune:
