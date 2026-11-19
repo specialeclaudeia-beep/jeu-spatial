@@ -1013,8 +1013,41 @@ func _debut_mesure() -> void:
 	_phase_mesure(0)
 
 
+## Résolution automatique : si la carte graphique met plus de 15 ms par image (pas de 60 i/s possible),
+## l'image 3D est calculée un peu plus petite (jusqu'à 70 %) puis agrandie à l'écran ; dès qu'il reste
+## de la marge, elle remonte vers 100 %. Le texte (instruments, aide) reste toujours net.
+const RESOLUTION_MIN := 0.7
+const GPU_TROP := 15.0    # ms
+const GPU_MARGE := 13.5   # ms
+var echelle_image := 1.0
+var _gpu_lisse := 0.0
+var _resolution_t := 0.0
+
+
+func _regler_resolution(delta: float) -> void:
+	if not _mesure.is_empty():
+		return
+	var vp := get_viewport().get_viewport_rid()
+	if _resolution_t == 0.0:
+		RenderingServer.viewport_set_measure_render_time(vp, true)
+	_gpu_lisse = lerpf(_gpu_lisse, RenderingServer.viewport_get_measured_render_time_gpu(vp), 0.1)
+	_resolution_t += delta
+	if _resolution_t < 0.5:
+		return
+	_resolution_t = 0.0001
+	var avant := echelle_image
+	if _gpu_lisse > GPU_TROP:
+		echelle_image = maxf(RESOLUTION_MIN, echelle_image - 0.05)
+	elif echelle_image < 1.0 and _gpu_lisse * pow((echelle_image + 0.05) / echelle_image, 2.0) < GPU_MARGE:
+		# remonte seulement si l'image un peu plus grande tiendrait encore large dans le temps
+		echelle_image = minf(1.0, echelle_image + 0.05)
+	if echelle_image != avant:
+		get_viewport().scaling_3d_scale = echelle_image
+
+
 func _process(delta: float) -> void:
 	_mesurer(delta)
+	_regler_resolution(delta)
 	_lire_boutons()
 	pilote.basis = Basis(vaisseau.orientation)
 	_suivre_g(delta)
@@ -1321,7 +1354,7 @@ func _mettre_a_jour_hud() -> void:
 	var w: Vector3 = vaisseau.omega * (180.0 / PI)
 	var m: Array = vaisseau.moteurs
 	var lignes := PackedStringArray()
-	lignes.append("IMAGES/S      %d   (%.1f ms par image)" % [roundi(Engine.get_frames_per_second()), 1000.0 / maxf(Engine.get_frames_per_second(), 1.0)])
+	lignes.append("IMAGES/S      %d   (%.1f ms par image)   image 3D à %d %%" % [roundi(Engine.get_frames_per_second()), 1000.0 / maxf(Engine.get_frames_per_second(), 1.0), roundi(echelle_image * 100.0)])
 	lignes.append("VITESSE       %s   (verticale %s   horizontale %s)   par rapport au sol %s (horizontale %s)" % [_vitesse_txt(vaisseau.vitesse()), _vitesse_txt(vaisseau.vitesse_verticale(), true), _vitesse_txt(vaisseau.vitesse_horizontale()), _vitesse_txt(vaisseau.vitesse_par_rapport_au_sol().length()), _vitesse_txt(vaisseau.vitesse_horizontale_sol())])
 	lignes.append("RELATIVITÉ    %s c   γ = %s   rapidité %.4f" % [_fraction_c(vaisseau.beta()), _gamma_txt(vaisseau.gamma()), vaisseau.rapidite()])
 	lignes.append("HORLOGES      pilote %s   univers %s   (le pilote a %s de moins)" % [_duree(vaisseau.temps_pilote), _duree(vaisseau.temps_univers), _duree_courte(vaisseau.temps_univers - vaisseau.temps_pilote)])

@@ -84,13 +84,17 @@ func installer(le_jeu, couche: CanvasLayer, modele_droide: Node) -> void:
 	elif not FileAccess.file_exists(MODELE):
 		_dire("R-7 hors ligne : fichier %s absent." % MODELE)
 	else:
-		charger.call_deferred()
+		# Le modèle (≈ 400 Mo, 2 cœurs) n'est chargé qu'au premier ordre (touche Entrée) : tant que
+		# personne ne parle à R-7, il ne prend ni mémoire ni temps au jeu.
+		_dire("R-7 en veille. Appuie sur Entrée pour lui parler.")
 
 
 # =====================================================================
 # CHARGEMENT ET QUESTIONS AU MODÈLE
 # =====================================================================
 func charger() -> bool:
+	while occupe and not pret:   # déjà en train de charger (ouverture de la saisie) : on attend
+		await get_tree().process_frame
 	if pret:
 		return true
 	if not ClassDB.class_exists("NobodyWhoChat") or not FileAccess.file_exists(MODELE):
@@ -414,6 +418,8 @@ func ouvrir_saisie(oui: bool) -> void:
 	saisie.clear()
 	if oui:
 		saisie.grab_focus()
+		if not pret and not occupe:
+			charger()   # on commence à charger pendant que le pilote tape son ordre
 	else:
 		saisie.release_focus()
 
