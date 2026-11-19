@@ -107,7 +107,7 @@ var camera: Camera3D
 var exterieur: Node3D                # coque, ailes, train (visible dans les deux vues)
 var cockpit: Node3D                  # intérieur du cockpit et grande verrière (vue intérieure seulement)
 var charnieres := {}                 # nom de l'aile -> nœud Charniere_* du modèle
-var trains: Array = []               # [nœud Train_*, "rotation" ou "piston", angle rentré (°) ou course sorti (m), position de repos]
+var trains: Array = []               # [nœud Train_*, "rotation", "piston" ou "oblique", angle rentré (°) ou course sorti (m), position de repos, axe, patin, axe de la jambe]
 var trappes: Array = []              # [nœud Charniere_Trappe_*, angle ouvert (degrés), true = trappe des moteurs de levage]
 var tuyere: Node3D                   # pivot de la tuyère orientable du moteur central
 var moteurs_levage: Array = []       # [nœud Moteur_levage_*, position de repos, course (m)]
@@ -433,6 +433,15 @@ func _creer_pilote_et_cockpit() -> void:
 			if extras.get("type", "") == "piston":
 				# jambe qui coulisse (vérin) : translation selon Z de Blender = Y de Godot
 				trains.append([n, "piston", float(extras.get("course_sorti_m", -0.56)), n.position])
+			elif extras.get("type", "") == "pivot_oblique":
+				# modèle v26 : jambe arrière qui pivote autour d'un axe en biais (axe_godot). Sortie, elle
+				# part vers l'extérieur sous le réacteur d'aile ; rentrée, elle se couche vers l'avant dans
+				# le ventre. Le patin reste parallèle à la coque (biellette).
+				var a: Array = extras.get("axe_godot", [1.0, 0.0, 0.0])
+				var cote := String(nom).trim_prefix("Train_arriere_")
+				trains.append([n, "oblique", float(extras.get("angle_rentre_deg", 90.0)), n.position,
+					Vector3(float(a[0]), float(a[1]), float(a[2])).normalized(),
+					n.find_child("Pied_arriere_" + cote, true, false), n.find_child("Jambe_axe_arriere_" + cote, true, false)])
 			else:
 				# jambe qui pivote autour de X : angle rentré lu dans le modèle
 				trains.append([n, "rotation", float(extras.get("angle_rentre_deg", -90.0)), n.position])
@@ -537,6 +546,11 @@ func _animer_modele() -> void:
 	for t in trains:
 		if t[1] == "piston":
 			(t[0] as Node3D).position = (t[3] as Vector3) + Vector3(0, float(t[2]) * jambe, 0)
+		elif t[1] == "oblique":
+			var q := Quaternion(t[4] as Vector3, deg_to_rad(float(t[2]) * (1.0 - jambe)))
+			(t[0] as Node3D).quaternion = q
+			if t[5] != null and t[6] != null:
+				(t[5] as Node3D).quaternion = (q * (t[6] as Node3D).quaternion).inverse()
 		else:
 			(t[0] as Node3D).rotation = Vector3(deg_to_rad(lerpf(float(t[2]), 0.0, jambe)), 0, 0)
 	# moteurs de levage : d'abord leurs trappes s'ouvrent, puis le vérin les descend (l'inverse en rentrant)
