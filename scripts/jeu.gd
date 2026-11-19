@@ -1007,7 +1007,12 @@ func _lire_ordres(delta: float) -> void:
 	if stabilisateur:
 		var s: Vector3 = vaisseau.ordres_stabilisateur(PAS * acc_effectif)
 		if t == 0.0: t = s.x
-		if l == 0.0: l = s.y
+		if l == 0.0:
+			l = s.y
+			# Au sol, il tourne aussi la roue avant (par son vérin, comme un pilote qui corrige au palonnier) :
+			# les patins arrière glissent, et sans correction le vaisseau part en tête-à-queue dès ~10 m/s.
+			if vaisseau.au_sol:
+				vaisseau.braquage_consigne = s.y
 		if r == 0.0: r = s.z
 	ordres = Vector3(t, l, r)
 
@@ -1058,6 +1063,19 @@ func _physics_process(delta: float) -> void:
 ## qui le sépare d'un astre (sinon il pourrait sauter par-dessus une planète, ou mal suivre une orbite).
 ## Rien de magique : le temps passe plus vite, la physique est la même (des pas plus longs).
 func temps_permis(acc: int) -> int:
+	# Près du sol, la physique découpe chaque pas en morceaux de 1/240 s (ressorts du train) : à x1000,
+	# cela faisait plus de 2 000 calculs par image et le jeu se figeait (plusieurs secondes par image).
+	# Le temps est donc limité à x100 près du sol (une journée de la planète passe encore en 72 s).
+	# (en orbite, une image à x10 millions fait 830 s de chemin : on prend alors la plus grande
+	# accélération dont le pas ne s'approche pas du sol, les autres limites s'appliquent ensuite)
+	_limite_sol = false
+	if acc > TEMPS_MAX_SOL and vaisseau.pres_du_sol(pas_physique(acc)):
+		var ok_sol := TEMPS_MAX_SOL
+		for a in ACCELERATIONS_TEMPS:
+			if a > TEMPS_MAX_SOL and a < acc and not vaisseau.pres_du_sol(pas_physique(a)):
+				ok_sol = a
+		_limite_sol = ok_sol == TEMPS_MAX_SOL
+		acc = ok_sol
 	# Atmosphère : dans l'air épais, les pas de calcul doivent rester courts (voir pas_max_air).
 	var pas_air: float = vaisseau.pas_max_air()
 	_limite_air = false
@@ -1078,6 +1096,8 @@ func temps_permis(acc: int) -> int:
 	return permis
 
 var _limite_air := false
+var _limite_sol := false
+const TEMPS_MAX_SOL := 100   # accélération du temps permise près du sol (voir temps_permis)
 var _vent_chaleur := Vector3.ZERO
 
 
@@ -1511,6 +1531,8 @@ func _mettre_a_jour_hud() -> void:
 		var permis := temps_permis(acc_temps)
 		if acc_effectif < permis:
 			temps_txt += " (pilote auto : x%s)" % _nombre(acc_effectif)
+		elif _limite_sol and acc_effectif == TEMPS_MAX_SOL:
+			temps_txt += " (x%s : trop près du sol pour aller plus vite)" % _nombre(acc_effectif)
 		elif _limite_air:
 			temps_txt += " (x%s : l'air est trop épais pour aller plus vite)" % _nombre(acc_effectif)
 		else:

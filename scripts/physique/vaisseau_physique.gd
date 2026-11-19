@@ -654,12 +654,18 @@ func pas(dt: float) -> void:
 			if ecrase:
 				return
 		return
-	if rayon_planete > 0.0 and dt > PAS_SOL and altitude() < HAUTEUR_DECOUPE + vitesse() * dt:
+	if dt > PAS_SOL and pres_du_sol(dt):
 		var n := mini(int(ceil(dt / PAS_SOL)), 2000)
 		for i in n:
 			_pas_un(dt / n)
 	else:
 		_pas_un(dt)
+
+
+## Vrai si, pendant un pas de dt secondes, le vaisseau peut arriver près du sol : le pas y est alors
+## découpé en morceaux de PAS_SOL (le jeu s'en sert aussi pour limiter l'accélération du temps).
+func pres_du_sol(dt: float) -> bool:
+	return rayon_planete > 0.0 and altitude() < HAUTEUR_DECOUPE + vitesse() * dt
 
 
 const DENSE_U := 1.0e-6        # au-delà de G·M/(r·c²) = 10⁻⁶ (bord du Soleil : 2·10⁻⁶), on découpe
@@ -896,15 +902,16 @@ func _forces_sol(base: Basis) -> Array:
 	if r_c - r_sol > 15.0:
 		_touchait.clear()
 		_accroches.clear()
+		_sol_connu.clear()
 		return [f_monde, couple]
 	var vit := Vector3(vx, vy, vz)
 	var points := []
 	compression_roues.fill(0.0)
 	if train >= 1.0:
 		for k in ROUES.size():
-			points.append([ROUES[k], k])
-	for r in COQUE:
-		points.append([r, -1])
+			points.append([ROUES[k], k, k])
+	for i in COQUE.size():
+		points.append([COQUE[i], -1, 10 + i])
 	var deja := _touchait
 	_touchait = {}
 	var accroches := _accroches
@@ -920,18 +927,20 @@ func _forces_sol(base: Basis) -> Array:
 		var qy := py + r_monde.y
 		var qz := pz + r_monde.z
 		var dq := sqrt(qx * qx + qy * qy + qz * qz)
-		var h := dq - rayon_planete - hauteur_sol(qx, qy, qz)
+		var cle: int = pt[2]   # numéro du point (roue 0-2, coque 10-15)
+		var ici := _vers_planete_64(qx, qy, qz)   # 64 bits : un Vector3 (32 bits) à 600 km ne voit pas 6 cm
+		var sol_ici := _sol_sous(cle, ici, qx, qy, qz, false)
+		var h := dq - rayon_planete - float(sol_ici[0])
 		if h >= 0.0:
 			continue
 		var up := Vector3(qx / dq, qy / dq, qz / dq)
-		var n := normale_sol(qx, qy, qz)
+		var n: Vector3 = _sol_sous(cle, ici, qx, qy, qz, true)[1]
 		# enfoncement mesuré perpendiculairement à la pente
 		var c := -h * up.dot(n)
 		# vitesse du point par rapport au sol (le sol tourne avec la planète)
 		var v_sol := Vector3(omega_planete * qz, 0.0, -omega_planete * qx)
 		var v_point: Vector3 = vit + base * omega.cross(r_corps) - v_sol
 		var vn := v_point.dot(n)
-		var cle := str(pt[0])
 		if not deja.has(cle) and vn < 0.0:
 			if deja.is_empty() and _touchait.is_empty():
 				vitesse_impact = 0.0   # premier point qui touche : nouveau posé
@@ -956,9 +965,8 @@ func _forces_sol(base: Basis) -> Array:
 			continue
 		au_sol = true
 		# frottement : ressort d'accroche + amortisseur, limité à frottement × fn
-		var ici := _vers_planete(qx, qy, qz)
-		var accroche: Vector3 = accroches.get(cle, ici)
-		var ecart := _depuis_planete(ici - accroche)
+		var accroche: PackedFloat64Array = accroches.get(cle, ici)
+		var ecart := _depuis_planete(Vector3(ici[0] - accroche[0], ici[1] - accroche[1], ici[2] - accroche[2]))
 		ecart -= n * ecart.dot(n)
 		var vt := v_point - n * vn
 		var axe_roule := Vector3.ZERO
@@ -976,7 +984,8 @@ func _forces_sol(base: Basis) -> Array:
 			# ça glisse : la force est limitée et l'accroche suit le point
 			ft = ft.normalized() * ft_max
 			var e_ok := ecart.normalized() * minf(ecart.length(), ft_max / RAIDEUR_COTE)
-			accroche = ici - _vers_planete_dir(e_ok)
+			var e_p := _vers_planete_dir(e_ok)
+			accroche = PackedFloat64Array([ici[0] - e_p.x, ici[1] - e_p.y, ici[2] - e_p.z])
 		_accroches[cle] = accroche
 		if axe_roule != Vector3.ZERO:
 			# le long de la roue : résistance au roulement + frein, comme un frottement « visqueux » qui
@@ -992,6 +1001,31 @@ func _forces_sol(base: Basis) -> Array:
 		f_monde += f
 		couple += r_corps.cross(base.inverse() * f)
 	return [f_monde, couple]
+
+
+## Sol sous un point du vaisseau : [hauteur du relief, normale (repère de la physique)].
+## Chaque question au relief coûte cher (partie C++ de la planète, 5 questions pour la normale) et
+## _forces_sol en pose une vingtaine à chaque morceau de 1/240 s. Quand le point n'a presque pas bougé
+## sur le sol (moins de 1 mm, par exemple vaisseau posé), on reprend la réponse précédente : l'erreur
+## reste sous le millimètre, bien moins que l'écrasement des amortisseurs (5 cm).
+const BOUGE_SOL := 0.001          # m
+var _sol_connu := {}              # point → [position (repère de la planète), hauteur, normale (repère de la planète) ou null]
+var _sol_relief := Callable()
+var _sol_rayon := 0.0
+
+
+func _sol_sous(cle: int, ici: PackedFloat64Array, x: float, y: float, z: float, avec_normale: bool) -> Array:
+	if relief != _sol_relief or rayon_planete != _sol_rayon:   # autre astre (lune) ou autre sol : on oublie tout
+		_sol_connu.clear()
+		_sol_relief = relief
+		_sol_rayon = rayon_planete
+	var c: Array = _sol_connu.get(cle, [])
+	if c.is_empty() or _ecart2(c[0], ici) > BOUGE_SOL * BOUGE_SOL:
+		c = [ici, hauteur_sol(x, y, z), null]
+		_sol_connu[cle] = c
+	if avec_normale and c[2] == null:
+		c[2] = _vers_planete_dir(normale_sol(x, y, z))
+	return [c[1], _depuis_planete(c[2]) if c[2] != null else Vector3.ZERO]
 
 
 ## L'air autour du vaisseau : renvoie [force (repère du vaisseau), couple] et fait chauffer le nez.
@@ -1074,6 +1108,20 @@ func _vers_planete(x: float, y: float, z: float) -> Vector3:
 	var c := cos(angle_planete)
 	var s := sin(angle_planete)
 	return Vector3(c * x - s * z, y, s * x + c * z)
+
+
+## La même chose en 64 bits (positions : à 600 km du centre, un Vector3 ne voit que des pas de 6 cm).
+func _vers_planete_64(x: float, y: float, z: float) -> PackedFloat64Array:
+	var c := cos(angle_planete)
+	var s := sin(angle_planete)
+	return PackedFloat64Array([c * x - s * z, y, s * x + c * z])
+
+
+static func _ecart2(a: PackedFloat64Array, b: PackedFloat64Array) -> float:
+	var dx := a[0] - b[0]
+	var dy := a[1] - b[1]
+	var dz := a[2] - b[2]
+	return dx * dx + dy * dy + dz * dz
 
 
 func _vers_planete_dir(v: Vector3) -> Vector3:

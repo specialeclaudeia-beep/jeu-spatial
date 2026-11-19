@@ -66,7 +66,10 @@ ou couper la poussée, le désactive.
   même temps (le freinage le plus court). Si le vaisseau monte, il laisse la gravité freiner la montée.
   Il finit immobile, à plat, en vol stationnaire.
 - **Atterrir (L)** : comme N, mais il descend ensuite : chute libre, puis freinage au dernier moment avec
-  la poussée voulue pour arriver à 1 m/s, train sorti, et se pose à plat.
+  la poussée voulue pour arriver à 1 m/s, train sorti, et se pose à plat. Sous 400 m, il regarde le
+  sol : si la pente dépasse 12° (le train en tient 24°), il va d'abord au-dessus de l'endroit assez plat
+  le plus proche (jusqu'à 400 m), en restant à 60 m de haut, puis s'y pose. Il surveille la roue la plus
+  basse (sur une pente, la roue côté montée touche en premier).
 - **Urgence** : si le vol vertical ne peut plus éviter le sol (trop bas, descente trop rapide), il utilise
   un moment les gros moteurs, nez en haut, puis revient au vol vertical.
 - **Temps accéléré** : le pilote calcule ses ordres au plus toutes les 0,04 s de temps de jeu, même à
@@ -116,8 +119,12 @@ ou couper la poussée, le désactive.
 - Rouler au sol (étape 6) : au sol, le lacet tourne aussi la roue avant (jusqu'à 35°, comme les
   palonniers d'un avion), Maj serre son frein. C'est le sol qui pousse sur la roue : la force ne dépasse
   jamais le frottement. Les patins arrière ne roulent pas, ils glissent en frottant. Attention : vite
-  (au-delà d'environ 20 m/s) sur les patins, le vaisseau part en tête-à-queue, comme un vrai avion qui
-  « fait un cheval de bois » ; le stabilisateur (T) aide un peu, le mieux est de rouler doucement.
+  (au-delà d'environ 10 m/s) sur les patins, sans correction, le vaisseau part en tête-à-queue, comme
+  une voiture aux roues arrière bloquées. Le stabilisateur (T) corrige : au sol, il tourne aussi la roue
+  avant par son vérin (comme un pilote qui corrige au palonnier) en plus des propulseurs ; avec lui, le
+  vaisseau reste droit, même à 70 m/s.
+- Temps accéléré près du sol : x100 au plus (au sol, chaque pas est découpé en morceaux de 1/240 s pour
+  les ressorts du train ; plus vite, le jeu se figeait). L'écran l'indique : « trop près du sol ».
 - Ombre du vaisseau : sur le sol de la planète ET sur celui de la lune (sous 400 m) ; les montagnes de
   la lune peuvent aussi cacher le Soleil au vaisseau.
 - Vue cockpit (caméra à l'œil du pilote) ou vue extérieure (caméra qui tourne autour du vaisseau) ;

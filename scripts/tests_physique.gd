@@ -1129,6 +1129,40 @@ func _tests_pilote_auto() -> void:
 		"À l'équateur (sol à %.0f m/s dans l'espace), depuis 1 000 m et 30 m/s par rapport au sol : touché à %.2f m/s par rapport au sol, penché %.1f°, %s." % [
 			v.omega_planete * R, touche_r, penche_r, "écrasé" if v.ecrase else "posé"])
 
+	# 33 ter quater. Sol trop en pente : sous le vaisseau, une pente de 28° (le train n'en tient que 24°),
+	#     et 50 m plus au sud, un sol plat. Le pilote auto regarde le sol avant de descendre, va au-dessus
+	#     de l'endroit plat (la planète tourne : l'endroit est suivi sur le sol) et s'y pose. Sans ce choix,
+	#     il se poserait sur la pente.
+	var bilan_p := []
+	var ok_p := true
+	for chercher in [true, false]:
+		v = _nouveau(true)
+		v.reactivite_moteurs = 0.3
+		v.omega_planete = TAU / 7200.0
+		v.relief = func(_x: float, y: float, _z: float) -> float: return 0.53 * clampf(y + 40.0, 0.0, 400.0)
+		v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)
+		v.px = R + 21.2 + 300.0
+		v.vz = -v.omega_planete * v.px
+		p = PiloteAuto.new()
+		p.activer(PiloteAuto.ATTERRIR, v)
+		p.pas_de_sol_plat = not chercher   # (vrai : il ne cherche pas)
+		var t_p := 0.0
+		for i in 120 * 300:
+			_image_pilote(v, p, 1)
+			t_p += 1.0 / 120.0
+			if (v.au_sol and v.vitesse_par_rapport_au_sol().length() < 0.05) or v.ecrase:
+				break
+		var ici_p := Vector3(cos(v.angle_planete) * v.px - sin(v.angle_planete) * v.pz, v.py, sin(v.angle_planete) * v.px + cos(v.angle_planete) * v.pz)
+		var pente_p: float = PiloteAuto.pente_empreinte(v, Vector3(v.px, v.py, v.pz))
+		var penche_p := rad_to_deg(Basis(v.orientation).y.angle_to(Vector3(v.px, v.py, v.pz).normalized()))
+		var bien: bool = v.au_sol and not v.ecrase and pente_p < PiloteAuto.PENTE_MAX_POSE and penche_p < 10.0
+		if chercher:
+			ok_p = bien and ici_p.y < -40.0
+		bilan_p.append("%s : %s en %.0f s, sol à %.0f° sous lui, penché %.0f°, à %.0f m au sud" % [
+			"en cherchant" if chercher else "sans chercher", "écrasé" if v.ecrase else ("posé" if v.au_sol else "pas posé"), t_p, pente_p, penche_p, -ici_p.y])
+	_resultat(ok_p, "Pilote auto : choisir un sol assez plat",
+		"Pente de 28° sous lui (le train en tient 24°), sol plat à 40 m : " + " ; ".join(bilan_p) + ".")
+
 	# 33 ter ter. La lune : sa gravité tire le vaisseau, mais la planète est tirée aussi ; à la surface,
 	#     il ne reste que la marée de la lune (≈ 2 G m R / d³), pas son attraction entière.
 	var w = _nouveau(true)
@@ -1394,12 +1428,17 @@ func _tests_pente() -> void:
 
 
 ## Étape 6 (sol) : un vaisseau posé à plat sur un grand sol lisse, train sorti, calme.
-func _pose_a_plat():
+func _pose_a_plat(angle := 0.0):
 	var v = _nouveau(true)
-	v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)   # haut du vaisseau vers +X, avant vers -Z
+	# haut du vaisseau vers +X, avant vers -Z (angle ≠ 0 : le tout tourné d'autant autour de l'axe Y)
+	var rot := Quaternion(Vector3.UP, angle)
+	v.orientation = rot * Quaternion(Vector3(0, 0, 1), -PI / 2)
 	v.sortir_train(true)
 	v.train = 1.0
-	v.px = R + 1.56
+	var p := Basis(rot) * Vector3(R + 1.56, 0.0, 0.0)
+	v.px = p.x
+	v.py = p.y
+	v.pz = p.z
 	for i in 240 * 2:
 		v.commander(0.0, 0.0, 0.0, 0.0)
 		v.pas(1.0 / 240.0)
@@ -1429,14 +1468,14 @@ func _tests_roulage() -> void:
 			v.pas(1.0 / 240.0)
 			if i == 240 * 2:
 				caps.append(_cap(v))   # cap après 2 s (ensuite, braqué à fond, il fait plus d'un demi-tour)
+			if b == 0.0 and i == 240 * 4:
+				caps[0] = _cap(v)   # tout droit : cap après 4 s (8 m/s ; plus vite, sans correction, voir S-4)
 		restes_au_sol = restes_au_sol and v.au_sol and not v.ecrase and _valide(v)
-		if b == 0.0:
-			caps[0] = _cap(v)   # tout droit : cap au bout des 6 s
 		distances.append((Vector3(v.px, v.py, v.pz) - p0).length())
 	var ok1: bool = restes_au_sol and absf(float(caps[0])) < 1.0 and float(caps[1]) > 10.0 and float(caps[2]) < -10.0 \
 		and absf(float(caps[1]) + float(caps[2])) < 2.0 and float(distances[0]) > 5.0
 	_resultat(ok1, "Sol : rouler et tourner avec la roue avant",
-		"Moteurs à 5 %% : roue droite, cap %+.1f° après 6 s (%.0f m parcourus) ; braquée à gauche, %+.1f° après 2 s ; à droite, %+.1f°. Toujours sur ses roues : %s." % [
+		"Moteurs à 5 %% : roue droite, cap %+.1f° après 4 s (%.0f m parcourus en 6 s) ; braquée à gauche, %+.1f° après 2 s ; à droite, %+.1f°. Toujours sur ses roues : %s." % [
 			caps[0], distances[0], caps[1], caps[2], "oui" if restes_au_sol else "NON"])
 
 	# S-2. Le frein de la roue avant : lancé à 8 m/s puis moteurs coupés, il s'arrête plus vite frein
@@ -1465,6 +1504,78 @@ func _tests_roulage() -> void:
 	_resultat(ok2, "Sol : le frein de la roue avant",
 		"Lancé à 8 m/s : arrêté en %.1f m sans frein (les patins arrière frottent), %.1f m frein serré. Freinage le plus fort : %.2f m/s² (le frottement en permet au plus %.2f)." % [
 			d_libre, d_frein, decel_max, (VaisseauPhysique.FROTTEMENT + VaisseauPhysique.RESISTANCE_ROULEMENT) * 9.81])
+
+
+	# S-4. Tête-à-queue : les patins arrière glissent (ils ne roulent pas) et la roue avant accroche le
+	#      sol devant le centre de gravité : lancé à 30 m/s avec une toute petite rotation, le vaisseau
+	#      part en tête-à-queue (vraie physique, comme une voiture aux roues arrière bloquées). Avec le
+	#      stabilisateur (T), qui corrige par les propulseurs ET par la roue avant (son vérin, comme un
+	#      pilote au palonnier), il reste droit. Rien n'est tourné « à la main ».
+	var caps4 := []
+	for avec_t in [false, true]:
+		var v = _pose_a_plat()
+		var lance := Basis(v.orientation) * Vector3(0, 0, -30.0)
+		v.vx += lance.x
+		v.vy += lance.y
+		v.vz += lance.z
+		v._lire_vitesse()
+		v.omega = Vector3(0.0, 0.02, 0.0)
+		var cap_max := 0.0
+		for i in 240 * 8:
+			var l := 0.0
+			if avec_t:
+				l = v.ordres_stabilisateur(1.0 / 120.0).y
+				v.braquage_consigne = l
+			v.commander(0.0, 0.0, l, 0.0)
+			v.pas(1.0 / 240.0)
+			cap_max = maxf(cap_max, absf(_cap(v)))
+		caps4.append([cap_max, v.au_sol and not v.ecrase and _valide(v)])
+	var ok4: bool = float(caps4[0][0]) > 45.0 and float(caps4[1][0]) < 3.0 and caps4[1][1]
+	_resultat(ok4, "Sol : le stabilisateur évite le tête-à-queue",
+		"Lancé à 30 m/s, petite rotation de 1°/s : sans stabilisateur, le nez tourne jusqu'à %.0f° (tête-à-queue) ; avec le stabilisateur (propulseurs + roue avant), au plus %.1f°, toujours sur ses roues : %s." % [
+			caps4[0][0], caps4[1][0], "oui" if caps4[1][1] else "NON"])
+
+	# S-5. Accroche au sol précise : posé, une petite poussée de côté (sous le frottement) fait plier les
+	#      accroches des roues de quelques centimètres, puis tout s'arrête. Les positions sur le sol sont
+	#      gardées en 64 bits : en 32 bits, à 600 km du centre, elles ne voyaient que des pas de 6 cm. Le
+	#      même essai est fait à deux endroits de la planète (sur l'axe X, où les petits mouvements de côté
+	#      se voient bien même en 32 bits, et à 45° de là) : le vaisseau doit faire exactement pareil.
+	var d5 := []
+	for angle in [0.0, PI / 4.0]:
+		var v5 = _pose_a_plat(angle)
+		var p5 := Vector3(v5.px, v5.py, v5.pz)
+		for i in 240 * 2:
+			v5.commander(0.0, 0.0, 0.0, 0.0, Vector3(12000.0, 0.0, 0.0))
+			v5.pas(1.0 / 240.0)
+		d5.append([(Vector3(v5.px, v5.py, v5.pz) - p5).length(), v5.vitesse_par_rapport_au_sol().length(), v5.au_sol])
+	var ok5: bool = float(d5[0][0]) > 0.02 and absf(float(d5[1][0]) - float(d5[0][0])) < 1e-4 \
+		and float(d5[1][1]) < 0.01 and d5[1][2]
+	_resultat(ok5, "Sol : accroche des roues précise partout (64 bits)",
+		"Posé, poussé de côté par 12 kN (moins que le frottement) : il se décale de %.3f cm sur l'axe X, %.3f cm à 45° de là (attendu : pareil), puis s'arrête (%.3f m/s)." % [
+			float(d5[0][0]) * 100.0, float(d5[1][0]) * 100.0, d5[1][1]])
+
+	# S-6. Temps accéléré près du sol : chaque pas y est découpé en morceaux de 1/240 s (ressorts du
+	#      train). À x1000 et plus, cela faisait des milliers de calculs par image : le jeu se figeait
+	#      (jusqu'à plusieurs secondes par image). Près du sol, le temps est donc limité à x100 ; en orbite,
+	#      la limite du sol ne joue pas (x10 millions demandé : x100 000 permis, comme avant).
+	var j6 = Jeu.new()
+	j6.vaisseau = _pose_a_plat()
+	var permis_sol: int = j6.temps_permis(100000)
+	var t6 := Time.get_ticks_usec()
+	for i in 10:
+		j6.vaisseau.commander(0.0, 0.0, 0.0, 0.0)
+		for k in (mini(permis_sol, 25) if permis_sol <= 1000 else 100):   # comme une image du jeu
+			j6.vaisseau.pas(Jeu.pas_physique(permis_sol))
+	var ms6 := (Time.get_ticks_usec() - t6) / 10000.0
+	var calme6: bool = j6.vaisseau.au_sol and j6.vaisseau.vitesse_par_rapport_au_sol().length() < 0.01
+	j6.vaisseau = _nouveau(true)
+	j6.vaisseau.placer_en_orbite(250000.0)
+	var permis_orbite: int = j6.temps_permis(10000000)
+	j6.free()
+	_resultat(permis_sol == Jeu.TEMPS_MAX_SOL and permis_orbite == Jeu.TEMPS_TOUJOURS and calme6,
+		"Sol : temps accéléré limité près du sol (le jeu ne se fige plus)",
+		"Posé, x100 000 demandé : x%d permis (%.0f ms de calcul par image ici ; avant, x100 000 était permis : plusieurs secondes par image). Posé et calme : %s. En orbite à 250 km, x10 millions demandé : x%d permis." % [
+			permis_sol, ms6, "oui" if calme6 else "NON", permis_orbite])
 
 
 # =====================================================================

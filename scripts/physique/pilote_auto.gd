@@ -60,6 +60,15 @@ const K_DESCENTE := 2.0          # 1/s : gain de suivi de la vitesse de descente
 const H_ARRET_LATERAL := 60.0    # m : tant que le vaisseau glisse, il ne descend pas sous cette hauteur
 const GAIN_INTEGRALE := 0.25     # 1/s² : correction lente de la vitesse verticale restante (vol stationnaire)
 
+# --- choix d'un sol assez plat (le train tient 24° de pente) ---
+const PENTE_MAX_POSE := 12.0     # degrés : au-delà, il cherche un sol plus plat avant de descendre
+const PENTE_BONNE := 8.0         # degrés : pente d'un endroit choisi pour se poser
+const H_CHOIX_SOL := 400.0       # m : sous cette hauteur, il regarde le sol sous lui
+const ANNEAUX_SOL := [25.0, 50.0, 100.0, 200.0, 400.0]   # m : distances où il cherche un sol plat
+const DIRECTIONS_SOL := 12
+const VITESSE_DEPLACEMENT := 4.0 # m/s : vitesse pour aller au-dessus de l'endroit choisi
+const ARRIVE_SOL := 1.5          # m : assez près de l'endroit choisi
+
 # --- urgence ---
 const T_PIVOT := 0.9              # s par radian : temps pour se redresser avant de pouvoir pousser vers le haut
 const T_REPONSE_MOTEURS := 0.3   # s : les moteurs mettent ce temps à suivre l'ordre
@@ -80,6 +89,12 @@ var _integrale_vv := 0.0           # m : somme de la vitesse verticale restante 
 var _calme := false                # CAP : le vaisseau tient son cap, presque rien à corriger
 var _chrono := 0.0                 # s : temps écoulé depuis l'activation
 var _chrono_sortie := -100.0       # s : moment où le pilote a quitté l'urgence
+## Endroit choisi pour se poser (repère de la planète, qui tourne : le point reste au même endroit du
+## sol), vide s'il n'y en a pas. pente_sol = pente sous le vaisseau (degrés, pour l'affichage).
+var _endroit := PackedFloat64Array()
+var _chrono_sol := -100.0          # s : dernier examen du sol
+var pente_sol := 0.0
+var pas_de_sol_plat := false
 
 
 ## Ce que le pilote sait de la situation (calculé une fois par pas).
@@ -111,6 +126,10 @@ func activer(m: int, v) -> void:
 	_chrono = 0.0
 	_calme = false
 	_chrono_sortie = -100.0
+	_endroit = PackedFloat64Array()
+	_chrono_sol = -100.0
+	pente_sol = 0.0
+	pas_de_sol_plat = false
 	gaz = 0.0
 	ordres = Vector3.ZERO
 	force_cote = Vector3.ZERO
@@ -181,6 +200,17 @@ func _etat(v) -> Etat:
 	e.r = v.distance_centre()
 	e.h = v.altitude()
 	e.hs = e.h - VaisseauPhysiqueH.HAUTEUR_TRAIN
+	# près du sol, la roue la plus basse au-dessus du sol qui est sous ELLE (sur une pente, la roue côté
+	# montée touche avant que le centre soit à 1,6 m du sol : sans cela, il touchait trop vite)
+	if e.hs < 50.0 and v.rayon_planete > 0.0 and v.relief.is_valid():
+		var b := Basis(v.orientation)
+		for r in VaisseauPhysiqueH.ROUES:
+			var q: Vector3 = b * ((r as Vector3) - VaisseauPhysiqueH.CENTRE_GRAVITE)
+			var qx: float = v.px + q.x
+			var qy: float = v.py + q.y
+			var qz: float = v.pz + q.z
+			var hq: float = sqrt(qx * qx + qy * qy + qz * qz) - float(v.rayon_planete) - float(v.hauteur_sol(qx, qy, qz))
+			e.hs = minf(e.hs, hq)
 	# vitesse par rapport au SOL (qui tourne avec la planète) : c'est elle qu'il faut annuler pour se poser
 	e.vit = v.vitesse_par_rapport_au_sol()
 	var vit_espace := Vector3(v.vx, v.vy, v.vz)
@@ -224,6 +254,22 @@ func _calculer_arret(v, duree_s: float) -> void:
 	var atterrit := mode == ATTERRIR
 	if atterrit and v.train_consigne < 0.5 and e.hs < 1500.0 + 10.0 * absf(e.vv):
 		v.sortir_train(true)
+	# Sol trop en pente sous lui : il va d'abord au-dessus d'un endroit plus plat (le train tient 24°).
+	# Il « vise » alors une vitesse horizontale vers cet endroit au lieu de zéro : tant qu'il glisse,
+	# il ne descend pas sous H_ARRET_LATERAL (60 m), comme d'habitude.
+	if atterrit and not urgence:
+		_choisir_endroit(v, e)
+		if not _endroit.is_empty():
+			var vers: Vector3 = _vers_endroit(v, e)
+			var d_e := vers.length()
+			if d_e < ARRIVE_SOL:
+				_endroit = PackedFloat64Array()
+			else:
+				var v_voulue := vers / d_e * minf(VITESSE_DEPLACEMENT, 0.3 * d_e)
+				e.vh_v -= v_voulue
+				e.vit -= v_voulue
+				e.vh = maxf(e.vh_v.length(), 4.0)   # « il glisse encore » : il reste à H_ARRET_LATERAL (60 m)
+				e.u_h = e.vh_v / maxf(e.vh_v.length(), 1e-3)
 
 	var base := Basis(v.orientation)
 	var d_corps: Vector3 = v.direction_poussee()
@@ -253,6 +299,8 @@ func _calculer_arret(v, duree_s: float) -> void:
 	else:
 		# atterrir (ou urgence) : la verticale d'abord, le reste de la poussée freine le glissement
 		a_v = clampf(_acceleration_verticale(v, e, a_t, duree_s), 0.0, a_t)
+		if atterrit and not _endroit.is_empty():
+			phase = "sol trop en pente (%.0f°) : va vers un endroit plat" % pente_sol
 		var a_h_dispo := sqrt(maxf(a_t * a_t - a_v * a_v, 0.0))
 		a_hv = (-v_prev * gain_h).limit_length(a_h_dispo)
 	# près du sol, le vaisseau ne se penche pas beaucoup (il doit se poser à plat)
@@ -413,6 +461,70 @@ func _choisir_configuration(v, e: Etat) -> void:
 		if veut_vertical and v.vertical < 0.1:
 			var poussee2: Vector3 = Basis(v.orientation) * v.direction_poussee()
 			passage_a_plat = poussee2.angle_to(e.haut) > 0.8
+
+
+## Pente du sol (degrés) sous l'empreinte du train centrée au point p (repère de la physique) : la plus
+## forte entre la pente sous le centre et l'écart de hauteur entre des points à 6 m l'un de l'autre
+## (rochers, bosses que la pente au centre ne voit pas).
+static func pente_empreinte(v, p: Vector3) -> float:
+	var haut := p.normalized()
+	var n: Vector3 = v.normale_sol(p.x, p.y, p.z)
+	var pente := rad_to_deg(n.angle_to(haut))
+	var t1 := haut.cross(Vector3.UP if absf(haut.y) < 0.9 else Vector3.RIGHT).normalized()
+	var t2 := haut.cross(t1)
+	for t in [t1, t2, (t1 + t2).normalized(), (t1 - t2).normalized()]:
+		var a: Vector3 = p + t * 3.0
+		var b: Vector3 = p - t * 3.0
+		var dh: float = v.hauteur_sol(a.x, a.y, a.z) - v.hauteur_sol(b.x, b.y, b.z)
+		pente = maxf(pente, rad_to_deg(atan(absf(dh) / 6.0)))
+	return pente
+
+
+## Regarde le sol sous le vaisseau (une fois par seconde, sous H_CHOIX_SOL) ; s'il est trop en pente,
+## choisit l'endroit assez plat le plus proche.
+func _choisir_endroit(v, e: Etat) -> void:
+	if e.hs > H_CHOIX_SOL or v.rayon_planete <= 0.0 or not v.relief.is_valid():
+		return
+	if _chrono - _chrono_sol < 1.0:
+		return
+	_chrono_sol = _chrono
+	var sol: Vector3 = e.haut * (float(v.rayon_planete) + float(v.hauteur_sol(v.px, v.py, v.pz)))
+	pente_sol = pente_empreinte(v, sol)
+	if not _endroit.is_empty() or pas_de_sol_plat or pente_sol <= PENTE_MAX_POSE:
+		return
+	var t1 := e.haut.cross(Vector3.UP if absf(e.haut.y) < 0.9 else Vector3.RIGHT).normalized()
+	var t2 := e.haut.cross(t1)
+	for d in ANNEAUX_SOL:
+		var meilleur := INF
+		var choix := Vector3.ZERO
+		for k in DIRECTIONS_SOL:
+			var a := TAU * k / DIRECTIONS_SOL
+			var q: Vector3 = (sol + (t1 * cos(a) + t2 * sin(a)) * float(d)).normalized() * v.rayon_planete
+			var pente := pente_empreinte(v, q)
+			if pente < PENTE_BONNE and pente < meilleur:
+				meilleur = pente
+				choix = q
+		if meilleur < INF:
+			var c: Vector3 = choix.normalized() * (float(v.rayon_planete) + float(v.hauteur_sol(choix.x, choix.y, choix.z)))
+			_endroit = v._vers_planete_64(c.x, c.y, c.z)
+			return
+	pas_de_sol_plat = true   # rien d'assez plat à moins de 400 m : il se pose quand même, doucement
+
+
+## Chemin horizontal (repère de la physique) du vaisseau vers l'endroit choisi.
+func _vers_endroit(v, e: Etat) -> Vector3:
+	var c: float = v.angle_planete
+	var co := cos(c)
+	var si := sin(c)
+	var x: float = _endroit[0]
+	var y: float = _endroit[1]
+	var z: float = _endroit[2]
+	# du repère de la planète vers celui de la physique (inverse de _vers_planete_64), en 64 bits
+	var dx: float = (co * x + si * z) - float(v.px)
+	var dy: float = y - float(v.py)
+	var dz: float = (-si * x + co * z) - float(v.pz)
+	var d := Vector3(dx, dy, dz)
+	return d - e.haut * d.dot(e.haut)
 
 
 ## Vitesse à laquelle le vaisseau arriverait à H_URGENCE au-dessus du sol, en freinant au mieux
