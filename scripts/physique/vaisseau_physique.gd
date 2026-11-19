@@ -675,6 +675,8 @@ func _pas_un(dt: float) -> void:
 		_recalcul_poussee = true
 	if train != train_consigne and not (au_sol and train_consigne > train):
 		train = move_toward(train, train_consigne, dt / DUREE_TRAIN)
+	# étape 6 (sol) : la roue avant tourne vers sa consigne à vitesse limitée (vérin de direction)
+	braquage = move_toward(braquage, clampf(braquage_consigne, -1.0, 1.0) * BRAQUAGE_MAX, dt * VITESSE_BRAQUAGE)
 
 	# 2. Somme des forces et des couples, dans le repère du vaisseau
 	var effet := effet_propulseurs()
@@ -833,6 +835,16 @@ var compression_roues := PackedFloat64Array([0.0, 0.0, 0.0])   # m, écrasement 
 ## petite résistance au roulement) ; les patins arrière frottent dans tous les sens.
 const RAIDEUR_COTE := 100000.0   # N/m (assez souple pour rester stable avec des pas de 1/240 s)
 const RESISTANCE_ROULEMENT := 0.02
+## Étape 6 (sol) : rouler au sol. La roue avant est orientable (comme celle d'un avion : les palonniers
+## du lacet la font tourner, jusqu'à 35°, par un vérin qui met 0,6 s pour aller au bout) et freinée
+## (touche Maj). Le frein ne fait que serrer la roue : c'est le frottement du sol sur la roue qui ralentit
+## le vaisseau, sans jamais dépasser FROTTEMENT × la force qui appuie sur la roue avant. Les patins
+## arrière ne roulent pas : ils glissent en frottant (ils portent 86 % du poids).
+const BRAQUAGE_MAX := deg_to_rad(35.0)   # rad
+const VITESSE_BRAQUAGE := deg_to_rad(60.0)   # rad/s
+var braquage_consigne := 0.0     # -1 (droite) à 1 (gauche), donné par le lacet quand on est au sol
+var braquage := 0.0              # rad, angle réel de la roue avant (positif = vers la gauche)
+var frein := 0.0                 # 0 à 1 : serrage du frein de la roue avant
 const PAS_PENTE := 0.25          # m : écart pour mesurer la pente du sol sous un point
 var _accroches := {}             # point → position de son accroche au sol (repère de la planète)
 
@@ -916,8 +928,9 @@ func _forces_sol(base: Basis) -> Array:
 		var vt := v_point - n * vn
 		var axe_roule := Vector3.ZERO
 		if k_roue == 0:
-			# la roue avant roule dans l'axe du vaisseau (projeté sur le sol)
-			axe_roule = avant - n * avant.dot(n)
+			# la roue avant roule dans sa direction (axe du vaisseau tourné du braquage, projeté sur le sol)
+			var dir_roue: Vector3 = base * Vector3(-sin(braquage), 0.0, -cos(braquage)) if braquage != 0.0 else avant
+			axe_roule = dir_roue - n * dir_roue.dot(n)
 			if axe_roule.length() > 1e-6:
 				axe_roule = axe_roule.normalized()
 				ecart -= axe_roule * ecart.dot(axe_roule)
@@ -931,9 +944,15 @@ func _forces_sol(base: Basis) -> Array:
 			accroche = ici - _vers_planete_dir(e_ok)
 		_accroches[cle] = accroche
 		if axe_roule != Vector3.ZERO:
+			# le long de la roue : résistance au roulement + frein, comme un frottement « visqueux » qui
+			# ne dépasse pas (résistance + frein × frottement) × la force qui appuie (pas de rebond à l'arrêt)
 			var v_roule := v_point.dot(axe_roule)
-			if absf(v_roule) > 1e-4:
-				ft -= axe_roule * signf(v_roule) * RESISTANCE_ROULEMENT * fn
+			var mu_roule := RESISTANCE_ROULEMENT + clampf(frein, 0.0, 1.0) * FROTTEMENT
+			ft += axe_roule * clampf(-v_roule * VISCOSITE_SOL, -mu_roule * fn, mu_roule * fn)
+			# la roue ne peut pas accrocher le sol plus fort que le frottement (glisser de côté + freiner)
+			var ft_roue := (FROTTEMENT + RESISTANCE_ROULEMENT) * fn
+			if ft.length() > ft_roue:
+				ft = ft.normalized() * ft_roue
 		var f: Vector3 = n * fn + ft
 		f_monde += f
 		couple += r_corps.cross(base.inverse() * f)
@@ -1291,6 +1310,9 @@ func placer_en_orbite(altitude_m: float) -> void:
 	ailes_consigne = 1.0
 	train = 0.0
 	train_consigne = 0.0
+	braquage = 0.0
+	braquage_consigne = 0.0
+	frein = 0.0
 	vertical = 0.0
 	vertical_consigne = 0.0
 	_placer_propulseurs_ailes()

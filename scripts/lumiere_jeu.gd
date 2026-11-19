@@ -109,6 +109,12 @@ const COUCHE_PLANETE := 1 << 18
 const COUCHE_LUNE := 1 << 19
 const ALTITUDE_OMBRE_SOL := 400.0    # m : plus haut, l'ombre du vaisseau (200 m au plus) n'atteint pas le sol
 var _ombre_sol := true
+## Étape 6 (sol) : même chose sur la lune. Près de son sol, la lune entre dans la lumière de Godot et
+## reçoit l'ombre du vaisseau ; ses montagnes peuvent aussi cacher le Soleil au vaisseau.
+var altitude_lune := INF             # m, de l'œil au sol de la lune
+var _ombre_lune := false
+var ombre_relief_lune := 1.0
+const ALTITUDE_RELIEF_LUNE := 50000.0   # m : plus haut, les montagnes de la lune ne cachent rien d'utile
 const POSE_CHAQUE := 8             # posemètre réparti sur 8 images (~0,13 s à 60 i/s)
 var _pose_compte := 0
 var _pose_echantillons := PackedFloat32Array()
@@ -277,7 +283,10 @@ func position_lune(t: float) -> PackedFloat64Array:
 
 ## Position et orientation de la lune telles que l'œil les VOIT (retard de la lumière compris).
 func _placer_lune() -> void:
-	retard_lune = orbite.retard(temps_astres, pos_oeil)
+	# Étape 6 (sol) : on compte le retard depuis le sol le plus proche, pas depuis le centre. Le centre
+	# est 150 km plus loin (0,5 ms de lumière, pendant lesquels la lune avance de 38 cm) : posé, le sol
+	# dessiné était décalé de jusqu'à 38 cm par rapport au sol où roulent les roues. De loin, ça ne se voit pas.
+	retard_lune = maxf(orbite.retard(temps_astres, pos_oeil) - RAYON_LUNE / Etoiles.C, 0.0)
 	var t_vu := temps_astres - retard_lune
 	pos_lune = orbite.position(t_vu)
 	# Elle montre toujours la même face à la planète : elle tourne sur elle-même une fois par tour.
@@ -335,6 +344,10 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 		var o := _dans_repere(rot_planete, pos_lune[0], pos_lune[1], pos_lune[2])
 		planete.occulteur = PackedFloat64Array([o[0], o[1], o[2], RAYON_LUNE])
 	_regler_ombre_sol(altitude_oeil < ALTITUDE_OMBRE_SOL)
+	if lune:
+		altitude_lune = sqrt(rel_lune.x * rel_lune.x + rel_lune.y * rel_lune.y + rel_lune.z * rel_lune.z) \
+			- RAYON_LUNE - lune.hauteur_sol(oeil_lune)
+		_regler_ombre_lune(altitude_lune < ALTITUDE_OMBRE_SOL)
 	_regler_zones_ombre()
 	_partie("préparation")
 	planete.mettre_a_jour(camera, oeil_planete, rel64, temps, chrono,
@@ -360,6 +373,10 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 		# Deux astres peuvent cacher le Soleil : on retire la part cachée par chacun (éclipse par la lune).
 		part_visible = clampf(part_visible + soleil.part_visible(oeil64, pos_lune, RAYON_LUNE) - 1.0, 0.0, 1.0)
 	ombre_relief = _ombre_relief(oeil64, s, alpha) if part_visible > 0.0 else 0.0
+	ombre_relief_lune = 1.0
+	if lune and part_visible > 0.0 and altitude_lune < ALTITUDE_RELIEF_LUNE:
+		ombre_relief_lune = _ombre_relief_lune(oeil64, s, alpha)
+		ombre_relief = minf(ombre_relief, ombre_relief_lune)
 	_partie("ombre du relief")
 	var vis := part_visible * ombre_relief
 	eclairement_vaisseau = e * vis
@@ -487,6 +504,19 @@ func _regler_ombre_sol(oui: bool) -> void:
 	planete.materiau.set_shader_parameter("sans_lumiere_godot", not oui)
 
 
+## Étape 6 : près du sol de la lune, elle reçoit l'ombre du vaisseau (la lumière de Godot la prend en
+## compte, une passe de dessin de plus, seulement là). Plus haut, elle reste hors de cette lumière.
+func _regler_ombre_lune(oui: bool) -> void:
+	if oui == _ombre_lune or not lune or not lumiere_soleil:
+		return
+	_ombre_lune = oui
+	if oui:
+		lumiere_soleil.light_cull_mask |= COUCHE_LUNE
+	else:
+		lumiere_soleil.light_cull_mask &= ~COUCHE_LUNE
+	lune.materiau.set_shader_parameter("sans_lumiere_godot", not oui)
+
+
 ## Loin du sol, l'ombre n'a plus qu'à couvrir le vaisseau : une seule zone (une carte d'ombre dessinée
 ## au lieu de deux, moitié moins de travail pour la carte graphique), et plus fine. Cockpit : 12 m autour
 ## de l'œil (le pilote, l'habitacle, le nez, les ailes proches) ; vue extérieure : 40 m (caméra à 24 m
@@ -500,7 +530,7 @@ var _zones_ombre := -1.0
 func _regler_zones_ombre() -> void:
 	if not lumiere_soleil:
 		return
-	var d := 0.0 if _ombre_sol else (OMBRE_PROCHE_COCKPIT if vue_interieure else OMBRE_PROCHE_EXTERIEUR)
+	var d := 0.0 if (_ombre_sol or _ombre_lune) else (OMBRE_PROCHE_COCKPIT if vue_interieure else OMBRE_PROCHE_EXTERIEUR)
 	if d == _zones_ombre:
 		return
 	_zones_ombre = d
@@ -552,6 +582,26 @@ func _ombre_relief(p: PackedFloat64Array, s: Vector3, alpha: float) -> float:
 		var qz := p[2] + float(s.z) * t
 		var dq := sqrt(qx * qx + qy * qy + qz * qz)
 		var dessus := dq - rayon - hauteur_sol(qx, qy, qz)
+		marge = minf(marge, atan2(dessus, t))
+		if marge < -0.1:
+			return 0.0
+		t *= 1.6
+	return clampf(marge / (2.0 * (alpha + 0.005)) + 0.5, 0.0, 1.0)
+
+
+## Même chose pour les montagnes de la lune (repère de la lune : elle tourne sur elle-même).
+func _ombre_relief_lune(p: PackedFloat64Array, s: Vector3, alpha: float) -> float:
+	var marge := PI
+	var t := 2.0
+	var ox := p[0] - pos_lune[0]
+	var oy := p[1] - pos_lune[1]
+	var oz := p[2] - pos_lune[2]
+	while t < 60000.0:
+		var qx := ox + float(s.x) * t
+		var qy := oy + float(s.y) * t
+		var qz := oz + float(s.z) * t
+		var dq := sqrt(qx * qx + qy * qy + qz * qz)
+		var dessus: float = dq - RAYON_LUNE - lune.hauteur_sol(_dans_repere(rot_lune, qx, qy, qz))
 		marge = minf(marge, atan2(dessus, t))
 		if marge < -0.1:
 			return 0.0
