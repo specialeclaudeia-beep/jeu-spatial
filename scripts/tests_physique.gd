@@ -6,6 +6,7 @@ const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
 const Commandes = preload("res://scripts/commandes.gd")
 const Jeu = preload("res://scripts/jeu.gd")
 const LumiereJeu = preload("res://scripts/lumiere_jeu.gd")
+const Etoiles = preload("res://scripts/lumiere/etoiles.gd")
 const Objets = preload("res://scripts/lumiere/objets.gd")
 const Reflets = preload("res://scripts/lumiere/reflets.gd")
 const PiloteAuto = preload("res://scripts/physique/pilote_auto.gd")
@@ -2334,3 +2335,20 @@ func _tests_grandes_distances() -> void:
 	var ok5: bool = lim_orbite < 1.0e5 and lim_loin > 1.0e6 and lim_etoiles > 1.0e7
 	_resultat(ok5, "Grandes distances : le temps accéléré loin des astres",
 		"Accélération permise (une image = 5 %% du chemin jusqu'à l'astre) : en orbite basse x%.0f (limitée par « %s » ; x100 000 reste toujours possible, comme avant) ; à 450 000 km de la planète x%s ; entre les étoiles à 0,9 c x%s (x10 millions possible : Alpha du Centaure en quelques minutes)." % [lim_orbite, nom_orbite, "%.0f" % lim_loin, "%.0f" % lim_etoiles])
+
+	# GD-6. De loin, la planète devient un point brillant (comme Vénus vue de la Terre) : lumière du Soleil
+	#       renvoyée par une boule mate, selon la phase.
+	var l = LumiereJeu.new()
+	l.soleil.position = PackedFloat64Array([Reperes.UA, 0.0, 0.0])
+	var rp := 600000.0
+	var d6 := 3.0e9
+	var plein: float = l.lux_astre(PackedFloat64Array([d6, 0.0, 0.0]), PackedFloat64Array([0.0, 0.0, 0.0]), rp, 0.12)
+	var quartier: float = l.lux_astre(PackedFloat64Array([0.0, 0.0, d6]), PackedFloat64Array([0.0, 0.0, 0.0]), rp, 0.12)
+	var nouvelle: float = l.lux_astre(PackedFloat64Array([-d6, 0.0, 0.0]), PackedFloat64Array([0.0, 0.0, 0.0]), rp, 0.12)
+	var attendu6: float = l.soleil.eclairement(PackedFloat64Array([0.0, 0.0, 0.0])) * (2.0 / 3.0) * 0.12 * (rp / d6) ** 2
+	var mag := -2.5 * log(plein / Etoiles.LUX_MAGNITUDE_0) / log(10.0)
+	var pixels := asin(rp / d6) / (deg_to_rad(75.0) / 720.0)
+	var ok6: bool = absf(plein / attendu6 - 1.0) < 1e-6 and absf(quartier / plein - 1.0 / PI) < 1e-6 and nouvelle < 1e-12 * plein
+	_resultat(ok6, "Grandes distances : la planète vue de loin",
+		"À 3 millions de km, son disque ne fait que %.2f pixel de rayon : on la voit comme un point de magnitude %.1f (pleine), %.0f %% de cet éclat en quartier, rien quand elle tourne sa face de nuit vers nous. Le point s'allume doucement quand le disque passe sous 3 pixels." % [pixels, mag, quartier / plein * 100.0])
+	l.free()

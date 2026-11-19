@@ -417,7 +417,63 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	_g("oeil_droite", b.x)
 	_g("oeil_haut", b.y)
 	_g("oeil_pixel_angle", deg_to_rad(camera.fov) / maxf(get_viewport().get_visible_rect().size.y, 1.0))
+	_placer_points_lointains(oeil64)
 	_partie("œil")
+
+
+## Grandes distances : de loin, la planète et la lune font moins d'un pixel ; leurs triangles de lumière
+## disparaissent. Comme les vraies planètes vues de la Terre, on les voit alors comme un point brillant :
+## lumière du Soleil renvoyée par une boule mate (albédo de la planète, phase selon l'angle Soleil-astre-œil,
+## loi de Lambert), en 1/distance². Le point s'allume doucement quand le disque passe sous 3 pixels.
+var lux_points := PackedFloat64Array([0.0, 0.0])   # éclairement reçu de chaque point (tests, affichage)
+
+
+static func phase_lambert(alpha: float) -> float:
+	return (sin(alpha) + (PI - alpha) * cos(alpha)) / PI
+
+
+## Éclairement (lux) reçu à l'œil d'une boule mate de rayon r, au centre c, éclairée par le Soleil.
+func lux_astre(oeil: PackedFloat64Array, c: PackedFloat64Array, r: float, albedo: float) -> float:
+	var vo := Vector3(oeil[0] - c[0], oeil[1] - c[1], oeil[2] - c[2])
+	var d := vo.length()
+	if d <= r:
+		return 0.0
+	var vs: Vector3 = soleil.direction(c)
+	var alpha := vs.angle_to(vo)
+	# albédo géométrique d'une boule de Lambert : 2/3 de son albédo
+	return soleil.eclairement(c) * (2.0 / 3.0) * albedo * phase_lambert(alpha) * (r / d) * (r / d)
+
+
+var points_lointains := true          # faux : pas de point (pour comparer)
+
+
+func _placer_points_lointains(oeil64: PackedFloat64Array) -> void:
+	if noeud_etoiles == null:
+		return
+	var mm: MultiMesh = noeud_etoiles.multimesh
+	var i0: int = etoiles.nombre
+	var pixel := deg_to_rad(camera.fov) / maxf(get_viewport().get_visible_rect().size.y, 1.0)
+	var astres := [[PackedFloat64Array([0.0, 0.0, 0.0]), rayon, ALBEDO_PLANETE]]
+	if lune:
+		astres.append([pos_lune, RAYON_LUNE, ALBEDO_PLANETE])
+	for k in Etoiles.PLACES_EN_PLUS:
+		var lg := -40.0
+		var dir := Vector3.BACK
+		lux_points[k] = 0.0
+		if k < astres.size():
+			var c: PackedFloat64Array = astres[k][0]
+			var dv := Vector3(c[0] - oeil64[0], c[1] - oeil64[1], c[2] - oeil64[2])
+			var d := dv.length()
+			var taille := asin(minf(float(astres[k][1]) / maxf(d, 1.0), 1.0)) / pixel   # rayon du disque, en pixels
+			var part := clampf((3.0 - taille) / 1.5, 0.0, 1.0)
+			if part > 0.0 and points_lointains:
+				var e := lux_astre(oeil64, c, astres[k][1], astres[k][2]) * part
+				lux_points[k] = e
+				if e > 0.0:
+					lg = log(e) / log(10.0)
+					dir = dv / d
+		mm.set_instance_transform(i0 + k, Transform3D(Basis.IDENTITY, dir))
+		mm.set_instance_custom_data(i0 + k, Color(lg, 0.5772, 0.0, 0.0))
 
 
 func _regler_ombre_sol(oui: bool) -> void:

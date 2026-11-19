@@ -42,6 +42,7 @@ const FOND_CENTRE := 7.0e-4
 static var _efficacite_soleil := -1.0
 
 var nombre := 0
+const PLACES_EN_PLUS := 2               # planète et lune vues de loin (lumiere_jeu.gd)
 var ascension := PackedFloat32Array()  # rad
 var declinaison := PackedFloat32Array()
 var magnitude := PackedFloat32Array()
@@ -208,7 +209,12 @@ func creer_noeud(shader: Shader, table: Texture2D) -> MultiMeshInstance3D:
 	var carre := QuadMesh.new()
 	carre.size = Vector2(2.0, 2.0)
 	mm.mesh = carre
-	mm.instance_count = nombre
+	# Grandes distances : PLACES_EN_PLUS copies de plus, à la fin, pour les astres vus de loin (planète,
+	# lune), éteintes au départ.
+	mm.instance_count = nombre + PLACES_EN_PLUS
+	for i in PLACES_EN_PLUS:
+		mm.set_instance_transform(nombre + i, Transform3D(Basis.IDENTITY, Vector3.BACK))
+		mm.set_instance_custom_data(nombre + i, Color(-40.0, 0.5772, 0.0, 0.0))
 	for i in nombre:
 		var d := direction_ciel(ascension[i], declinaison[i])
 		mm.set_instance_transform(i, Transform3D(Basis.IDENTITY, d))
