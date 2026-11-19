@@ -32,6 +32,7 @@ render_mode cull_disabled, skip_vertex_transform, ambient_light_disabled, fog_di
 #include "res://scripts/lumiere/compagnon.gdshaderinc"
 #include "res://scripts/lumiere/lampes.gdshaderinc"
 #include "res://scripts/lumiere/etoiles.gdshaderinc"
+#include "res://scripts/lumiere/atmosphere.gdshaderinc"
 
 uniform sampler2D coins : filter_nearest;      // RGBA 32 bits flottants, 90 × places
 uniform sampler2D rayons : filter_nearest;     // RGBA 8 bits, 225 × places (5 texels par coin)
@@ -56,7 +57,9 @@ varying float glisse;
 varying vec3 pos_monde;
 varying float profondeur;
 varying vec3 voile_v;
-varying float soleil_visible;
+varying vec3 soleil_visible;     // part du disque visible (éclipse) × ce que l'air laisse passer (rouge au couchant)
+varying vec3 atmo_tr_v;          // atmosphère : part de la lumière du sol qui arrive à l'œil
+varying vec3 atmo_ajout_v;       // atmosphère : lumière de l'air entre le sol et l'œil (cd/m²)
 varying float compagnon_visible;
 varying vec4 horizon_v;          // hauteur de l'horizon (rad) vers l'est, le nord, l'ouest, le sud
 varying vec3 soleil_lieu;        // Soleil dans le repère du lieu : (sinus de sa hauteur, vers l'est, vers le nord)
@@ -174,7 +177,19 @@ void vertex() {
 	soleil_lieu = vers_lieu(soleil_direction, up, t1, t2);
 	compagnon_lieu = vers_lieu(compagnon_direction, up, t1, t2);
 	// L'ombre d'une éclipse varie lentement à l'échelle d'un rayon : calculée aux coins.
-	soleil_visible = part_etoile(p, soleil_direction, soleil_rayon_angle);
+	soleil_visible = part_etoile(p, soleil_direction, soleil_rayon_angle) * atmo_transmission_soleil(p, soleil_direction);
+	// Atmosphère : entre le sol et l'œil, l'air atténue la lumière et ajoute la sienne (brume bleue
+	// au loin, liseré bleu de la planète vue de l'espace). Varie lentement : calculé aux coins.
+	atmo_tr_v = vec3(1.0);
+	atmo_ajout_v = vec3(0.0);
+	if (atmo_rayon > 0.0) {
+		vec3 dv = p - CAMERA_POSITION_WORLD;
+		float dist = length(dv);
+		if (dist > 1.0) {
+			atmo_ajout_v = atmo_chemin(CAMERA_POSITION_WORLD, dv / dist, dist, soleil_direction, 5, atmo_tr_v)
+				* soleil_couleur * (soleil_eclairement * atmo_soleil_part);
+		}
+	}
 	compagnon_visible = compagnon_eclairement > 0.0 ? part_etoile(p, compagnon_direction, compagnon_rayon_angle) : 0.0;
 	// Einstein A2 : où l'œil qui va très vite voit ce coin, et le Doppler de sa lumière (reflet du Soleil,
 	// corps noir à 5 772 K).
@@ -248,6 +263,9 @@ void fragment() {
 	float penche = dot(n, up);
 	float y_al = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
 	vec3 e_soleil = soleil_couleur * soleil_eclairement * soleil_visible;
+	// Atmosphère : la lumière du ciel lui-même (bleue), qui éclaire aussi les ombres.
+	vec3 e_ciel = atmo_eclairement_ciel(pos_monde, soleil_direction) * soleil_couleur * (soleil_eclairement * atmo_soleil_part)
+		* (0.5 + 0.5 * dot(n, up));
 	vec3 direct = e_soleil * eclairage(n, sb, soleil_direction) * part_horizon(horizon_v, soleil_lieu, soleil_rayon_angle);
 	vec3 e = e_soleil * rebond(penche, longueur, horizon_v, soleil_lieu.x, y_al);
 	if (compagnon_eclairement > 0.0) {
@@ -258,8 +276,8 @@ void fragment() {
 	// Étape 8 : les lampes du vaisseau (projecteur) éclairent aussi le sol.
 	e += lampes_eclairement(pos_monde, n);
 	// Einstein A2 : toute la lumière renvoyée par le sol passe par l'effet Doppler (pas le halo de l'œil).
-	reste_v = albedo * (e + lux_fond) / PI * doppler_v + voile_v;
-	soleil_direct_v = albedo * direct / PI * doppler_v;
+	reste_v = albedo * (e + e_ciel + lux_fond) / PI * doppler_v * atmo_tr_v + atmo_ajout_v + voile_v;
+	soleil_direct_v = albedo * direct / PI * doppler_v * atmo_tr_v;
 	// Godot multiplie la lumière par ALBEDO : on lui donne 1, la vraie couleur est dans notre calcul.
 	ALBEDO = vec3(1.0);
 	ROUGHNESS = 1.0;

@@ -18,13 +18,16 @@ const Droide = preload("res://scripts/droide.gd")
 const Reperes = preload("res://scripts/physique/reperes.gd")
 const TrouVer = preload("res://scripts/physique/trou_de_ver.gd")
 const Toile = preload("res://scripts/einstein/toile.gd")
+const Atmosphere = preload("res://scripts/physique/atmosphere.gd")
 
 # =====================================================================
 # CONSTANTES
 # =====================================================================
 const RAYON_PLANETE := 600000.0          # m (planète de test, plus petite que la Terre)
 const GRAVITE_SURFACE := 9.81            # m/s² au sol
-const ALTITUDE_DEPART := 100000.0        # m
+## Atmosphère : à 100 km, il reste assez d'air pour faire retomber le vaisseau en une heure (comme sur
+## Terre). L'orbite de départ est donc plus haut, à 250 km : l'air y freine si peu qu'elle tient des mois.
+const ALTITUDE_DEPART := 250000.0        # m
 ## La planète tourne sur elle-même en 2 h (comme le labo, Q40 : jour court pour les essais). Au sol, à
 ## l'équateur, on file donc à 524 m/s dans l'espace : pour se poser, il faut suivre le sol.
 const DUREE_JOUR := 7200.0               # s
@@ -264,6 +267,7 @@ func _ready() -> void:
 	vaisseau.gm = GRAVITE_SURFACE * RAYON_PLANETE * RAYON_PLANETE
 	vaisseau.rayon_planete = RAYON_PLANETE
 	vaisseau.omega_planete = TAU / DUREE_JOUR
+	vaisseau.atmosphere = Atmosphere.new(RAYON_PLANETE, vaisseau.omega_planete)
 	vaisseau.placer_en_orbite(ALTITUDE_DEPART)
 	_creer_pilote_et_cockpit()
 	_brancher_lumiere()
@@ -290,7 +294,7 @@ func _brancher_lumiere() -> void:
 		_creer_planete()
 		_appliquer_vue()
 		return
-	lumiere.ajouter_objets(exterieur, pilote)
+	lumiere.ajouter_objets(exterieur, pilote, true)
 	lumiere.ajouter_objets(cockpit, pilote)
 	toile = Toile.new()
 	lumiere.add_child(toile)
@@ -1054,6 +1058,16 @@ func _physics_process(delta: float) -> void:
 ## qui le sépare d'un astre (sinon il pourrait sauter par-dessus une planète, ou mal suivre une orbite).
 ## Rien de magique : le temps passe plus vite, la physique est la même (des pas plus longs).
 func temps_permis(acc: int) -> int:
+	# Atmosphère : dans l'air épais, les pas de calcul doivent rester courts (voir pas_max_air).
+	var pas_air: float = vaisseau.pas_max_air()
+	_limite_air = false
+	if pas_air < INF:
+		var ok := 1
+		for a in ACCELERATIONS_TEMPS:
+			if a <= acc and pas_physique(a) <= maxf(pas_air, PAS):
+				ok = a
+		_limite_air = ok < acc
+		acc = ok
 	if acc <= TEMPS_TOUJOURS:
 		return acc
 	var maxi_acc: float = vaisseau.limite_temps(0.05) / PAS
@@ -1062,6 +1076,50 @@ func temps_permis(acc: int) -> int:
 		if a <= acc and a > permis and a <= maxi_acc:
 			permis = a
 	return permis
+
+var _limite_air := false
+var _vent_chaleur := Vector3.ZERO
+
+
+## Atmosphère : l'air autour du vaisseau, ce qu'il lui fait, la chaleur du nez.
+func _ligne_air() -> String:
+	var v = vaisseau
+	var t_nez := "COQUE (nez)   %.0f °C" % (v.temperature_nez - 273.15)
+	if v.temperature_nez > VaisseauPhysique.T_LIMITE_COQUE:
+		t_nez += "  TROP CHAUD (une vraie coque fondrait)"
+	if v.densite_air <= 0.0:
+		return "AIR           aucun (vide)      " + t_nez
+	var a = v.aero
+	var p := float(v.atmosphere.etat(v.distance_centre() - v.rayon_planete)[2])
+	var txt := "AIR           %s kg/m³  %s  %.0f °C   Mach %.2f   pression du vent %s" % [_petit(v.densite_air),
+		_pression_txt(p), v.temperature_air - 273.15, a.mach, _pression_txt(a.pression_dyn)]
+	txt += "\n              portance %s   traînée %s   incidence %+.1f°   chaleur reçue %s/m²      %s" % [_force_txt(a.portance),
+		_force_txt(a.trainee), rad_to_deg(a.incidence), _puissance_txt(v.flux_nez), t_nez]
+	return txt
+
+
+static func _pression_txt(p: float) -> String:
+	if p >= 1000.0:
+		return "%s kPa" % _nombre(p / 1000.0, 1)
+	return "%s Pa" % _petit(p)
+
+
+static func _puissance_txt(w: float) -> String:
+	var a := absf(w)
+	if a >= 1.0e6:
+		return "%s MW" % _nombre(w / 1.0e6, 2)
+	if a >= 1000.0:
+		return "%s kW" % _nombre(w / 1000.0, 1)
+	return "%.0f W" % w
+
+
+## Durée de chaque petit pas de physique pour une accélération du temps (voir _physics_process).
+static func pas_physique(a: int) -> float:
+	if a == 1:
+		return PAS
+	var n: int = mini(a, 25) if a <= 1000 else 100
+	return PAS * a / n
+
 
 # =====================================================================
 # AFFICHAGE
@@ -1180,6 +1238,10 @@ func _placer_lumiere(delta: float) -> void:
 	lumiere.temps_astres = ev[0]
 	lumiere.mettre_a_jour(delta, oeil64, Vector3(vm[0], vm[1], vm[2]), pilote.basis,
 		oeil_local, gaz_moteurs)
+	# Atmosphère : la coque chauffée par l'air brille (le côté qui fait face à l'air)
+	if vaisseau.atmosphere != null and vaisseau.vitesse_air > 1.0:
+		_vent_chaleur = Vector3(vaisseau.vx, vaisseau.vy, vaisseau.vz) - vaisseau.vitesse_sol(vaisseau.px, vaisseau.py, vaisseau.pz)
+	lumiere.regler_chaleur(vaisseau.temperature_nez, _vent_chaleur)
 	# Einstein B : lumière courbée près d'un trou noir, et la toile de l'espace
 	reperes.regler_lentille(lumiere, oeil_sys)
 	trou_de_ver.regler_lumiere(lumiere, oeil_sys, vaisseau)
@@ -1432,6 +1494,7 @@ func _mettre_a_jour_hud() -> void:
 	lignes.append(_ligne_einstein())
 	lignes.append("ALTITUDE      %s" % _distance(vaisseau.altitude()))
 	lignes.append("ORBITE        %s" % orbite_txt)
+	lignes.append(_ligne_air())
 	lignes.append("RESSENTI      %.2f g" % (vaisseau.acceleration_ressentie.length() / VaisseauPhysique.G0))
 	lignes.append("GAZ           %s %3d %%" % [_barre(gaz), int(round(gaz * 100.0))])
 	lignes.append("MOTEURS       HG %s  HD %s" % [_barre(m[0]["actuel"]), _barre(m[1]["actuel"])])
@@ -1448,6 +1511,8 @@ func _mettre_a_jour_hud() -> void:
 		var permis := temps_permis(acc_temps)
 		if acc_effectif < permis:
 			temps_txt += " (pilote auto : x%s)" % _nombre(acc_effectif)
+		elif _limite_air:
+			temps_txt += " (x%s : l'air est trop épais pour aller plus vite)" % _nombre(acc_effectif)
 		else:
 			temps_txt += " (x%s : %s trop proche)" % [_nombre(acc_effectif), vaisseau.astre_limitant]
 	lignes.append("STABILISATEUR %s      TEMPS %s%s" % ["activé" if stabilisateur else "désactivé", temps_txt, "   (PAUSE)" if en_pause else ""])

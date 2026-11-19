@@ -402,7 +402,7 @@ func passer(v, j: int) -> void:
 	var t_m: float = ev[0]
 	var u_m := vitesse_vers_maison(courant, PackedFloat64Array([v.ux, v.uy, v.uz]), t_m)
 	if a_la_maison():
-		_maison = {"gm": v.gm, "rayon_planete": v.rayon_planete, "relief": v.relief, "omega_planete": v.omega_planete,
+		_maison = {"gm": v.gm, "rayon_planete": v.rayon_planete, "relief": v.relief, "omega_planete": v.omega_planete, "atmosphere": v.atmosphere,
 			"autres_astres": v.autres_astres}
 		_angle_depart = v.angle_planete
 		_omega_maison = v.omega_planete
@@ -432,6 +432,7 @@ func _regler_gravite(v, t_m: float) -> void:
 			v.rayon_planete = _maison["rayon_planete"]
 			v.relief = _maison["relief"]
 			v.omega_planete = _maison["omega_planete"]
+			v.atmosphere = _maison.get("atmosphere")
 			v.autres_astres = _maison["autres_astres"]
 			v.angle_planete = fposmod(_angle_depart + _omega_maison * (t_m - _t_depart), TAU)
 		return
@@ -441,6 +442,7 @@ func _regler_gravite(v, t_m: float) -> void:
 	v.rayon_planete = 0.0
 	v.relief = Callable()
 	v.omega_planete = 0.0
+	v.atmosphere = null
 	v.angle_planete = 0.0
 	var autres := []
 	for k in range(1, etoiles.size()):
@@ -456,7 +458,7 @@ func sauter(v, j: int, p: PackedFloat64Array, u: PackedFloat64Array) -> void:
 	if sur_lune:
 		sortir_lune(v)
 	if a_la_maison() and j != 0:
-		_maison = {"gm": v.gm, "rayon_planete": v.rayon_planete, "relief": v.relief, "omega_planete": v.omega_planete,
+		_maison = {"gm": v.gm, "rayon_planete": v.rayon_planete, "relief": v.relief, "omega_planete": v.omega_planete, "atmosphere": v.atmosphere,
 			"autres_astres": v.autres_astres}
 		_angle_depart = v.angle_planete
 		_omega_maison = v.omega_planete
@@ -789,7 +791,7 @@ func entrer_lune(v) -> void:
 	if sur_lune or lune_orbite == null:
 		return
 	var t: float = v.temps_univers
-	_avant_lune = {"gm": v.gm, "rayon_planete": v.rayon_planete, "relief": v.relief, "omega_planete": v.omega_planete,
+	_avant_lune = {"gm": v.gm, "rayon_planete": v.rayon_planete, "relief": v.relief, "omega_planete": v.omega_planete, "atmosphere": v.atmosphere,
 		"angle_planete": v.angle_planete, "autres_astres": v.autres_astres, "t": t}
 	_changer_etat(v, true)
 	sur_lune = true
@@ -829,6 +831,7 @@ func entrer_lune(v) -> void:
 	v.autres_astres = autres
 	v.gm = lune_gm
 	v.rayon_planete = lune_rayon
+	v.atmosphere = null   # la lune n'a pas d'air
 	v.omega_planete = lune_orbite.vitesse_angulaire()
 	v.angle_planete = fposmod(lune_orbite.angle(t), TAU)
 	if lune_relief.is_valid():
@@ -849,6 +852,7 @@ func sortir_lune(v) -> void:
 	v.rayon_planete = _avant_lune["rayon_planete"]
 	v.relief = _avant_lune["relief"]
 	v.omega_planete = _avant_lune["omega_planete"]
+	v.atmosphere = _avant_lune.get("atmosphere")
 	v.autres_astres = _avant_lune["autres_astres"]
 	v.acceleration_repere = Callable()
 	v.angle_planete = fposmod(float(_avant_lune["angle_planete"]) + v.omega_planete * (t - float(_avant_lune["t"])), TAU)

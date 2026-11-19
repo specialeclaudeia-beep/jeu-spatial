@@ -27,6 +27,38 @@ renderer/rendering_method.mobile="gl_compatibility"
 ; (labo-lumiere/project.godot). Le jeu les change à chaque image (scripts/lumiere_jeu.gd).
 [shader_globals]
 
+atmo_centre={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+atmo_rayon={
+"type": "float",
+"value": 0.0
+}
+atmo_soleil_part={
+"type": "float",
+"value": 1.0
+}
+atmo_points_ciel={
+"type": "int",
+"value": 10
+}
+objets_soleil_filtre={
+"type": "vec3",
+"value": Vector3(1, 1, 1)
+}
+objets_chaleur={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+objets_vent={
+"type": "vec3",
+"value": Vector3(0, 0, -1)
+}
+objets_ciel={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
 soleil_direction={
 "type": "vec3",
 "value": Vector3(0.6247, 0.3123, 0.7704)

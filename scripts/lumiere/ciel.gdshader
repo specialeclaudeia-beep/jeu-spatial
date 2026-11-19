@@ -8,6 +8,10 @@ shader_type sky;
 #include "res://scripts/lumiere/etoiles.gdshaderinc"
 #include "res://scripts/lumiere/compagnon.gdshaderinc"
 #include "res://scripts/lumiere/lentille.gdshaderinc"
+#include "res://scripts/lumiere/atmosphere.gdshaderinc"
+
+// Atmosphère : nombre de points de calcul sur chaque chemin de lumière du ciel (qualité).
+global uniform int atmo_points_ciel;
 
 const float ASSOMBRISSEMENT_BORD = 0.6;   // le bord du Soleil est plus sombre que son centre
 const float T_FOND = 4500.0;              // couleur moyenne de la lumière de la Voie lactée (K)
@@ -71,6 +75,17 @@ void sky() {
 		}
 		if (ombre_trou_noir) {
 			l = vec3(0.0);
+		}
+		// Atmosphère : ce qui vient de l'espace traverse l'air (atténué, rougi), et l'air renvoie la
+		// lumière du Soleil (le ciel bleu, l'aube, le coucher, le liseré bleu de la planète vue d'en haut).
+		if (atmo_rayon > 0.0 && !en_face) {
+			vec3 tr;
+			vec3 ajout = atmo_chemin(vec3(0.0), d, 1.0e12, soleil_direction, atmo_points_ciel, tr);
+			l = l * tr + ajout * soleil_couleur * (soleil_eclairement * atmo_soleil_part);
+			if (compagnon_eclairement > 0.0) {
+				vec3 tr_c;
+				l += atmo_chemin(vec3(0.0), d, 1.0e12, compagnon_direction, 4, tr_c) * compagnon_couleur * compagnon_eclairement;
+			}
 		}
 		l += oeil_voile(d, TIME);
 		COLOR = oeil_vers_ecran(l, FRAGCOORD.xy, TIME);

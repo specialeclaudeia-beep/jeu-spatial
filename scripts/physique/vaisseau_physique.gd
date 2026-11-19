@@ -606,6 +606,30 @@ const PAS_SOL := 1.0 / 240.0     # s, pas le plus long quand le vaisseau est pr�
 const HAUTEUR_DECOUPE := 30.0    # m : en dessous de cette altitude, on découpe
 
 
+## Atmosphère : l'air de la planète (scripts/physique/atmosphere.gd), ou null (pas d'air : espace, lune,
+## autre système d'étoile, et la plupart des tests). L'air tourne avec la planète (omega_planete).
+const Aerodynamique = preload("res://scripts/physique/aerodynamique.gd")
+var atmosphere = null
+var aero = Aerodynamique.new()
+var densite_air := 0.0            # kg/m³ autour du vaisseau
+var temperature_air := 0.0        # K
+var vitesse_air := 0.0            # m/s : vitesse par rapport à l'air
+var force_air := Vector3.ZERO     # N, repère du vaisseau (dernier pas)
+## Échauffement : nez du vaisseau (le point le plus chaud, au contact de l'air comprimé devant lui).
+## Flux de chaleur au point d'arrêt : loi de Sutton-Graves (q = k·√(ρ/r)·v³, utilisée pour les capsules
+## et la navette), corrigée pour une paroi chaude. La coque rayonne sa chaleur (loi de Stefan-Boltzmann)
+## et a une capacité thermique : elle chauffe et refroidit en quelques dizaines de secondes.
+const RAYON_NEZ := 0.3            # m (nez effilé du modèle : plus il est pointu, plus il chauffe)
+const SUTTON_GRAVES := 1.7415e-4  # kg^0,5/m (air)
+const CAPACITE_COQUE := 25000.0   # J/(m²·K) : environ 1 cm d'acier ou de céramique
+const EMISSIVITE := 0.85
+const SIGMA := 5.670374e-8        # W/(m²·K⁴)
+const T_ESPACE := 250.0           # K : équilibre moyen d'une coque à l'ombre et au soleil, loin de l'air
+const T_LIMITE_COQUE := 1900.0    # K (~1 630 °C) : au-delà, une vraie coque fondrait (seulement affiché)
+var temperature_nez := 290.0      # K
+var flux_nez := 0.0               # W/m², chaleur reçue de l'air
+
+
 ## Einstein C : le trou de ver (scripts/physique/trou_de_ver.gd), ou null. Près de sa gorge, c'est lui
 ## qui fait avancer le vaisseau (l'espace y est courbé autrement qu'autour d'un astre).
 var trou_de_ver = null
@@ -693,6 +717,17 @@ func _pas_un(dt: float) -> void:
 		var sol := _forces_sol(base)
 		a_p += (sol[0] as Vector3) / masse
 		couple += sol[1]
+	# l'air : traînée, portance (forces sur les ailes, les dérives et la coque) et échauffement
+	if atmosphere != null and rayon_planete > 0.0:
+		var f_air := _forces_air(base, dt)
+		a_p += (base * (f_air[0] as Vector3)) / masse
+		couple += f_air[1]
+	else:
+		densite_air = 0.0
+		vitesse_air = 0.0
+		force_air = Vector3.ZERO
+		aero.forces(Vector3.ZERO, omega, 0.0, 1.0, ailes, train)
+		_chauffer(dt, 340.0)   # loin de l'air, la coque rayonne et revient vers l'équilibre de l'espace
 
 	# 3. Translation : méthode de Verlet (stable pour les orbites), appliquée à la vitesse propre u
 	#    (relativité restreinte). À petite vitesse, c'est exactement l'ancien calcul de Newton.
@@ -957,6 +992,67 @@ func _forces_sol(base: Basis) -> Array:
 		f_monde += f
 		couple += r_corps.cross(base.inverse() * f)
 	return [f_monde, couple]
+
+
+## L'air autour du vaisseau : renvoie [force (repère du vaisseau), couple] et fait chauffer le nez.
+func _forces_air(base: Basis, dt: float) -> Array:
+	var z := distance_centre() - rayon_planete
+	var et: Array = atmosphere.etat(z)
+	densite_air = et[0]
+	temperature_air = et[1]
+	var v_rel := Vector3(vx, vy, vz) - vitesse_sol(px, py, pz)   # l'air tourne avec la planète
+	vitesse_air = v_rel.length()
+	var res: Array = [Vector3.ZERO, Vector3.ZERO]
+	if densite_air > 0.0:
+		res = aero.forces(base.inverse() * (-v_rel), omega, densite_air, float(et[3]), ailes, train)
+	else:
+		aero.forces(Vector3.ZERO, omega, 0.0, 1.0, ailes, train)
+	force_air = res[0]
+	_chauffer(dt, float(et[3]))
+	return res
+
+
+func _chauffer(dt: float, son: float) -> void:
+	var t := temperature_nez
+	var v := vitesse_air
+	var rho := densite_air
+	var q := 0.0
+	if rho > 0.0:
+		var m := v / maxf(son, 1.0)
+		var t_r := temperature_air * (1.0 + 0.18 * m * m)   # température de l'air arrêté contre le nez
+		var froid := SUTTON_GRAVES * sqrt(rho / RAYON_NEZ) * v * v * v
+		# paroi chaude : elle reçoit moins (rien quand elle est à la température de l'air arrêté)
+		q = froid * (t_r - t) / maxf(t_r - 300.0, 50.0)
+		# à petite vitesse, l'air échange aussi sa chaleur par simple contact (nombre de Stanton ≈ 0,001)
+		var contact := 0.001 * rho * v * 1005.0 * (t_r - t)
+		if absf(contact) > absf(q):
+			q = contact
+	flux_nez = q
+	# rayonnement : vers l'air ambiant en bas, vers l'espace (équilibre moyen) en haut
+	var part_air := clampf(rho / 0.01, 0.0, 1.0)
+	var t_env := lerpf(T_ESPACE, temperature_air, part_air) if rho > 0.0 else T_ESPACE
+	var n := maxi(1, ceili(dt / 2.0))   # pas de 2 s au plus (temps accéléré)
+	var h := dt / n
+	for i in n:
+		var ray := EMISSIVITE * SIGMA * (t_env ** 4 - t ** 4)
+		t = maxf(t + (q + ray) * h / CAPACITE_COQUE, 3.0)
+	temperature_nez = t
+
+
+## Plus long pas de calcul (s) qui reste précis dans l'air : la traînée et l'amortissement de la rotation
+## par les ailes agissent vite près du sol ; avec des pas trop longs (temps accéléré), le calcul
+## « rebondirait » (il deviendrait faux). INF hors de l'air.
+func pas_max_air() -> float:
+	if atmosphere == null or rayon_planete <= 0.0:
+		return INF
+	var rho: float = atmosphere.densite(distance_centre() - rayon_planete)
+	if rho <= 0.0:
+		return INF
+	var v := maxf((Vector3(vx, vy, vz) - vitesse_sol(px, py, pz)).length(), 1.0)
+	# translation : masse / (ρ·v·surface) ; rotation (roulis, le plus vif) : inertie / (½ρ·v·pente·surface·bras²)
+	var t_lin := masse / (rho * v * 60.0)
+	var t_rot := minf(inertie.z, minf(inertie.x, inertie.y)) / (0.5 * rho * v * 4.2 * 52.0 * 9.0)
+	return 0.3 * minf(t_lin, t_rot)
 
 
 ## Direction perpendiculaire au sol (pente comprise) au point (x, y, z), repère monde.
@@ -1300,6 +1396,7 @@ func placer_en_orbite(altitude_m: float) -> void:
 	au_sol = false
 	ecrase = false
 	vitesse_impact = 0.0
+	temperature_nez = 290.0
 	_touchait.clear()
 	_accroches.clear()
 	for m in moteurs:
