@@ -40,7 +40,7 @@ const ACTIONS := [
 	["pilote_atterrir", "Pilote auto : atterrir", "l:76", ""],        # L
 	["ailes", "Ouvrir / replier les ailes", "l:88", "b:11"],         # X, croix directionnelle haut
 	["train", "Sortir / rentrer le train", "l:71", "b:12"],          # G, croix directionnelle bas
-	["frein", "Frein de la roue avant (au sol, maintenir)", "p:4194325", ""],   # Maj
+	["frein", "Freins des roues (au sol, maintenir)", "p:4194325", ""],   # Maj
 	["vue", "Vue cockpit / extérieure", "l:86", "b:20"],             # V, pavé tactile
 	["vol_vertical", "Vol vertical (décollage / atterrissage)", "l:70", "b:15"],  # F, bouton micro
 	["pause", "Pause", "l:80", "b:2"],                                # P, Carré

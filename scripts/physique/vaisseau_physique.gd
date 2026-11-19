@@ -23,14 +23,14 @@ const C := 299792458.0  # m/s, vitesse de la lumière : rien ne peut l'atteindre
 # CARACTÉRISTIQUES DU VAISSEAU (modifiables)
 # =====================================================================
 ## Masse, centre de gravité et inertie calculés dans Blender à partir des vraies matières de chaque
-## pièce (modele3d/v26_train_arriere_large/masses_godot.json) : ailes ouvertes, train rentré, droïde à
+## pièce (modele3d/v27_roues_arriere/masses_godot.json) : ailes ouvertes, train rentré, droïde à
 ## bord, sans carburant (le jeu n'en a pas, la masse ne change donc jamais).
 var masse := 8534.1                                    # kg
-var inertie := Vector3(67922.4, 81280.5, 19305.1)      # kg·m² autour du centre de gravité : tangage (X), lacet (Y), roulis (Z)
+var inertie := Vector3(67901.5, 81291.3, 19295.1)      # kg·m² autour du centre de gravité : tangage (X), lacet (Y), roulis (Z)
 ## Centre de gravité dans le repère du modèle 3D : 1,43 m derrière son origine (moteurs lourds à l'arrière).
 ## Le vaisseau tourne autour de ce point : tous les couples (propulseurs, sol) sont calculés par rapport à lui.
 ## px, py, pz = position du centre de gravité.
-const CENTRE_GRAVITE := Vector3(0.0, 0.0132, 1.431)
+const CENTRE_GRAVITE := Vector3(0.0, 0.0147, 1.431)
 var reactivite_moteurs := 0.3                          # secondes pour que la poussée suive la consigne
 const POUSSEE_MOTEUR := 200000.0   # N, chacun des 5 moteurs arrière (seul, il pousse 2 fois le poids de 10 t)
 const POUSSEE_RCS := 6000.0        # N, chacun des 12 propulseurs d'orientation et des 10 buses encastrées
@@ -394,6 +394,7 @@ func _preparer_repartition() -> void:
 ## Si elle dépasse ce que les propulseurs peuvent, on fait au mieux.
 func commander(gaz: float, tangage: float, lacet: float, roulis: float, force_cote := Vector3.ZERO) -> void:
 	gaz = clampf(gaz, 0.0, 1.0)
+	gaz_demande = gaz
 	# la configuration a changé (ailes, tuyère, moteurs de levage) : poussée maximale à recalculer,
 	# au plus 20 fois par seconde pour rester léger
 	_appels_depuis_calcul += 1
@@ -706,7 +707,7 @@ func _pas_un(dt: float) -> void:
 	if train != train_consigne and not (au_sol and train_consigne > train):
 		train = move_toward(train, train_consigne, dt / DUREE_TRAIN)
 	# étape 6 (sol) : la roue avant tourne vers sa consigne à vitesse limitée (vérin de direction)
-	braquage = move_toward(braquage, clampf(braquage_consigne, -1.0, 1.0) * BRAQUAGE_MAX, dt * VITESSE_BRAQUAGE)
+	braquage = move_toward(braquage, clampf(braquage_consigne, -1.0, 1.0) * braquage_permis(), dt * VITESSE_BRAQUAGE)
 
 	# 2. Somme des forces et des couples, dans le repère du vaisseau
 	var effet := effet_propulseurs()
@@ -846,12 +847,13 @@ func ordres_stabilisateur(duree_s: float) -> Vector3:
 ## Le sol frotte (il freine le glissement, sans dépasser frottement × poussée du sol).
 ## Si la jambe arrive en bout de course trop vite, ou si la coque tape le sol trop fort : écrasé.
 ## Rien n'est déplacé ou arrêté directement : le sol ne fait que pousser.
-## Train du modèle v26 : bas de la roue avant et des patins arrière, train sorti, amortisseurs détendus.
+## Train du modèle v27 : bas de la roue avant et des roues arrière, train sorti, amortisseurs détendus.
 ## Les jambes arrière partent en biais vers l'extérieur (40° de la verticale, elles passent sous les
-## réacteurs d'aile) : les patins sont à 2,09 m l'un de l'autre (84 cm avant la v26, le vaisseau se
-## couchait dès 3,5° de pente de côté). Le ressort de chaque jambe est compté ici comme un ressort
-## vertical équivalent sous le patin.
-const ROUES := [Vector3(0.0, -1.6, -4.4), Vector3(-1.044, -1.6, 2.4), Vector3(1.044, -1.6, 2.4)]   # avant, arrière gauche, arrière droit
+## réacteurs d'aile, modèle v26). Depuis la v27, les patins sont remplacés par des roues freinées de
+## 18 cm de rayon, montées sur une fusée 14 cm à l'extérieur du bout de la jambe : elles sont à 2,37 m
+## l'une de l'autre (patins v26 : 2,09 m ; v25 : 84 cm, le vaisseau se couchait dès 3,5° de pente de
+## côté). Le ressort de chaque jambe est compté ici comme un ressort vertical équivalent sous la roue.
+const ROUES := [Vector3(0.0, -1.6, -4.4), Vector3(-1.184, -1.6, 2.4), Vector3(1.184, -1.6, 2.4)]   # avant, arrière gauche, arrière droit
 const COURSE_TRAIN := [0.15, 0.12, 0.12]           # m : course des amortisseurs du modèle
 ## Amortisseurs dimensionnés pour le poids que porte chaque jambe : le centre de gravité réel est
 ## à 1,43 m derrière l'origine, tout près des jambes arrière, qui portent donc 86 % du vaisseau.
@@ -872,20 +874,45 @@ var compression_roues := PackedFloat64Array([0.0, 0.0, 0.0])   # m, écrasement 
 ## Frottement « accroché » : un point posé reste accroché au sol par un petit ressort de côté
 ## (raideur RAIDEUR_COTE) tant que la force demandée ne dépasse pas frottement × poussée du sol.
 ## Au-delà, il glisse (l'accroche suit). Sans cela, un vaisseau posé sur une pente glissait tout
-## doucement, sans jamais s'arrêter. La roue avant roule librement dans l'axe du vaisseau (avec une
-## petite résistance au roulement) ; les patins arrière frottent dans tous les sens.
+## doucement, sans jamais s'arrêter. Les roues roulent librement dans leur direction (avec une petite
+## résistance au roulement) ; de côté, le pneu accroche le sol jusqu'à ADHERENCE_PNEU × la force qui
+## appuie, puis il dérape. La coque, elle, frotte dans tous les sens (FROTTEMENT).
 const RAIDEUR_COTE := 100000.0   # N/m (assez souple pour rester stable avec des pas de 1/240 s)
 const RESISTANCE_ROULEMENT := 0.02
+## Modèle v27 : un pneu accroche mieux le sol qu'un patin ou une coque qui frotte (0,8 : pneu sur sol
+## sec et dur). C'est la limite du « cercle d'adhérence » : freiner + tourner ensemble ne peut pas
+## dépasser 0,8 × la force qui appuie sur la roue.
+const ADHERENCE_PNEU := 0.8
 ## Étape 6 (sol) : rouler au sol. La roue avant est orientable (comme celle d'un avion : les palonniers
 ## du lacet la font tourner, jusqu'à 35°, par un vérin qui met 0,6 s pour aller au bout) et freinée
 ## (touche Maj). Le frein ne fait que serrer la roue : c'est le frottement du sol sur la roue qui ralentit
-## le vaisseau, sans jamais dépasser FROTTEMENT × la force qui appuie sur la roue avant. Les patins
-## arrière ne roulent pas : ils glissent en frottant (ils portent 86 % du poids).
+## le vaisseau, sans jamais dépasser ADHERENCE_PNEU × la force qui appuie sur la roue.
+## Modèle v27 : les roues arrière (86 % du poids) roulent dans l'axe du vaisseau et sont freinées elles
+## aussi (Maj serre les trois freins) : le vaisseau freine beaucoup mieux, et il roule droit tout seul
+## (train tricycle : les roues arrière, derrière le centre de gravité, le ramènent dans l'axe).
+## Frein de parc automatique (comme le « auto hold » d'une voiture) : vaisseau au sol presque arrêté
+## (moins de 0,3 m/s par rapport au sol) et gaz à zéro, les freins se serrent tout seuls ; ils se
+## desserrent dès qu'on remet les gaz. Sans lui, posé sur une pente, le vaisseau partirait en roue libre.
 const BRAQUAGE_MAX := deg_to_rad(35.0)   # rad
+## v27 : avec les roues arrière qui accrochent, un virage serré trop vite ferait basculer le vaisseau
+## (centre de gravité haut, 1,6 m au-dessus du sol, pour 2,37 m entre les roues arrière). Comme sur un
+## vrai avion (palonniers : beaucoup de braquage à l'arrêt, quelques degrés en vitesse), le vérin de
+## direction braque de moins en moins vite qu'on roule : virage à au plus ACCEL_VIRAGE (0,3 g).
+const ACCEL_VIRAGE := 3.0                # m/s²
+const EMPATTEMENT := 6.8                 # m, entre la roue avant et les roues arrière
+
+
+## Braquage le plus grand que le vérin donne à cette vitesse (rad).
+func braquage_permis() -> float:
+	var v2 := vitesse_par_rapport_au_sol().length_squared()
+	return minf(BRAQUAGE_MAX, atan(EMPATTEMENT * ACCEL_VIRAGE / maxf(v2, 1e-6)))
 const VITESSE_BRAQUAGE := deg_to_rad(60.0)   # rad/s
 var braquage_consigne := 0.0     # -1 (droite) à 1 (gauche), donné par le lacet quand on est au sol
 var braquage := 0.0              # rad, angle réel de la roue avant (positif = vers la gauche)
-var frein := 0.0                 # 0 à 1 : serrage du frein de la roue avant
+var frein := 0.0                 # 0 à 1 : serrage des freins des roues (Maj)
+var frein_parc := false          # frein de parc automatique serré (voir plus haut)
+var gaz_demande := 0.0           # dernier ordre de gaz (0 à 1), pour le frein de parc
+const VITESSE_PARC := 0.3        # m/s : en dessous, gaz à zéro, le frein de parc se serre
 const PAS_PENTE := 0.25          # m : écart pour mesurer la pente du sol sous un point
 var _accroches := {}             # point → position de son accroche au sol (repère de la planète)
 
@@ -905,6 +932,15 @@ func _forces_sol(base: Basis) -> Array:
 		_sol_connu.clear()
 		return [f_monde, couple]
 	var vit := Vector3(vx, vy, vz)
+	# frein de parc : il se serre posé, presque arrêté, gaz à zéro ; il se desserre dès qu'on remet les gaz
+	if gaz_demande > 0.01 or _touchait.is_empty():
+		frein_parc = false
+	elif not frein_parc:
+		# vitesse horizontale par rapport au sol (celle de la chute au moment du posé ne compte pas)
+		var v_rel := vit - Vector3(omega_planete * pz, 0.0, -omega_planete * px)
+		var haut := Vector3(px, py, pz) / r_c
+		frein_parc = (v_rel - haut * v_rel.dot(haut)).length() < VITESSE_PARC
+	var serrage := 1.0 if frein_parc else clampf(frein, 0.0, 1.0)
 	var points := []
 	compression_roues.fill(0.0)
 	if train >= 1.0:
@@ -970,31 +1006,38 @@ func _forces_sol(base: Basis) -> Array:
 		ecart -= n * ecart.dot(n)
 		var vt := v_point - n * vn
 		var axe_roule := Vector3.ZERO
-		if k_roue == 0:
-			# la roue avant roule dans sa direction (axe du vaisseau tourné du braquage, projeté sur le sol)
-			var dir_roue: Vector3 = base * Vector3(-sin(braquage), 0.0, -cos(braquage)) if braquage != 0.0 else avant
+		if roue and not frein_parc:
+			# chaque roue roule dans sa direction : la roue avant selon son braquage, les roues arrière
+			# (v27) dans l'axe du vaisseau ; direction projetée sur le sol
+			var dir_roue: Vector3 = base * Vector3(-sin(braquage), 0.0, -cos(braquage)) if k_roue == 0 and braquage != 0.0 else avant
 			axe_roule = dir_roue - n * dir_roue.dot(n)
 			if axe_roule.length() > 1e-6:
 				axe_roule = axe_roule.normalized()
 				ecart -= axe_roule * ecart.dot(axe_roule)
 				vt -= axe_roule * vt.dot(axe_roule)
 		var ft := -ecart * RAIDEUR_COTE - vt * VISCOSITE_SOL
-		var ft_max := FROTTEMENT * fn
+		# frein de parc serré : la roue bloquée est accrochée au sol dans tous les sens (comme un patin),
+		# jusqu'à l'adhérence du pneu
+		var ft_max := (ADHERENCE_PNEU if roue else FROTTEMENT) * fn
 		if ft.length() > ft_max:
 			# ça glisse : la force est limitée et l'accroche suit le point
 			ft = ft.normalized() * ft_max
 			var e_ok := ecart.normalized() * minf(ecart.length(), ft_max / RAIDEUR_COTE)
 			var e_p := _vers_planete_dir(e_ok)
 			accroche = PackedFloat64Array([ici[0] - e_p.x, ici[1] - e_p.y, ici[2] - e_p.z])
+		elif axe_roule != Vector3.ZERO:
+			# la roue qui roule n'est accrochée au sol que de côté : l'accroche avance avec elle
+			var e_cote := _vers_planete_dir(ecart)
+			accroche = PackedFloat64Array([ici[0] - e_cote.x, ici[1] - e_cote.y, ici[2] - e_cote.z])
 		_accroches[cle] = accroche
 		if axe_roule != Vector3.ZERO:
 			# le long de la roue : résistance au roulement + frein, comme un frottement « visqueux » qui
-			# ne dépasse pas (résistance + frein × frottement) × la force qui appuie (pas de rebond à l'arrêt)
+			# ne dépasse pas (résistance + frein × adhérence) × la force qui appuie (pas de rebond à l'arrêt)
 			var v_roule := v_point.dot(axe_roule)
-			var mu_roule := RESISTANCE_ROULEMENT + clampf(frein, 0.0, 1.0) * FROTTEMENT
+			var mu_roule := RESISTANCE_ROULEMENT + serrage * ADHERENCE_PNEU
 			ft += axe_roule * clampf(-v_roule * VISCOSITE_SOL, -mu_roule * fn, mu_roule * fn)
-			# la roue ne peut pas accrocher le sol plus fort que le frottement (glisser de côté + freiner)
-			var ft_roue := (FROTTEMENT + RESISTANCE_ROULEMENT) * fn
+			# la roue ne peut pas accrocher le sol plus fort que le pneu (déraper de côté + freiner)
+			var ft_roue := (ADHERENCE_PNEU + RESISTANCE_ROULEMENT) * fn
 			if ft.length() > ft_roue:
 				ft = ft.normalized() * ft_roue
 		var f: Vector3 = n * fn + ft

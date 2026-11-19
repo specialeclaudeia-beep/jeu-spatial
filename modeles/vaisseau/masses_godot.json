@@ -4,30 +4,30 @@
  "masse_equipements_kg": 4385.0,
  "centre_gravite_godot_m": [
   0.0,
-  0.0132,
+  0.0147,
   1.431
  ],
  "inertie_godot_kg_m2": [
   [
-   67922.4,
+   67901.5,
    0.0,
    -2.0
   ],
   [
    0.0,
-   81280.5,
-   17.1
+   81291.3,
+   16.7
   ],
   [
    -2.0,
-   17.1,
-   19305.1
+   16.7,
+   19295.1
   ]
  ],
  "inertie_principale_godot_kg_m2": {
-  "x_tangage": 67922.4,
-  "y_lacet": 81280.5,
-  "z_roulis": 19305.1
+  "x_tangage": 67901.5,
+  "y_lacet": 81291.3,
+  "z_roulis": 19295.1
  },
  "masse_par_matiere_kg": {
   "composite fibre de carbone (ailes)": 1480.7,
@@ -600,19 +600,39 @@
   },
   "Pied_arriere_droit": {
    "matiere": "acier haute résistance (trains d'atterrissage)",
-   "masse_kg": 71.7,
+   "masse_kg": 41.7,
    "centre_godot": [
-    0.44,
-    -0.827,
+    0.47,
+    -0.76,
+    1.46
+   ],
+   "note": "fusée de la roue (axe, disque et étrier de frein), v27"
+  },
+  "Roue_arriere_droit": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 30.0,
+   "centre_godot": [
+    0.58,
+    -0.7,
     1.46
    ]
   },
   "Pied_arriere_gauche": {
    "matiere": "acier haute résistance (trains d'atterrissage)",
-   "masse_kg": 71.7,
+   "masse_kg": 41.7,
    "centre_godot": [
-    -0.44,
-    -0.827,
+    -0.47,
+    -0.76,
+    1.46
+   ],
+   "note": "fusée de la roue (axe, disque et étrier de frein), v27"
+  },
+  "Roue_arriere_gauche": {
+   "matiere": "acier haute résistance (trains d'atterrissage)",
+   "masse_kg": 30.0,
+   "centre_godot": [
+    -0.58,
+    -0.7,
     1.46
    ]
   },
@@ -996,5 +1016,6 @@
   }
  },
  "note": "configuration de vol : ailes ouvertes, train rentre, sans carburant (le jeu n'en a pas). Masses des pieces = surface x epaisseur equivalente x densite.",
- "note_v26": "v26 : train arriere elargi (jambes obliques, puits, trappes). Calcul par difference avec la v25 (pieces du train en masses ponctuelles), ailes ouvertes, train rentre."
+ "note_v26": "v26 : train arriere elargi (jambes obliques, puits, trappes). Calcul par difference avec la v25 (pieces du train en masses ponctuelles), ailes ouvertes, train rentre.",
+ "note_v27": "v27 : patins arriere remplaces par des roues freinees (fusee + roue de 18 cm, 14 cm vers l'exterieur). Calcul par difference avec la v26 (masses ponctuelles), ailes ouvertes, train rentre."
 }
