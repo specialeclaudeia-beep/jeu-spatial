@@ -35,7 +35,7 @@ Disposition par défaut :
 | pilote auto : atterrir | L | — |
 | ouvrir / replier les ailes | X | croix directionnelle haut |
 | sortir / rentrer le train d'atterrissage | G | croix directionnelle bas |
-| frein de la roue avant (au sol, maintenir) | Maj | — |
+| freins des roues (au sol, maintenir) | Maj | — |
 | vue cockpit / vue extérieure | V | pavé tactile |
 | vol vertical (décollage / atterrissage) | F | bouton micro |
 | zoom pour lire les instruments (maintenir) | B | L3 (enfoncer le stick gauche) |
@@ -116,13 +116,15 @@ ou couper la poussée, le désactive.
   d'environ 5 cm, et le modèle 3D les montre écrasés (ressorts compris). Le train encaisse un posé
   jusqu'à 4 m/s ; au-delà l'amortisseur arrive en bout de course et casse. Train rentré, la coque
   (ventre, nez, queue) touche le sol : écrasé au-delà de 3 m/s. Le sol frotte et freine le glissement.
-- Rouler au sol (étape 6) : au sol, le lacet tourne aussi la roue avant (jusqu'à 35°, comme les
-  palonniers d'un avion), Maj serre son frein. C'est le sol qui pousse sur la roue : la force ne dépasse
-  jamais le frottement. Les patins arrière ne roulent pas, ils glissent en frottant. Attention : vite
-  (au-delà d'environ 10 m/s) sur les patins, sans correction, le vaisseau part en tête-à-queue, comme
-  une voiture aux roues arrière bloquées. Le stabilisateur (T) corrige : au sol, il tourne aussi la roue
-  avant par son vérin (comme un pilote qui corrige au palonnier) en plus des propulseurs ; avec lui, le
-  vaisseau reste droit, même à 70 m/s.
+- Rouler au sol (étape 6) : au sol, le lacet tourne aussi la roue avant (jusqu'à 35° à l'arrêt, moins
+  en roulant vite, comme les palonniers d'un avion : sinon un virage serré à grande vitesse ferait
+  basculer le vaisseau). Depuis le modèle v27, les patins arrière sont remplacés par de vraies roues
+  freinées (2,37 m l'une de l'autre). Maj serre les freins des trois roues. C'est le sol qui pousse sur
+  les roues : la force ne dépasse jamais l'adhérence des pneus (0,8 × la force qui appuie). Le vaisseau
+  roule droit tout seul (train tricycle, comme un avion : plus de tête-à-queue), freine en 4 m depuis
+  8 m/s, et roule presque librement sans frein. Frein de parc automatique : posé, presque arrêté
+  (moins de 0,3 m/s) et gaz à zéro, les freins se serrent tout seuls ; ils se desserrent quand on remet
+  les gaz. Le stabilisateur (T) aide encore au sol (propulseurs + roue avant).
 - Temps accéléré près du sol : x100 au plus (au sol, chaque pas est découpé en morceaux de 1/240 s pour
   les ressorts du train ; plus vite, le jeu se figeait). L'écran l'indique : « trop près du sol ».
 - Ombre du vaisseau : sur le sol de la planète ET sur celui de la lune (sous 400 m) ; les montagnes de

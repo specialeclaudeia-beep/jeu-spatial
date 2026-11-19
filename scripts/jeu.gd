@@ -114,7 +114,7 @@ var camera: Camera3D
 var exterieur: Node3D                # coque, ailes, train (visible dans les deux vues)
 var cockpit: Node3D                  # intérieur du cockpit et grande verrière (vue intérieure seulement)
 var charnieres := {}                 # nom de l'aile -> nœud Charniere_* du modèle
-var trains: Array = []               # [nœud Train_*, "rotation", "piston" ou "oblique", angle rentré (°) ou course sorti (m), position de repos, axe, patin, axe de la jambe]
+var trains: Array = []               # [nœud Train_*, "rotation", "piston" ou "oblique", angle rentré (°) ou course sorti (m), position de repos, axe, pied (fusée + roue), axe de la jambe]
 var trappes: Array = []              # [nœud Charniere_Trappe_*, angle ouvert (degrés), true = trappe des moteurs de levage]
 var tuyere: Node3D                   # pivot de la tuyère orientable du moteur central
 var moteurs_levage: Array = []       # [nœud Moteur_levage_*, position de repos, course (m)]
@@ -123,6 +123,7 @@ var caches_en_cockpit: Array = []    # pièces du nez (train avant, moteurs de l
 var amortisseurs: Array = []         # [nœud Amortisseur_*, position de repos, n° de roue de la physique]
 var ressorts: Array = []             # [nœud Ressort_*, échelle de repos, n° de roue, longueur au repos (m)]
 var roue_avant: Node3D = null
+var roues_arriere: Array = []        # [nœud Roue_arriere_*, n° de roue de la physique] (modèle v27)
 var amortisseur_avant: Node3D = null   # tourne avec le braquage de la roue avant
 var rotation_amortisseur_avant := Basis.IDENTITY
 var rayon_roue := 0.18
@@ -461,7 +462,7 @@ func _creer_pilote_et_cockpit() -> void:
 			elif extras.get("type", "") == "pivot_oblique":
 				# modèle v26 : jambe arrière qui pivote autour d'un axe en biais (axe_godot). Sortie, elle
 				# part vers l'extérieur sous le réacteur d'aile ; rentrée, elle se couche vers l'avant dans
-				# le ventre. Le patin reste parallèle à la coque (biellette).
+				# le ventre. Le pied (v27 : la fusée et sa roue) reste parallèle à la coque (biellette).
 				var a: Array = extras.get("axe_godot", [1.0, 0.0, 0.0])
 				var cote := String(nom).trim_prefix("Train_arriere_")
 				trains.append([n, "oblique", float(extras.get("angle_rentre_deg", 90.0)), n.position,
@@ -622,6 +623,10 @@ func _trouver_amortisseurs_et_lueurs() -> void:
 				amortisseur_avant = n
 				rotation_amortisseur_avant = n.basis
 	roue_avant = exterieur.find_child("Roue_avant", true, false) as Node3D
+	for cote in [["gauche", 1], ["droit", 2]]:
+		var r := exterieur.find_child("Roue_arriere_" + cote[0], true, false) as Node3D
+		if r != null:
+			roues_arriere.append([r, cote[1]])
 	if roue_avant != null:
 		var e = roue_avant.get_meta("extras", {})
 		if e is Dictionary:
@@ -732,6 +737,12 @@ func _animer_amortisseurs(delta: float) -> void:
 		var dir_roue := Vector3(-sin(vaisseau.braquage), 0.0, -cos(vaisseau.braquage))
 		var avance: float = (Basis(vaisseau.orientation).inverse() * vaisseau.vitesse_par_rapport_au_sol()).dot(dir_roue)
 		roue_avant.rotate_x(-avance / rayon_roue * delta)
+	# roues arrière (v27) : elles roulent dans l'axe du vaisseau, et ne tournent pas frein de parc serré
+	if vaisseau.au_sol and not vaisseau.frein_parc:
+		var avance_ar: float = -(Basis(vaisseau.orientation).inverse() * vaisseau.vitesse_par_rapport_au_sol()).z
+		for r in roues_arriere:
+			if c[r[1]] > 0.0:
+				(r[0] as Node3D).rotate_x(-avance_ar / rayon_roue * delta)
 
 
 func _label(taille: int, couleur := Color(0.75, 0.95, 0.8)) -> Label:
@@ -796,7 +807,7 @@ func _ecrire_aide() -> void:
 		+ "Puissance des moteurs (relativité) : %s moins   %s plus\n" % [c.resume("poussee_moins"), c.resume("poussee_plus")]
 		+ "%s : remettre en orbite   %s : recommencer   %s : tests   %s : cacher l'aide\n" % [c.resume("remettre_orbite"), c.resume("recommencer"), c.resume("tests"), c.resume("aide")]
 		+ "%s : ailes   %s : train d'atterrissage   %s : vol vertical   %s : vue cockpit / extérieure\n" % [c.resume("ailes"), c.resume("train"), c.resume("vol_vertical"), c.resume("vue")]
-		+ "Au sol : le lacet tourne aussi la roue avant   %s (maintenir) : frein de la roue avant\n" % c.resume("frein")
+		+ "Au sol : le lacet tourne aussi la roue avant   %s (maintenir) : freins des roues (frein de parc automatique à l'arrêt, gaz à zéro)\n" % c.resume("frein")
 		+ "Tourner la tête (ou la caméra) : %s   %s : regarder droit devant   %s (maintenir) : zoom\n" % [_aide_tete(), c.resume("regard_centre"), c.resume("zoom")]
 		+ "%s : projecteur   %s : casque et visière   %s : tête qui bouge avec les G\n" % [c.resume("phares"), c.resume("visiere"), c.resume("tete_g")]
 		+ "Einstein : %s toile de l'espace (courbure)   %s saut d'essai vers le trou noir Gaia BH1   %s trou de ver vers Alpha du Centaure\n" % [c.resume("toile"), c.resume("trou_noir"), c.resume("trou_de_ver")]
@@ -983,7 +994,7 @@ func _lire_ordres(delta: float) -> void:
 	var l := 0.0 if ecrit else Input.get_axis("lacet_droite", "lacet_gauche")
 	var r := 0.0 if ecrit else Input.get_axis("roulis_droite", "roulis_gauche")
 	ordres_pilote = Vector3(t, l, r)
-	# étape 6 (sol) : les palonniers du lacet tournent aussi la roue avant ; Maj serre son frein
+	# étape 6 (sol) : les palonniers du lacet tournent aussi la roue avant ; Maj serre les freins des roues
 	vaisseau.braquage_consigne = l
 	vaisseau.frein = 0.0 if ecrit else Input.get_action_strength("frein")
 	# la poussée monte ou descend d'autant plus vite qu'on appuie fort (Z / S ou gâchettes R2 / L2)
@@ -1010,7 +1021,7 @@ func _lire_ordres(delta: float) -> void:
 		if l == 0.0:
 			l = s.y
 			# Au sol, il tourne aussi la roue avant (par son vérin, comme un pilote qui corrige au palonnier) :
-			# les patins arrière glissent, et sans correction le vaisseau part en tête-à-queue dès ~10 m/s.
+			# avec les roues arrière (v27), le vaisseau roule déjà droit ; T aide encore à grande vitesse.
 			if vaisseau.au_sol:
 				vaisseau.braquage_consigne = s.y
 		if r == 0.0: r = s.z

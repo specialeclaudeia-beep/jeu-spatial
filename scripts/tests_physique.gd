@@ -1387,7 +1387,7 @@ func _tests_pente() -> void:
 		ok = ok and bon
 		lignes.append("%s : glisse %.4f m en 5 s, vitesse %.4f m/s, sol %.2f m/s² (poids 9,81)" % [
 			"12° nez vers le haut" if sens == "avant" else "10° de côté", glisse, v.vitesse(), ressenti])
-	_resultat(ok, "Posé sur une pente", "; ".join(lignes) + ". Attendu : immobile (frottement 0,5 > tan 12° = 0,21).")
+	_resultat(ok, "Posé sur une pente", "; ".join(lignes) + ". Attendu : immobile (frein de parc serré, adhérence des pneus 0,8 > tan 12° = 0,21).")
 
 	# 37. Train arrière large (v26) : posé, le sol qui penche doucement de côté jusqu'à 22° ne le
 	#     couche pas (il penche avec le sol, sans glisser : tan 22° = 0,40 < frottement 0,5) ;
@@ -1402,7 +1402,9 @@ func _tests_pente() -> void:
 		"Sol qui penche doucement jusqu'à 22° de côté : vaisseau penché de %.1f°, déplacé de %.2f m. Posé à plat à 1 m/s sur 8° de côté : penché de %.1f° (attendu ≈ 8,8°, ressorts compris)." % [
 			_penche(d), bouge_d, _penche(a)])
 
-	# 37 bis. Trop de pente : 35° nez vers le haut (tan 35° = 0,70 > frottement 0,5), il glisse ;
+	# 37 bis. Trop de pente : 35° nez vers le haut, posé sans freiner, il part en arrière (v26 : les
+	#     patins glissaient, tan 35° = 0,70 > frottement 0,5 ; v27 : les roues roulent avant que le
+	#     frein de parc ait pu se serrer) ;
 	#     posé à plat à 1 m/s sur 16° de côté, le patin du haut le fait trop rouler : il se couche
 	#     (sans exploser : le calcul reste propre).
 	var w = _pose_sur_pente(35.0, "avant", 6.0)
@@ -1410,9 +1412,12 @@ func _tests_pente() -> void:
 	var parcouru := (Vector3(w.px, w.py, w.pz) - depart).length()
 	var c = _pose_sur_pente(16.0, "cote", 20.0, 0.0, 0.0, 1.0)
 	var couche := _penche(c) > 60.0
+	var sur_coque := false
+	for k in w._touchait:
+		sur_coque = sur_coque or int(k) >= 10
 	_resultat(_valide(w) and _valide(c) and parcouru > 3.0 and couche, "Une pente trop forte : il glisse ou se couche",
-		"35° nez vers le haut : %.1f m parcourus en 6 s (il glisse). Posé à 1 m/s sur 16° de côté : penché de %.0f° (il se couche sur le flanc)." % [
-			parcouru, _penche(c)])
+		"35° nez vers le haut : %.1f m parcourus en 6 s (il ne tient pas ; sur la coque : %s). Posé à 1 m/s sur 16° de côté : penché de %.0f° (il se couche sur le flanc)." % [
+			parcouru, "oui" if sur_coque else "non", _penche(c)])
 
 	# 38. Le sol tourne avec la planète (jour de 2 h) : posé, le vaisseau tourne avec lui, sans glisser
 	#     par rapport au sol. Sa vitesse dans l'espace = celle du sol (ω × r).
@@ -1452,9 +1457,9 @@ func _cap(v) -> float:
 
 
 func _tests_roulage() -> void:
-	# S-1. Rouler et tourner : moteurs à 5 %, la roue avant braquée à fond à gauche (lacet au sol).
-	#      Les patins arrière glissent en frottant, la roue avant roule dans sa direction : le vaisseau
-	#      tourne vers la gauche. Roue droite : il va tout droit. Rien n'est tourné « à la main » : seul
+	# S-1. Rouler et tourner : moteurs à 2 %, la roue avant braquée à fond à gauche (lacet au sol).
+	#      Les roues arrière (v27) roulent dans l'axe du vaisseau, la roue avant dans sa direction : le
+	#      vaisseau tourne vers la gauche. Roue droite : il va tout droit. Rien n'est tourné « à la main » : seul
 	#      le sol pousse sur la roue (et le lacet reste à 0 : aucun propulseur ne fait tourner).
 	var caps := []
 	var distances := []
@@ -1464,24 +1469,27 @@ func _tests_roulage() -> void:
 		var p0 := Vector3(v.px, v.py, v.pz)
 		v.braquage_consigne = b
 		for i in 240 * 6:
-			v.commander(0.05, 0.0, 0.0, 0.0)
+			v.commander(0.02, 0.0, 0.0, 0.0)
 			v.pas(1.0 / 240.0)
 			if i == 240 * 2:
 				caps.append(_cap(v))   # cap après 2 s (ensuite, braqué à fond, il fait plus d'un demi-tour)
 			if b == 0.0 and i == 240 * 4:
-				caps[0] = _cap(v)   # tout droit : cap après 4 s (8 m/s ; plus vite, sans correction, voir S-4)
+				caps[0] = _cap(v)   # tout droit : cap après 4 s
 		restes_au_sol = restes_au_sol and v.au_sol and not v.ecrase and _valide(v)
 		distances.append((Vector3(v.px, v.py, v.pz) - p0).length())
 	var ok1: bool = restes_au_sol and absf(float(caps[0])) < 1.0 and float(caps[1]) > 10.0 and float(caps[2]) < -10.0 \
 		and absf(float(caps[1]) + float(caps[2])) < 2.0 and float(distances[0]) > 5.0
 	_resultat(ok1, "Sol : rouler et tourner avec la roue avant",
-		"Moteurs à 5 %% : roue droite, cap %+.1f° après 4 s (%.0f m parcourus en 6 s) ; braquée à gauche, %+.1f° après 2 s ; à droite, %+.1f°. Toujours sur ses roues : %s." % [
+		"Moteurs à 2 %% : roue droite, cap %+.1f° après 4 s (%.0f m parcourus en 6 s) ; braquée à gauche, %+.1f° après 2 s ; à droite, %+.1f°. Toujours sur ses roues : %s." % [
 			caps[0], distances[0], caps[1], caps[2], "oui" if restes_au_sol else "NON"])
 
-	# S-2. Le frein de la roue avant : lancé à 8 m/s puis moteurs coupés, il s'arrête plus vite frein
-	#      serré. Le frein ne fait que serrer la roue : la force reste sous frottement × poussée du sol.
+	# S-2. Les freins (v27 : les trois roues, Maj) : lancé à 8 m/s puis moteurs coupés. Sans frein, il
+	#      roule presque librement (seule la résistance au roulement, 0,02, le ralentit) ; freins serrés,
+	#      il s'arrête en quelques mètres. Le frein ne fait que serrer la roue : la force reste sous
+	#      l'adhérence du pneu (0,8) × la force qui appuie. Arrêté, gaz à zéro, le frein de parc se serre.
 	var arrets := []
 	var decel_max := 0.0
+	var parc := false
 	for f in [0.0, 1.0]:
 		var v = _pose_a_plat()
 		var p0 := Vector3(v.px, v.py, v.pz)
@@ -1490,6 +1498,7 @@ func _tests_roulage() -> void:
 		v.vy += lance.y
 		v.vz += lance.z
 		v._lire_vitesse()
+		v.frein_parc = false   # il vient d'être lancé : le frein de parc (serré posé à l'arrêt) est desserré
 		v.frein = f
 		for i in 240 * 6:
 			var v_avant: float = v.vitesse()
@@ -1497,20 +1506,23 @@ func _tests_roulage() -> void:
 			v.pas(1.0 / 240.0)
 			decel_max = maxf(decel_max, (v_avant - v.vitesse()) * 240.0)
 		arrets.append([(Vector3(v.px, v.py, v.pz) - p0).length(), v.vitesse()])
+		if f > 0.0:
+			parc = v.frein_parc
 	var d_libre: float = arrets[0][0]
 	var d_frein: float = arrets[1][0]
-	var ok2: bool = float(arrets[0][1]) < 0.05 and float(arrets[1][1]) < 0.05 and d_frein < 0.95 * d_libre \
-		and decel_max < (VaisseauPhysique.FROTTEMENT + VaisseauPhysique.RESISTANCE_ROULEMENT) * 9.81 * 1.05
-	_resultat(ok2, "Sol : le frein de la roue avant",
-		"Lancé à 8 m/s : arrêté en %.1f m sans frein (les patins arrière frottent), %.1f m frein serré. Freinage le plus fort : %.2f m/s² (le frottement en permet au plus %.2f)." % [
-			d_libre, d_frein, decel_max, (VaisseauPhysique.FROTTEMENT + VaisseauPhysique.RESISTANCE_ROULEMENT) * 9.81])
+	var mu_max := (VaisseauPhysique.ADHERENCE_PNEU + VaisseauPhysique.RESISTANCE_ROULEMENT) * 9.81
+	var ok2: bool = float(arrets[0][1]) > 6.0 and d_libre > 40.0 and float(arrets[1][1]) < 0.05 and d_frein < 8.0 \
+		and decel_max < mu_max * 1.05 and parc
+	_resultat(ok2, "Sol : les freins des roues",
+		"Lancé à 8 m/s : sans frein, il roule encore à %.1f m/s après 6 s (%.0f m). Freins serrés : arrêté en %.1f m. Freinage le plus fort : %.2f m/s² (le pneu en permet au plus %.2f). Frein de parc serré à l'arrêt : %s." % [
+			arrets[0][1], d_libre, d_frein, decel_max, mu_max, "oui" if parc else "NON"])
 
 
-	# S-4. Tête-à-queue : les patins arrière glissent (ils ne roulent pas) et la roue avant accroche le
-	#      sol devant le centre de gravité : lancé à 30 m/s avec une toute petite rotation, le vaisseau
-	#      part en tête-à-queue (vraie physique, comme une voiture aux roues arrière bloquées). Avec le
-	#      stabilisateur (T), qui corrige par les propulseurs ET par la roue avant (son vérin, comme un
-	#      pilote au palonnier), il reste droit. Rien n'est tourné « à la main ».
+	# S-4. Tête-à-queue : avec les patins (v26), lancé à 30 m/s avec une toute petite rotation, le
+	#      vaisseau partait en tête-à-queue. Avec les roues arrière (v27), qui accrochent le sol de côté
+	#      derrière le centre de gravité (train tricycle, comme un avion), il revient tout seul dans
+	#      l'axe, même sans stabilisateur. Avec le stabilisateur (T), il reste encore plus droit.
+	#      Rien n'est tourné « à la main ».
 	var caps4 := []
 	for avec_t in [false, true]:
 		var v = _pose_a_plat()
@@ -1519,6 +1531,7 @@ func _tests_roulage() -> void:
 		v.vy += lance.y
 		v.vz += lance.z
 		v._lire_vitesse()
+		v.frein_parc = false
 		v.omega = Vector3(0.0, 0.02, 0.0)
 		var cap_max := 0.0
 		for i in 240 * 8:
@@ -1529,11 +1542,12 @@ func _tests_roulage() -> void:
 			v.commander(0.0, 0.0, l, 0.0)
 			v.pas(1.0 / 240.0)
 			cap_max = maxf(cap_max, absf(_cap(v)))
-		caps4.append([cap_max, v.au_sol and not v.ecrase and _valide(v)])
-	var ok4: bool = float(caps4[0][0]) > 45.0 and float(caps4[1][0]) < 3.0 and caps4[1][1]
-	_resultat(ok4, "Sol : le stabilisateur évite le tête-à-queue",
-		"Lancé à 30 m/s, petite rotation de 1°/s : sans stabilisateur, le nez tourne jusqu'à %.0f° (tête-à-queue) ; avec le stabilisateur (propulseurs + roue avant), au plus %.1f°, toujours sur ses roues : %s." % [
-			caps4[0][0], caps4[1][0], "oui" if caps4[1][1] else "NON"])
+		caps4.append([cap_max, v.au_sol and not v.ecrase and _valide(v), absf(_cap(v)), v.vitesse()])
+	var ok4: bool = float(caps4[0][0]) < 3.0 and float(caps4[0][2]) < 1.0 and caps4[0][1] and float(caps4[1][0]) < 3.0 and caps4[1][1] \
+		and float(caps4[0][3]) > 25.0
+	_resultat(ok4, "Sol : il roule droit, sans tête-à-queue (roues arrière)",
+		"Lancé à 30 m/s, petite rotation de 1°/s : sans stabilisateur, le nez tourne au plus de %.1f° et revient à %.1f° (avec les patins v26 : tête-à-queue) ; avec le stabilisateur, au plus %.1f°. Encore %.0f m/s après 8 s. Toujours sur ses roues : %s." % [
+			caps4[0][0], caps4[0][2], caps4[1][0], caps4[0][3], "oui" if caps4[0][1] and caps4[1][1] else "NON"])
 
 	# S-5. Accroche au sol précise : posé, une petite poussée de côté (sous le frottement) fait plier les
 	#      accroches des roues de quelques centimètres, puis tout s'arrête. Les positions sur le sol sont

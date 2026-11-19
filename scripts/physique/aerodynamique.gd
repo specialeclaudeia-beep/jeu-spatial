@@ -23,7 +23,7 @@ extends RefCounted
 ## - très haut (molécules rares, libre parcours plus grand que le vaisseau) : chaque molécule frappe la
 ##   coque seule (écoulement moléculaire libre : traînée ≈ 2,2 fois la surface face au vent).
 
-const CENTRE_GRAVITE := Vector3(0.0, 0.0132, 1.431)
+const CENTRE_GRAVITE := Vector3(0.0, 0.0147, 1.431)
 const LONGUEUR := 10.3          # m, longueur du vaisseau (pour le régime moléculaire)
 
 ## Bandes d'une aile, dans le repère de sa charnière (aile repliée à plat) : [x du milieu (m),
