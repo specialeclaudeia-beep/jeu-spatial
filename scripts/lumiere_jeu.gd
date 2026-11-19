@@ -105,6 +105,10 @@ var _soleil_cache := false           # Soleil caché par la coque, vu de l'œil
 var reflet_visiere := Vector3.ZERO   # étape 9 : voile renvoyé par la visière (cd/m²)
 ## Temps de chaque partie du calcul (ms, dernière image) : pour trouver ce qui ralentit.
 var ms_parties := {}
+const COUCHE_PLANETE := 1 << 18
+const COUCHE_LUNE := 1 << 19
+const ALTITUDE_OMBRE_SOL := 400.0    # m : plus haut, l'ombre du vaisseau (200 m au plus) n'atteint pas le sol
+var _ombre_sol := true
 const POSE_CHAQUE := 4             # posemètre réparti sur 4 images
 var _pose_compte := 0
 var _pose_echantillons := PackedFloat32Array()
@@ -209,6 +213,16 @@ func preparer(p_camera: Camera3D, p_rayon: float, gm_planete := 0.0) -> bool:
 	lumiere_soleil.shadow_bias = 0.03
 	lumiere_soleil.shadow_normal_bias = 1.0
 	add_child(lumiere_soleil)
+	# Les astres ont leur propre couche : la planète n'entre dans la lumière de Godot (une passe de dessin
+	# de plus, ~9 ms sur un PC modeste) que près du sol, là où l'ombre du vaisseau peut tomber dessus ;
+	# la lune n'y entre jamais.
+	if planete:
+		planete.layers = COUCHE_PLANETE
+	if lune:
+		lune.layers = COUCHE_LUNE
+		lune.materiau.set_shader_parameter("sans_lumiere_godot", true)
+	lumiere_soleil.light_cull_mask = 0xFFFFF & ~COUCHE_LUNE
+	_regler_ombre_sol(true)
 
 	reflets.preparer()
 
@@ -316,6 +330,7 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	if lune:
 		var o := _dans_repere(rot_planete, pos_lune[0], pos_lune[1], pos_lune[2])
 		planete.occulteur = PackedFloat64Array([o[0], o[1], o[2], RAYON_LUNE])
+	_regler_ombre_sol(altitude_oeil < ALTITUDE_OMBRE_SOL)
 	_partie("préparation")
 	planete.mettre_a_jour(camera, oeil_planete, rel64, temps, chrono,
 		Vector4(rel_lune.x, rel_lune.y, rel_lune.z, RAYON_LUNE if lune else 0.0))
@@ -398,6 +413,17 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	rs.global_shader_parameter_set("oeil_haut", b.y)
 	rs.global_shader_parameter_set("oeil_pixel_angle", deg_to_rad(camera.fov) / maxf(get_viewport().get_visible_rect().size.y, 1.0))
 	_partie("œil")
+
+
+func _regler_ombre_sol(oui: bool) -> void:
+	if oui == _ombre_sol or not planete or not lumiere_soleil:
+		return
+	_ombre_sol = oui
+	if oui:
+		lumiere_soleil.light_cull_mask |= COUCHE_PLANETE
+	else:
+		lumiere_soleil.light_cull_mask &= ~COUCHE_PLANETE
+	planete.materiau.set_shader_parameter("sans_lumiere_godot", not oui)
 
 
 func _partie(nom: String) -> void:
