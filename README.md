@@ -164,11 +164,25 @@ ou couper la poussée, le désactive.
   les gaz. Dans la gorge, on voit le ciel d'en face (Alpha du Centaure A au centre quand on est dans l'axe),
   autour, notre ciel déformé et un anneau brillant (la lumière qui a tourné autour de la gorge). Angles de la
   lumière calculés exactement en C++ (intégrales elliptiques, `TrouDeVer`, 0,4 ms quand l'œil bouge).
-- Pas de carburant. Pas encore d'atmosphère (phase 4 de la feuille de route).
+- **Atmosphère** : la planète a un air comme celui de la Terre (même gravité au sol), calculé avec l'atmosphère
+  type de 1976 ; sa gravité baisse plus vite en montant (planète 10 fois plus petite), donc son air monte un peu
+  plus haut. L'air tourne avec la planète. Tout passe par de vraies forces, chacune à son endroit
+  (`scripts/physique/aerodynamique.gd`) : les 4 ailes (3 bandes chacune, mesurées sur le modèle), les 2 dérives,
+  le fuselage (de face, de travers, nez effilé), le train sorti. Portance et traînée changent avec la vitesse
+  du son (Mach), l'angle, et l'air très rare de la haute altitude. Ailes en X : le vaisseau est stable en
+  tangage, presque neutre en lacet (le stabilisateur T aide). Le nez chauffe à la rentrée (loi de
+  Sutton-Graves, rayonnement de la coque) : la température est affichée (ligne COQUE), et la coque rougeoie.
+  Dans l'air épais, le temps accéléré est limité (les pas de calcul doivent rester courts). L'orbite de départ
+  est à 250 km (à 100 km, l'air la ferait retomber en une heure). Ciel dans le système de lumière
+  (`scripts/lumiere/atmosphere.gdshaderinc`) : ciel bleu, aube et coucher orangés, Soleil rouge à l'horizon,
+  brume sur le sol lointain, liseré bleu de la planète vue de l'orbite, étoiles atténuées ; le vaisseau reçoit
+  un Soleil filtré par l'air et la lumière bleue du ciel.
+- Pas de carburant.
 - Marqueurs : (o) = direction où l'on va, (x) = direction d'où l'on vient.
 
 ## Organisation
 - `scripts/physique/vaisseau_physique.gd` : toute la physique (indépendante de l'affichage).
+- `scripts/physique/atmosphere.gd` et `aerodynamique.gd` : l'air de la planète et ce qu'il fait au vaisseau.
 - `scripts/physique/reperes.gd` : les systèmes d'étoile, leurs repères et les transformations de Lorentz entre eux.
 - `scripts/physique/lentille.gd` : Einstein B, la lumière courbée par un trou noir (tables pour le ciel et les étoiles).
 - `scripts/einstein/toile.gd` : Einstein B, la « toile de l'espace » (touche Y).

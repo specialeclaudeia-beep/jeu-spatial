@@ -59,7 +59,12 @@ vec3 reflets_luminance(vec3 p, vec3 r, float flou_angle, float vis_soleil, float
 	float flou = clamp(flou_angle / 1.2, 0.0, 1.0);
 	vec4 ck = reflets_cockpit_vu(p, r, flou);
 	vec4 cl = reflets_ciel_vu(r, flou);
-	vec3 etoiles = avec_etoiles * soleil_couleur * soleil_luminance * 0.8 * reflets_disque(r, soleil_direction, soleil_rayon_angle, flou_angle) * vis_soleil;
+	vec3 etoiles = avec_etoiles * soleil_couleur * objets_soleil_filtre * soleil_luminance * 0.8 * reflets_disque(r, soleil_direction, soleil_rayon_angle, flou_angle) * vis_soleil;
+	// Atmosphère : le ciel (luminance moyenne, plus claire vers le haut) remplace le noir de l'espace.
+	if (planete_rayon > 0.0) {
+		float haut = dot(r, normalize(p - planete_centre));
+		etoiles += objets_ciel / PI * (0.65 + 0.35 * haut);
+	}
 	if (compagnon_eclairement > 0.0 && avec_etoiles > 0.0) {
 		etoiles += compagnon_couleur * compagnon_luminance * vis_compagne
 			* reflets_disque(r, compagnon_direction, compagnon_rayon_angle, flou_angle);

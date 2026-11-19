@@ -12,6 +12,7 @@ render_mode unshaded, blend_add, depth_draw_never, cull_disabled, skip_vertex_tr
 #include "res://scripts/lumiere/oeil.gdshaderinc"
 #include "res://scripts/lumiere/etoiles.gdshaderinc"
 #include "res://scripts/lumiere/lentille.gdshaderinc"
+#include "res://scripts/lumiere/atmosphere.gdshaderinc"
 
 uniform float halo = 1.0;              // 1 = halo dans l'œil (touche H du labo), 0 = sans
 uniform float distance_dessin = 1.0e5; // m : entre le plan proche et le plan lointain de la caméra
@@ -40,15 +41,23 @@ void vertex() {
 		couleur = vu.rgb;
 	}
 	vec3 dir = ab.xyz;
+	// Atmosphère : l'étoile est vue à travers l'air (atténuée, rougie près de l'horizon), devant le ciel.
+	vec3 atmo_tr = vec3(1.0);
+	vec3 atmo_ajout = vec3(0.0);
+	if (atmo_rayon > 0.0) {
+		atmo_ajout = atmo_chemin(vec3(0.0), dir, 1.0e12, soleil_direction, 6, atmo_tr)
+			* soleil_couleur * (soleil_eclairement * atmo_soleil_part);
+		couleur *= atmo_tr;
+	}
 	lumiere_v = couleur * e;
 	// Une étoile trop faible pour cet œil (moins d'un demi-niveau de l'écran) n'est pas dessinée.
 	float omega = oeil_pixel_angle * oeil_pixel_angle;
-	float pic = e / (2.0 * PI * TACHE * TACHE * omega);
+	float pic = e * dot(atmo_tr, vec3(0.2126, 0.7152, 0.0722)) / (2.0 * PI * TACHE * TACHE * omega);
 	float pix_deg = degrees(oeil_pixel_angle);
 	// Taille du carré : la tache, plus le halo des étoiles brillantes (jusqu'où il dépasse 1e-5 cd/m²).
 	float r_halo = halo > 0.5 ? pow(1.0e6 * e, 1.0 / 3.0) / pix_deg : 0.0;
 	float rayon = clamp(r_halo, 2.5, 24.0);
-	fond_v = vec3(fond_galaxie(n_source)) + oeil_voile(dir, TIME);
+	fond_v = vec3(fond_galaxie(n_source)) * atmo_tr + atmo_ajout + oeil_voile(dir, TIME);
 	vec4 vue = VIEW_MATRIX * vec4(dir * distance_dessin, 1.0);
 	vec4 clip = PROJECTION_MATRIX * vue;
 	px_v = VERTEX.xy * rayon;

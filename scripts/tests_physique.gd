@@ -12,6 +12,8 @@ const Objets = preload("res://scripts/lumiere/objets.gd")
 const Reflets = preload("res://scripts/lumiere/reflets.gd")
 const PiloteAuto = preload("res://scripts/physique/pilote_auto.gd")
 const Reperes = preload("res://scripts/physique/reperes.gd")
+const Atmosphere = preload("res://scripts/physique/atmosphere.gd")
+const AtmoLumiere = preload("res://scripts/lumiere/atmosphere_lumiere.gd")
 const R := 600000.0
 const GM := 9.81 * 600000.0 * 600000.0
 
@@ -298,6 +300,7 @@ func _lancer() -> void:
 	_tests_trou_de_ver()
 	_tests_grandes_distances()
 	_tests_lune()
+	_tests_atmosphere()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
@@ -2628,3 +2631,234 @@ func _tests_lune() -> void:
 			break
 	_resultat(v.au_sol and not v.ecrase and touche4 < 2.0, "Lune : le pilote auto s'y pose",
 		"Depuis 1 000 m, 15 m/s de côté : %s après %.0f s, touché à %.2f m/s." % ["écrasé" if v.ecrase else ("posé" if v.au_sol else "pas posé"), duree4, touche4])
+
+
+# =====================================================================
+# TESTS : L'ATMOSPHÈRE (air, traînée, portance, échauffement, ciel)
+# =====================================================================
+## Vaisseau dans l'air de la planète de test (qui ne tourne pas, sauf demande), à l'altitude z, le
+## ventre vers le sol (le haut du vaisseau = +X, vers l'extérieur), le nez vers −Z.
+func _dans_air(z: float, omega_p := 0.0):
+	var v = _nouveau(true)
+	v.atmosphere = Atmosphere.new(R, omega_p)
+	v.omega_planete = omega_p
+	v.px = R + z
+	v.orientation = Quaternion(Vector3.BACK, deg_to_rad(-90.0))
+	return v
+
+
+func _incliner(v, alpha_deg: float) -> void:
+	v.orientation = Quaternion(Vector3.BACK, deg_to_rad(-90.0)) * Quaternion(Vector3.RIGHT, deg_to_rad(alpha_deg))
+
+
+func _tests_atmosphere() -> void:
+	# A1. L'air type : niveau de la mer, tropopause, et la planète plus petite étire son air
+	var at = Atmosphere.new(R)
+	var e0: Array = at.etat(0.0)
+	var h11: float = 11000.0 * R / (R - 11000.0)   # altitude où la géopotentielle vaut 11 km
+	var e11: Array = at.etat(h11)
+	var ok_a1: bool = absf(float(e0[0]) - 1.225) < 0.001 and absf(float(e0[2]) - 101325.0) < 1.0 \
+		and absf(float(e11[1]) - 216.65) < 0.01 and absf(float(e0[3]) - 340.3) < 0.2
+	var decroit := true
+	var avant := INF
+	for z in range(0, 600001, 5000):
+		var r_z: float = at.densite(z)
+		if r_z > avant:
+			decroit = false
+		avant = r_z
+	_resultat(ok_a1 and decroit and at.densite(600001.0) == 0.0, "Air : atmosphère type",
+		"Au sol %.4f kg/m³, %.0f Pa, son à %.1f m/s (attendu 1,225, 101 325, 340,3). Tropopause %.2f K à %.0f m (11 km géopotentiels). Densité toujours décroissante : %s, nulle au-delà de 600 km." % [
+			e0[0], e0[2], e0[3], e11[1], h11, "oui" if decroit else "NON"])
+
+	# A2. Chute à plat : la traînée finit par porter tout le poids (vitesse limite, rien de magique)
+	var v = _dans_air(4000.0)
+	for i in 120 * 40:
+		v.pas(1.0 / 120.0)
+		v.omega = Vector3.ZERO   # on tient le vaisseau à plat (seule la translation compte ici)
+	var g_sent: float = v.acceleration_ressentie.length() / VaisseauPhysique.G0
+	var g_ici: float = GM / pow(v.distance_centre(), 2.0) / VaisseauPhysique.G0
+	_resultat(absf(g_sent - g_ici) < 0.05 * g_ici and v.vitesse() < 120.0 and v.vitesse() > 40.0, "Air : vitesse limite à plat",
+		"Après 40 s de chute ventre en bas depuis 4 km : %.1f m/s, l'air pousse %.3f g (attendu ≈ %.3f : tout le poids ; un peu plus, car l'air devient plus épais en descendant)." % [v.vitesse(), g_sent, g_ici])
+
+	# A3. Portance des ailes : à 200 m/s, elle double quand l'incidence double, et dépasse le poids
+	var l_par := []
+	for a in [2.0, 4.0]:
+		v = _dans_air(2000.0)
+		v.vz = -200.0
+		_incliner(v, a)
+		v._forces_air(Basis(v.orientation), 0.0)
+		l_par.append(v.aero.portance)
+	var rapport: float = float(l_par[1]) / maxf(float(l_par[0]), 1.0)
+	var poids: float = v.masse * 9.81
+	_resultat(absf(rapport - 2.0) < 0.15 and float(l_par[1]) > poids and v.aero.trainee > 0.0, "Air : portance des ailes",
+		"200 m/s à 2 km : portance %.0f kN à 2°, %.0f kN à 4° (rapport %.2f, attendu ≈ 2), poids %.0f kN. Traînée %.1f kN." % [
+			float(l_par[0]) / 1000.0, float(l_par[1]) / 1000.0, rapport, poids / 1000.0, v.aero.trainee / 1000.0])
+
+	# A4. Stabilité : nez qui monte → l'air le rabaisse ; roulis lancé → les ailes le freinent
+	v = _dans_air(2000.0)
+	v.vz = -200.0
+	_incliner(v, 5.0)
+	var c_tangage: Vector3 = v._forces_air(Basis(v.orientation), 0.0)[1]
+	v = _dans_air(2000.0)
+	v.vz = -200.0
+	v.omega = Vector3(0.0, 0.0, 1.0)
+	for i in 120:
+		v.pas(1.0 / 120.0)
+	_resultat(c_tangage.x < 0.0 and absf(v.omega.z) < 0.3, "Air : stabilité et amortissement",
+		"Incidence 5° : couple de tangage %.1f kN·m (négatif = le nez redescend). Roulis lancé à 1 rad/s : %.3f rad/s après 1 s, sans aucun propulseur." % [c_tangage.x / 1000.0, v.omega.z])
+
+	# A5. L'air tourne avec la planète : immobile par rapport au sol, aucun vent
+	v = _dans_air(1000.0, TAU / 7200.0)
+	var vs: Vector3 = v.vitesse_sol(v.px, v.py, v.pz)
+	v.vx = vs.x
+	v.vy = vs.y
+	v.vz = vs.z
+	v._lire_vitesse()
+	var f_repos: Vector3 = v._forces_air(Basis(v.orientation), 0.0)[0]
+	v.vx = 0.0
+	v.vy = 0.0
+	v.vz = 0.0
+	v._lire_vitesse()
+	var f_vent: Vector3 = v._forces_air(Basis(v.orientation), 0.0)[0]
+	_resultat(f_repos.length() < 1.0 and f_vent.length() > 1.0e5, "Air : il tourne avec la planète",
+		"Immobile par rapport au sol (%.0f m/s dans l'espace) : %.3f N d'air. Immobile dans l'espace : vent de %.0f m/s, %.0f kN." % [
+			vs.length(), f_repos.length(), vs.length(), f_vent.length() / 1000.0])
+
+	# A6. Échauffement de rentrée : à 7 km/s dans l'air de 60 km, le nez chauffe (Sutton-Graves), puis
+	#     refroidit dans le vide en rayonnant
+	v = _dans_air(60000.0)
+	var rho60: float = v.atmosphere.densite(60000.0)
+	var q_att: float = VaisseauPhysique.SUTTON_GRAVES * sqrt(rho60 / VaisseauPhysique.RAYON_NEZ) * pow(7000.0, 3.0)
+	var q0 := 0.0
+	for i in 60 * 10:
+		v.px = R + 60000.0
+		v.py = 0.0
+		v.pz = 0.0
+		v.vx = 0.0
+		v.vy = 0.0
+		v.vz = -7000.0
+		v._lire_vitesse()
+		v.omega = Vector3.ZERO
+		v._forces_air(Basis(v.orientation), 0.1)
+		if i == 0:
+			q0 = v.flux_nez
+	var t_chaud: float = v.temperature_nez
+	var v2 = _nouveau(false)
+	v2.temperature_nez = t_chaud
+	for i in 600:
+		v2.pas(1.0)
+	_resultat(absf(q0 - q_att) < 0.02 * q_att and t_chaud > 1300.0 and v2.temperature_nez < 0.3 * t_chaud, "Air : échauffement de rentrée",
+		"7 km/s à 60 km : %.0f kW/m² sur le nez (Sutton-Graves : %.0f), %.0f °C après 60 s. Dans le vide, il rayonne sa chaleur : %.0f °C 10 min plus tard." % [
+			q0 / 1000.0, q_att / 1000.0, t_chaud - 273.15, v2.temperature_nez - 273.15])
+
+	# A7. L'orbite de départ du jeu (250 km) tient : l'air y est si rare qu'elle perd moins de 50 m par tour
+	v = _nouveau(true)
+	v.atmosphere = Atmosphere.new(R)
+	v.placer_en_orbite(Jeu.ALTITUDE_DEPART)
+	var periode: float = TAU * sqrt(pow(R + Jeu.ALTITUDE_DEPART, 3.0) / GM)
+	var n_pas := int(periode / 0.5)
+	for i in n_pas:
+		v.pas(0.5)
+	var o: Dictionary = v.orbite()
+	var perte: float = Jeu.ALTITUDE_DEPART - minf(float(o["peri"]), float(o["apo"]))
+	_resultat(perte < 50.0 and perte > 0.0, "Air : l'orbite de départ tient",
+		"Un tour à %.0f km (%.0f min) : périapside %.1f m plus bas (l'air freine un peu, mais très peu)." % [Jeu.ALTITUDE_DEPART / 1000.0, periode / 60.0, perte])
+
+	# A8. Temps accéléré : dans l'air épais, les pas de calcul restent courts ; au-dessus de l'air, aucune limite
+	v = _dans_air(1000.0)
+	v.vz = -200.0
+	var court: float = v.pas_max_air()
+	v.px = R + 700000.0
+	var libre: float = v.pas_max_air()
+	# au pas permis, un roulis lancé est bien freiné (pas de calcul qui « rebondit »)
+	v = _dans_air(1000.0)
+	v.vz = -200.0
+	v.omega = Vector3(0.0, 0.0, 1.0)
+	var dt := maxf(court, 1.0 / 120.0)
+	var ok_stable := true
+	for i in int(2.0 / dt) + 1:
+		v.pas(dt)
+		if v.omega.length() > 1.5:
+			ok_stable = false
+	_resultat(court < 0.1 and libre == INF and ok_stable, "Air : temps accéléré limité dans l'air épais",
+		"À 1 km et 200 m/s : pas de calcul de %.3f s au plus (x%d au plus). Au-dessus de l'air : sans limite. Au pas permis, le calcul reste stable : %s." % [
+			court, _acc_max(court), "oui" if ok_stable else "NON"])
+
+	# A9. Lumière : la fonction de Chapman (épaisseur d'air vers le Soleil) colle au calcul pas à pas
+	var al = AtmoLumiere.new(R)
+	var pire := 0.0
+	for z in [0.0, 5000.0, 30000.0]:
+		for deg in [0.0, 60.0, 85.0, 90.0, 93.0]:
+			var mu := cos(deg_to_rad(deg))
+			var q := Vector3(0.0, R + z, 0.0)
+			var d := Vector3(sqrt(maxf(1.0 - mu * mu, 0.0)), mu, 0.0)
+			if (q + d * 1.0).length() < R:
+				continue
+			# pas à pas : intégrale de la densité de l'air (Rayleigh) jusqu'à 100 km d'altitude
+			var somme := 0.0
+			var t := 0.0
+			var pas_l := 50.0
+			var sous_sol := false
+			while t < 3.0e6:
+				var p := q + d * (t + 0.5 * pas_l)
+				var hz := p.length() - R
+				if hz < 0.0:
+					sous_sol = true
+					break
+				if hz > 100000.0 and p.dot(d) > 0.0:
+					break
+				somme += exp(-hz / AtmoLumiere.H_RAYLEIGH) * pas_l
+				t += pas_l
+				pas_l = minf(pas_l * 1.01, 2000.0)
+			if sous_sol:
+				continue
+			var ch := AtmoLumiere.chapman(R / AtmoLumiere.H_RAYLEIGH, z / AtmoLumiere.H_RAYLEIGH, mu) * AtmoLumiere.H_RAYLEIGH
+			pire = maxf(pire, absf(ch / somme - 1.0))
+	_resultat(pire < 0.02, "Ciel : épaisseur d'air vers le Soleil",
+		"Formule de Chapman contre le calcul pas à pas, de 0 à 30 km, Soleil au zénith jusqu'à 3° sous l'horizon : écart maximal %.1f %%." % (pire * 100.0))
+
+	# A10. Lumière : ciel bleu à midi, Soleil rouge au couchant, liseré bleu vu de l'espace
+	var haut := Vector3(0.0, 1.0, 0.0)
+	var sol := Vector3(0.0, R + 2.0, 0.0)
+	var midi: Array = al.chemin(sol, Vector3(0.6, 0.8, 0.0), 1.0e12, haut, 10)
+	var bleu: Vector3 = midi[0]
+	var s_couchant := Vector3(cos(deg_to_rad(2.0)), sin(deg_to_rad(2.0)), 0.0)
+	var t_couchant: Vector3 = al.transmission_soleil(sol, s_couchant)
+	var t_midi: Vector3 = al.transmission_soleil(sol, haut)
+	# vu de 250 km, un regard qui frôle le bord de la planète traverse beaucoup d'air éclairé
+	var orbite := Vector3(0.0, R + 250000.0, 0.0)
+	var vers_bord := (Vector3(R + 20000.0, 0.0, 0.0) - orbite).normalized()
+	var lise: Array = al.chemin(orbite, vers_bord, 1.0e12, Vector3(0.0, 0.0, 1.0), 10)
+	var l_ciel: float = AtmoLumiere.lum(bleu) * 126573.0
+	var ok10: bool = bleu.z > 2.0 * bleu.x and t_couchant.x > 2.0 * t_couchant.z and t_midi.y > 0.85 \
+		and (lise[0] as Vector3).z > (lise[0] as Vector3).x and l_ciel > 800.0 and l_ciel < 15000.0
+	_resultat(ok10, "Ciel : bleu à midi, Soleil rouge au couchant",
+		"Ciel à 37° du Soleil de midi : %.0f cd/m², bleu %.1f fois plus que rouge. Soleil à 2° de l'horizon : passe %.0f %% du rouge, %.0f %% du bleu (midi : %.0f %% du vert). Bord de la planète vu de 250 km : bleu %.1f fois plus que rouge." % [
+			l_ciel, bleu.z / maxf(bleu.x, 1e-12), t_couchant.x * 100.0, t_couchant.z * 100.0, t_midi.y * 100.0,
+			(lise[0] as Vector3).z / maxf((lise[0] as Vector3).x, 1e-12)])
+
+	# A11. Sur la lune ou dans un autre système d'étoile : pas d'air (et il revient en rentrant)
+	v = _nouveau(true)
+	v.atmosphere = Atmosphere.new(R)
+	var rp = Reperes.new()
+	rp.preparer(v)
+	var a_maison: bool = v.atmosphere != null
+	# en partant de la maison, le jeu garde ce qu'il faut pour y revenir (comme changer_systeme)
+	rp._maison = {"gm": v.gm, "rayon_planete": v.rayon_planete, "relief": v.relief, "omega_planete": v.omega_planete,
+		"atmosphere": v.atmosphere, "autres_astres": v.autres_astres}
+	rp.courant = 1
+	rp._regler_gravite(v, 0.0)
+	var ailleurs: bool = v.atmosphere == null
+	rp.courant = 0
+	rp._regler_gravite(v, 0.0)
+	_resultat(a_maison and ailleurs and v.atmosphere != null, "Air : seulement autour de la planète",
+		"À la maison : air %s. Dans un autre système d'étoile : air %s. Retour : air %s." % [
+			"oui" if a_maison else "NON", "non" if ailleurs else "OUI (erreur)", "oui" if v.atmosphere != null else "NON"])
+
+
+static func _acc_max(pas_max: float) -> int:
+	var best := 1
+	for a in Jeu.ACCELERATIONS_TEMPS:
+		if Jeu.pas_physique(a) <= maxf(pas_max, Jeu.PAS):
+			best = a
+	return best

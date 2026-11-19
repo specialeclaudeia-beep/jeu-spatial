@@ -29,6 +29,7 @@ const ChronoBoucle = preload("res://scripts/lumiere/chrono_boucle.gd")
 const Reflets = preload("res://scripts/lumiere/reflets.gd")
 const Orbite = preload("res://scripts/lumiere/orbite.gd")
 const Lentille = preload("res://scripts/physique/lentille.gd")
+const AtmoLumiere = preload("res://scripts/lumiere/atmosphere_lumiere.gd")
 
 const GRAINE := 7                         # la même planète que dans le labo
 const VERS_SOLEIL := Vector3(1.0, 0.25, 0.2)
@@ -100,6 +101,15 @@ var vue_interieure := true           # vue extérieure : la caméra n'est pas da
 var projecteur := false
 var lampe_cockpit := false
 var _premier := true
+## Atmosphère (programme de départ) : l'air de la planète dans la lumière (ciel bleu, couchers de
+## soleil, brume, Soleil rougi sur le vaisseau). atmosphere = faux : comme avant (pour comparer).
+var atmosphere := true
+var atmo = AtmoLumiere.new()
+var soleil_filtre := Vector3.ONE      # part de la lumière du Soleil qui arrive au vaisseau à travers l'air
+var lux_ciel := Vector3.ZERO          # lux du ciel sur une surface tournée vers le haut, au vaisseau
+var _part_eclipse := 1.0
+const ATMO_POINTS_CIEL := 10          # points de calcul sur chaque chemin de lumière du ciel
+const ATMO_POINTS_POSE := 4           # même chose pour le posemètre (processeur)
 var _e_autre := 0.0                  # lux venus d'ailleurs que du Soleil sur le cockpit (dernier posemètre)
 var _soleil_cache := false           # Soleil caché par la coque, vu de l'œil
 var reflet_visiere := Vector3.ZERO   # étape 9 : voile renvoyé par la visière (cd/m²)
@@ -239,6 +249,7 @@ func preparer(p_camera: Camera3D, p_rayon: float, gm_planete := 0.0) -> bool:
 	camera.near = CAMERA_PRES
 	camera.far = CAMERA_LOIN
 	_g("planete_rayon", rayon)
+	_g("atmo_points_ciel", ATMO_POINTS_CIEL)
 	_g("planete_albedo", ALBEDO_PLANETE)
 	_g("affichage_pres", PRES)
 	return true
@@ -250,8 +261,29 @@ static func _loin(d: Vector3, distance: float) -> PackedFloat64Array:
 
 
 ## Les matières du vaisseau (ou du cockpit) passent au système de lumière.
-func ajouter_objets(racine: Node3D, reference: Node3D) -> void:
+func ajouter_objets(racine: Node3D, reference: Node3D, exterieur := false) -> void:
+	var avant: int = objets.materiaux.size()
 	objets.convertir(racine, reference)
+	if exterieur:
+		for k in range(avant, objets.materiaux.size()):
+			(objets.materiaux[k] as ShaderMaterial).set_shader_parameter("exterieur", true)
+
+
+## Atmosphère, échauffement : la coque brille selon la température de son nez (corps noir : σT⁴ × la
+## part que l'œil voit). vent = direction d'où vient l'air (repère de la physique).
+const EMISSIVITE_COQUE := 0.85
+var luminance_chaleur := 0.0          # cd/m² du nez (affichage, tests)
+
+
+func regler_chaleur(t_nez: float, vent: Vector3) -> void:
+	var lum_rgb := Vector3.ZERO
+	luminance_chaleur = 0.0
+	if t_nez > 600.0 and vent != Vector3.ZERO:
+		var cn: Color = Etoiles.corps_noir(t_nez)
+		luminance_chaleur = EMISSIVITE_COQUE * 5.670374e-8 * pow(t_nez, 4.0) / PI * 93.0 * cn.a
+		lum_rgb = Vector3(cn.r, cn.g, cn.b) * luminance_chaleur
+	_g("objets_chaleur", lum_rgb)
+	_g("objets_vent", vent.normalized() if vent != Vector3.ZERO else Vector3.FORWARD)
 
 
 ## Hauteur du sol (m au-dessus du rayon) dans la direction (x, y, z) depuis le centre (64 bits),
@@ -369,9 +401,11 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 	var e: float = soleil.eclairement(oeil64)
 	var alpha: float = soleil.rayon_angle(oeil64)
 	part_visible = soleil.part_visible(oeil64, PackedFloat64Array([0.0, 0.0, 0.0]), rayon)
+	_part_eclipse = 1.0
 	if lune:
 		# Deux astres peuvent cacher le Soleil : on retire la part cachée par chacun (éclipse par la lune).
-		part_visible = clampf(part_visible + soleil.part_visible(oeil64, pos_lune, RAYON_LUNE) - 1.0, 0.0, 1.0)
+		_part_eclipse = soleil.part_visible(oeil64, pos_lune, RAYON_LUNE)
+		part_visible = clampf(part_visible + _part_eclipse - 1.0, 0.0, 1.0)
 	ombre_relief = _ombre_relief(oeil64, s, alpha) if part_visible > 0.0 else 0.0
 	ombre_relief_lune = 1.0
 	if lune and part_visible > 0.0 and altitude_lune < ALTITUDE_RELIEF_LUNE:
@@ -379,7 +413,8 @@ func mettre_a_jour(delta: float, oeil64: PackedFloat64Array, vitesse: Vector3, b
 		ombre_relief = minf(ombre_relief, ombre_relief_lune)
 	_partie("ombre du relief")
 	var vis := part_visible * ombre_relief
-	eclairement_vaisseau = e * vis
+	_regler_atmosphere(rel, s, e)
+	eclairement_vaisseau = e * vis * AtmoLumiere.lum(soleil_filtre)
 	var sc: Vector3 = compagne.direction(oeil64)
 	var ec: float = compagne.eclairement(oeil64)
 	var vis_c := _part_sphere(oeil64, sc, compagne.rayon_angle(oeil64))
@@ -644,7 +679,8 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis
 	var cos_phase := clampf(-rel.normalized().dot(s), -1.0, 1.0)
 	var a := acos(cos_phase)
 	var e_planete := ALBEDO_PLANETE * e * vis * (2.0 / 3.0) * (sin(a) + (PI - a) * cos_phase) / PI * sb * sb
-	var e_autre := 0.5 * (e_planete + ec_vis) + (0.5 * LAMPE_COCKPIT_INTENSITE / 0.36 if lampe_cockpit else 0.0)
+	var e_autre := 0.5 * (e_planete + ec_vis) + (0.5 * LAMPE_COCKPIT_INTENSITE / 0.36 if lampe_cockpit else 0.0) \
+		+ 0.5 * AtmoLumiere.lum(lux_ciel)
 	_e_autre = e_autre
 	# Le Soleil est-il caché par la coque (vu de l'œil) ? Alors pas de halo ni de disque dans l'œil.
 	var soleil_cache: bool = objets.nb_faces > 0 and not objets.toucher(oeil_local, s_local).is_empty()
@@ -652,7 +688,7 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis
 	var e_oeil := 0.0
 	if oeil.halo and not soleil_cache:
 		var devant := -camera.global_transform.basis.z
-		e_oeil = e * vis * Oeil.part_dans_le_champ(devant.dot(s))
+		e_oeil = e * AtmoLumiere.lum(soleil_filtre) * vis * Oeil.part_dans_le_champ(devant.dot(s))
 	_g("soleil_eclairement_oeil", e_oeil)
 	# Les 16 × 9 cases du posemètre coûtent cher (rayons sur la planète, la lune et le cockpit) : l'œil
 	# s'adapte en plusieurs dixièmes de seconde, on les refait donc seulement une image sur POSE_CHAQUE.
@@ -666,7 +702,7 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis
 		_pose_poids.resize(144)
 	for j in 9:
 		if premiere or j % POSE_CHAQUE == _pose_compte:
-			_rangee_posemetre(j, vis, e, inv, oeil_local, s_local, e_autre, taille)
+			_rangee_posemetre(j, vis, e * AtmoLumiere.lum(soleil_filtre), inv, oeil_local, s_local, e_autre, taille)
 	_pose_compte = (_pose_compte + 1) % POSE_CHAQUE
 	# Le halo de l'œil (voile), lui, suit le regard à chaque image.
 	var echantillons := _pose_echantillons.duplicate()
@@ -681,7 +717,8 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis
 			var demi_v := deg_to_rad(camera.fov) * 0.5
 			var demi_h := atan(tan(demi_v) * taille.x / taille.y)
 			var champ := 4.0 * asin(sin(demi_h) * sin(demi_v))
-			en_plus_disque = Soleil.luminance_moyenne() * PI * alpha * alpha / champ * vis * PART_DISQUE_ADAPTATION
+			en_plus_disque = Soleil.luminance_moyenne() * PI * alpha * alpha / champ * vis * PART_DISQUE_ADAPTATION \
+				* AtmoLumiere.lum(soleil_filtre)
 	# La visière filtre toute la lumière qui arrive à l'œil : il s'y habitue.
 	var f: Vector3 = VISIERES[visiere_portee()]
 	var t := 0.2126 * f.x + 0.7152 * f.y + 0.0722 * f.z
@@ -691,6 +728,7 @@ func _poser(rel: Vector3, s: Vector3, e: float, alpha: float, vis: float, ec_vis
 ## Les 16 × 9 cases du posemètre tirées de la planète et de la lune (sans le cockpit ni le halo).
 func _cases_astres(rel: Vector3, s: Vector3, e: float, alpha: float, ec_vis: float, sc: Vector3) -> PackedFloat32Array:
 	var cases := _posemetre_astre(planete, oeil_planete, s, e, alpha, ec_vis, sc)
+	_pose_couv = planete.couverture()
 	if lune:
 		# Deux astres : celui de devant cache celui de derrière, case par case (comme le labo).
 		var cov_p: PackedFloat32Array = planete.couverture()
@@ -706,6 +744,49 @@ func _cases_astres(rel: Vector3, s: Vector3, e: float, alpha: float, ec_vis: flo
 	return cases
 
 
+## Atmosphère : Soleil filtré et lumière du ciel au vaisseau (une fois par image : le vaisseau est petit),
+## et réglages globaux des programmes de dessin. rel = centre de la planète vu de l'œil.
+var _pose_couv := PackedFloat32Array()
+var _atmo_q := Vector3.ZERO
+var _atmo_s := Vector3.UP
+var _atmo_e := 0.0
+
+
+func _regler_atmosphere(rel: Vector3, s: Vector3, e: float) -> void:
+	atmo.rayon = rayon if atmosphere else 0.0
+	var q := -rel
+	_atmo_q = q
+	_atmo_s = s
+	_atmo_e = e * _part_eclipse
+	soleil_filtre = atmo.transmission_soleil(q, s)
+	var c := Soleil.COULEUR
+	lux_ciel = atmo.eclairement_ciel(q, s) * Vector3(c.r, c.g, c.b) * _atmo_e
+	_g("atmo_rayon", atmo.rayon)
+	_g("atmo_centre", rel)
+	_g("atmo_soleil_part", _part_eclipse)
+	_g("objets_soleil_filtre", soleil_filtre)
+	_g("objets_ciel", lux_ciel)
+
+
+## Une case du posemètre vue à travers l'air : le sol (ou la lune) est atténué et voilé, et le ciel
+## remplace le noir là où rien ne cache l'espace. Luminance (cd/m²).
+func _case_atmosphere(l: float, k: int, dir: Vector3) -> float:
+	var res: Array = atmo.chemin(_atmo_q, dir, 1.0e12, _atmo_s, ATMO_POINTS_POSE)
+	var ajout := AtmoLumiere.lum(res[0]) * _atmo_e
+	var tr := AtmoLumiere.lum(res[1])
+	var couvre := float(_pose_couv[k]) if k < _pose_couv.size() else 0.0
+	if couvre > 0.0:
+		# le sol au bout du regard reçoit un Soleil filtré par l'air (rouge et faible au couchant)
+		var b := _atmo_q.dot(dir)
+		var dc := b * b - (_atmo_q.length_squared() - rayon * rayon)
+		if dc > 0.0:
+			var t := -b - sqrt(dc)
+			if t > 0.0:
+				var sol := l - FOND_CIEL * (1.0 - couvre)
+				l = sol * AtmoLumiere.lum(atmo.transmission_soleil(_atmo_q + dir * t, _atmo_s)) + FOND_CIEL * (1.0 - couvre)
+	return l * tr + ajout
+
+
 ## Une rangée (16 cases) du posemètre : l'astre, ou le cockpit s'il est devant.
 func _rangee_posemetre(j: int, vis: float, e: float, inv: Basis, oeil_local: Vector3, s_local: Vector3,
 		e_autre: float, taille: Vector2) -> void:
@@ -714,6 +795,8 @@ func _rangee_posemetre(j: int, vis: float, e: float, inv: Basis, oeil_local: Vec
 		var v := (j + 0.5) / 9.0 * 2.0 - 1.0
 		var dir := camera.project_ray_normal(Vector2((u + 1.0) * 0.5 * taille.x, (v + 1.0) * 0.5 * taille.y))
 		var l: float = _pose_cases[j * 16 + i]
+		if atmosphere and atmo.rayon > 0.0:
+			l = _case_atmosphere(l, j * 16 + i, dir)
 		if objets.nb_faces > 0:
 			var lv: float = objets.luminance_vue(oeil_local, inv * dir, s_local, e * vis, e_autre)
 			if lv >= 0.0:
@@ -751,13 +834,13 @@ func _mettre_a_jour_reflets(s: Vector3, e: float, alpha: float, vis: float, base
 			astres.append(a_lune)
 	reflets.mettre_a_jour_ciel(astres)
 	var s_local := base.inverse() * s
-	reflets.mettre_a_jour_cockpit(objets, oeil_local, s_local, e * vis, _e_autre)
+	reflets.mettre_a_jour_cockpit(objets, oeil_local, s_local, e * vis * AtmoLumiere.lum(soleil_filtre), _e_autre)
 	# Le visage du pilote : Soleil (s'il n'est pas caché par la coque), lumière venue d'ailleurs et
 	# lumière renvoyée par le cockpit, sur une demi-boule tournée vers l'avant.
 	var devant := -camera.global_transform.basis.z
 	var e_visage := 0.5 * _e_autre + 0.5 * PI * reflets.luminance_cockpit()
 	if not _soleil_cache:
-		e_visage += Reflets.eclairement_visage(devant, s, e * vis)
+		e_visage += Reflets.eclairement_visage(devant, s, e * vis * AtmoLumiere.lum(soleil_filtre))
 	reflet_visiere = Reflets.reflet_visiere(visiere_portee(), filtre, e_visage)
 	_g("oeil_reflet_visiere", reflet_visiere)
 	# Image fantôme du Soleil (deux réflexions dans la visière), floue selon la pupille.
@@ -828,7 +911,10 @@ func infos() -> String:
 		var d_lune := Vector3(pos_lune[0] - pos_oeil[0], pos_lune[1] - pos_oeil[1], pos_lune[2] - pos_oeil[2]).length()
 		lune_txt = "\n              jour %d %% (2 h)   lune à %d km (sa lumière met %.1f ms)" % [
 			roundi(angle_planete / TAU * 100.0), roundi(d_lune / 1000.0), retard_lune * 1000.0]
-	return _infos_base() + lune_txt
+	var air_txt := ""
+	if atmosphere and atmo.rayon > 0.0 and lux_ciel != Vector3.ZERO:
+		air_txt = "\n              ciel %s lux   Soleil filtré par l'air : %d %%" % [_nombre(AtmoLumiere.lum(lux_ciel)), roundi(AtmoLumiere.lum(soleil_filtre) * 100.0)]
+	return _infos_base() + lune_txt + air_txt
 
 
 func _infos_base() -> String:

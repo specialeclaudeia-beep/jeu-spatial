@@ -14,6 +14,15 @@ global uniform float planete_albedo;          // part moyenne de la lumière ren
 // ou une montagne), calculée par le processeur une fois par image (le vaisseau est petit).
 global uniform float objets_soleil_visible;
 global uniform float objets_compagnon_visible;
+// Atmosphère (calculées par le processeur, le vaisseau est petit) : part de la lumière du Soleil que
+// l'air laisse passer jusqu'au vaisseau (rouge au couchant), et lumière du ciel (lux, sur une surface
+// tournée vers le haut).
+global uniform vec3 objets_soleil_filtre;
+global uniform vec3 objets_ciel;
+// Atmosphère, échauffement : luminance de la coque la plus chaude (nez, cd/m², rgb) et direction d'où
+// vient l'air (repère d'affichage).
+global uniform vec3 objets_chaleur;
+global uniform vec3 objets_vent;
 
 float profondeur_log(float prof) {
 	return 1.0 - clamp(log2(max(prof, affichage_pres) / affichage_pres) / log2(affichage_loin / affichage_pres), 0.0, 1.0);
