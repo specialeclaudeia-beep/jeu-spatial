@@ -52,6 +52,8 @@ const ACTIONS := [
 	["temps_x1000", "Temps x1000", "p:52", ""],                       # 4
 	["temps_x10000", "Temps x10 000", "p:53", ""],                     # 5
 	["temps_x100000", "Temps x100 000", "p:54", ""],                   # 6
+	["temps_x1000000", "Temps x1 million (loin des astres)", "p:57", ""],        # 9
+	["temps_x10000000", "Temps x10 millions (loin des astres)", "p:48", ""],     # 0
 	["poussee_moins", "Puissance des moteurs : moins (÷10)", "p:55", ""],   # 7
 	["poussee_plus", "Puissance des moteurs : plus (x10)", "p:56", ""],     # 8
 	["temps_moins", "Temps moins rapide", "", "b:13"],                # croix directionnelle gauche

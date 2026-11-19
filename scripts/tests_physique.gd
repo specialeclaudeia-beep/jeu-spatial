@@ -294,6 +294,7 @@ func _lancer() -> void:
 	_tests_reperes()
 	_tests_einstein()
 	_tests_trou_de_ver()
+	_tests_grandes_distances()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
@@ -1603,11 +1604,16 @@ func _tests_reperes() -> void:
 	var d_alpha := _ecart3(r.centre_maison(1, 0.0), soleil) / al
 	var d_prox := _ecart3(r.centre_maison(2, 0.0), soleil) / al
 	var d_ap := _ecart3(r.centre_maison(1, 0.0), r.centre_maison(2, 0.0)) / Reperes.UA
-	var v_alpha: float = r.systemes[1]["vitesse"]
+	# vitesses du catalogue : comptées depuis le Soleil (qui tourne autour de sa compagne, repère B)
+	var vs0: PackedFloat64Array = r.solaire.vitesse_soleil(0.0)
+	var va := PackedFloat64Array()
+	for k in 3:
+		va.append(float(r.systemes[1]["v"][k]) - vs0[k])
+	var v_alpha: float = _norme3(va)
 	var vr: float = 0.0
 	var n_a: PackedFloat64Array = r.centre_maison(1, 0.0)
 	for k in 3:
-		vr += r.systemes[1]["v"][k] * (n_a[k] - soleil[k]) / (d_alpha * al)
+		vr += va[k] * (n_a[k] - soleil[k]) / (d_alpha * al)
 	var ok1: bool = absf(d_alpha - 4.366) < 0.01 and absf(d_prox - 4.246) < 0.01 and absf(d_ap - 13000.0) < 600.0 \
 		and absf(v_alpha - 32400.0) < 600.0 and absf(vr + 22400.0) < 1.0
 	_resultat(ok1, "Repères : les vraies étoiles voisines",
@@ -1617,8 +1623,8 @@ func _tests_reperes() -> void:
 	#       c²t² − distance² est le même vu des deux repères (c'est ce que dit Einstein).
 	var t0 := 3.0e7
 	var x0 := PackedFloat64Array([1.0e12, -3.0e11, 2.0e12])
-	var ev: Array = r.vers_maison(1, t0, x0)
-	var retour: Array = r.depuis_maison(1, ev[0], ev[1])
+	var ev: Array = r.vers_b(1, t0, x0)
+	var retour: Array = r.depuis_b(1, ev[0], ev[1])
 	var o: PackedFloat64Array = r.systemes[1]["o"]
 	var dx := PackedFloat64Array([ev[1][0] - o[0], ev[1][1] - o[1], ev[1][2] - o[2]])
 	var s_maison: float = (c * float(ev[0])) ** 2 - (dx[0] ** 2 + dx[1] ** 2 + dx[2] ** 2)
@@ -1629,7 +1635,7 @@ func _tests_reperes() -> void:
 	var ok2: bool = absf(float(retour[0]) - t0) < 1e-6 and _ecart3(retour[1], x0) <= tol2 \
 		and absf(s_maison - s_alpha) < 1e-9 * absf(s_alpha) and _ecart3(u_retour, u0) < 1e-6
 	_resultat(ok2, "Repères : transformation de Lorentz",
-		"Aller-retour Alpha du Centaure → maison → Alpha du Centaure : écart %s s et %s m (les nombres comptés depuis la maison, à 4 années-lumière, n'ont que %.0f m de précision : c'est pour ça qu'il faut un repère par étoile). Intervalle c²t² − d² : %s (repère d'Alpha) contre %s (maison)." % [String.num_scientific(absf(float(retour[0]) - t0)), String.num_scientific(_ecart3(retour[1], x0)), tol2 / 2.0, String.num_scientific(s_alpha), String.num_scientific(s_maison)])
+		"Aller-retour Alpha du Centaure → repère du Soleil et de sa compagne → Alpha du Centaure : écart %s s et %s m (les nombres comptés depuis chez nous, à 4 années-lumière, n'ont que %.0f m de précision : c'est pour ça qu'il faut un repère par étoile). Intervalle c²t² − d² : %s (repère d'Alpha) contre %s (chez nous)." % [String.num_scientific(absf(float(retour[0]) - t0)), String.num_scientific(_ecart3(retour[1], x0)), tol2 / 2.0, String.num_scientific(s_alpha), String.num_scientific(s_maison)])
 
 	# A3-3. Le voyage : à mi-chemin, le vaisseau passe dans le repère d'Alpha du Centaure. Il est au
 	#       même endroit, au même moment (vu de la maison), à la même vitesse : seuls ses nombres changent.
@@ -2172,3 +2178,159 @@ func _tests_trou_de_ver() -> void:
 	_resultat(ok5, "Trou de ver : aller et retour de biais",
 		"Aller : arrivé dans %s, vitesse %.6f km/s (20 attendus) ; retour : revenu dans %s ; %d passages ; la distance à la gorge avance au plus de %.1f m par image (%.1f attendus)." % [
 			rp.systemes[sys_aller]["nom"], vit5 / 1000.0, rp.nom_courant(), t.traversees, l_max_saut, 2.0e4 / 60.0])
+
+
+# =====================================================================
+# TESTS : GRANDES DISTANCES (le système solaire bouge, temps accéléré loin des astres)
+# =====================================================================
+## Angle (rad) entre deux vecteurs 64 bits.
+func _angle3(a: PackedFloat64Array, b: PackedFloat64Array) -> float:
+	var d := (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (_norme3(a) * _norme3(b))
+	return acos(clampf(d, -1.0, 1.0))
+
+
+func _tests_grandes_distances() -> void:
+	var ua: float = Reperes.UA
+	var jour := 86400.0
+	var r = Reperes.new()
+	var sol = r.solaire
+
+	# GD-1. Au départ, rien ne change : le Soleil et la compagne sont là où le jeu les mettait avant.
+	#       Puis la planète tourne autour du Soleil : en un an, le Soleil fait le tour du ciel.
+	var s0: PackedFloat64Array = sol.soleil_vu(0.0)
+	var c0: PackedFloat64Array = sol.compagne_vue(0.0)
+	var ecart0 := _ecart3(s0, r.systemes[0]["etoiles"][0]["p"]) + _ecart3(c0, r.systemes[0]["etoiles"][1]["p"])
+	var d_min := INF
+	var d_max := 0.0
+	var angle_total := 0.0
+	var prec := s0
+	var annee := 0.0
+	for k in range(1, 800):
+		var t := k * jour
+		var sv: PackedFloat64Array = sol.soleil_vu(t)
+		var d := _norme3(sv)
+		d_min = minf(d_min, d)
+		d_max = maxf(d_max, d)
+		angle_total += _angle3(prec, sv)
+		prec = sv
+		if annee == 0.0 and angle_total >= TAU:
+			annee = t / jour
+	var ok1: bool = ecart0 < 1.0 and d_min > 0.9 * ua and d_max < 1.1 * ua and absf(annee - 365.0) < 30.0
+	_resultat(ok1, "Grandes distances : la planète tourne autour du Soleil",
+		"Au départ, le Soleil et la compagne sont à %.3f m de leur ancienne place. Le Soleil fait le tour du ciel en %.0f jours ; sa distance varie de %.4f à %.4f UA (la compagne, à 5 UA, déforme un peu l'orbite). Le Soleil et la compagne tournent l'un autour de l'autre en %.1f ans." % [ecart0, annee, d_min / ua, d_max / ua, sol.periode_binaire() / (365.25 * jour)])
+
+	# GD-2. Le calcul pas à pas de l'orbite est juste et sans à-coup : même résultat en recalculant de loin,
+	#       aux bords des morceaux de 16 jours, vers le passé, et l'énergie de la planète autour du Soleil
+	#       reste celle d'une orbite (pas de dérive).
+	var duree_morceau: float = sol.PAS * sol.PAS_PAR_MORCEAU
+	var t_bord := 7.0 * duree_morceau
+	var avant: PackedFloat64Array = sol.planete(t_bord - 1e-3)
+	var apres: PackedFloat64Array = sol.planete(t_bord + 1e-3)
+	var saut := sqrt((apres[0] - avant[0]) ** 2 + (apres[1] - avant[1]) ** 2 + (apres[2] - avant[2]) ** 2)
+	var v_orb := sqrt(apres[3] ** 2 + apres[4] ** 2 + apres[5] ** 2)
+	var saut_attendu := v_orb * 2e-3
+	var r2 = Reperes.new()
+	var p_loin: PackedFloat64Array = r2.solaire.planete(3.0e8)    # 9,5 ans plus tard, calculé d'un coup
+	var p_proche: PackedFloat64Array = sol.planete(3.0e8)         # après d'autres calculs (cache)
+	var p_passe: PackedFloat64Array = sol.planete(-3.0e7)
+	var retour := PackedFloat64Array([p_passe[0], p_passe[1], p_passe[2]])
+	var ok_passe := is_finite(retour[0]) and absf(_norme3(sol.soleil_vu(-3.0e7)) / ua - 1.0) < 0.1
+	# vérification indépendante : 1 jour pas à pas (1 min) depuis l'état à 100 jours
+	var e: PackedFloat64Array = sol.planete(100.0 * jour)
+	var x := PackedFloat64Array([e[0], e[1], e[2]])
+	var vv := PackedFloat64Array([e[3], e[4], e[5]])
+	var t1 := 100.0 * jour
+	var h := 60.0
+	for i in 1440:
+		var a: Array = sol._acceleration(t1, x[0], x[1], x[2])
+		for k in 3:
+			vv[k] += float(a[k]) * h * 0.5
+		for k in 3:
+			x[k] += vv[k] * h
+		t1 += h
+		var a2: Array = sol._acceleration(t1, x[0], x[1], x[2])
+		for k in 3:
+			vv[k] += float(a2[k]) * h * 0.5
+	var e2: PackedFloat64Array = sol.planete(101.0 * jour)
+	var ecart_jour := sqrt((x[0] - e2[0]) ** 2 + (x[1] - e2[1]) ** 2 + (x[2] - e2[2]) ** 2)
+	var ok2: bool = absf(saut - saut_attendu) < 1e-3 and _ecart3(p_loin, p_proche) < 1e-3 and ok_passe and ecart_jour < 50.0
+	_resultat(ok2, "Grandes distances : le calcul de l'orbite de la planète",
+		"Au bord d'un morceau de 16 jours : %.4f m parcourus en 2 ms (attendu %.4f m à %.2f km/s : aucun à-coup). Recalculée 9,5 ans plus tard, de deux façons : écart %s m. Vers le passé : planète toujours à 1 UA. Comparée à un calcul indépendant (pas d'une minute) sur un jour : %.1f m d'écart sur %.0f millions de km parcourus." % [saut, saut_attendu, v_orb / 1000.0, String.num_scientific(_ecart3(p_loin, p_proche)), ecart_jour, v_orb * jour / 1e9])
+
+	# GD-3. Le Soleil attire vraiment, même loin de la planète. Un vaisseau lâché à mi-chemin du Soleil,
+	#       immobile par rapport à la planète : on le suit 20 jours dans le jeu, et dans le repère B
+	#       (calcul indépendant de Newton). Avant, il ne serait presque pas tombé.
+	var vr3 := _vaisseau_maison()
+	var v = vr3[0]
+	r = vr3[1]
+	var sv0: PackedFloat64Array = r.solaire.soleil_vu(0.0)
+	v.px = sv0[0] * 0.5
+	v.py = sv0[1] * 0.5
+	v.pz = sv0[2] * 0.5
+	v.vx = 0.0
+	v.vy = 0.0
+	v.vz = 0.0
+	v._lire_vitesse()
+	v.temps_univers = 0.0
+	var xb: PackedFloat64Array = r.solaire.vers_b(0.0, PackedFloat64Array([v.px, v.py, v.pz]))
+	var vb: PackedFloat64Array = r.solaire.vitesse_planete(0.0)
+	var d_soleil0 := _norme3(sv0) * 0.5
+	var n3 := 20 * 96
+	var dt3 := 20.0 * jour / n3
+	for i in n3:
+		v.pas(dt3)
+	var tb := 0.0
+	var h3 := 60.0
+	for i in int(20.0 * jour / h3):
+		var a: Array = r.solaire._acceleration(tb, xb[0], xb[1], xb[2])
+		for k in 3:
+			vb[k] += float(a[k]) * h3 * 0.5
+		for k in 3:
+			xb[k] += vb[k] * h3
+		tb += h3
+		var a2: Array = r.solaire._acceleration(tb, xb[0], xb[1], xb[2])
+		for k in 3:
+			vb[k] += float(a2[k]) * h3 * 0.5
+	var attendu: PackedFloat64Array = r.solaire.depuis_b(tb, xb)
+	var ecart3 := _ecart3(attendu, PackedFloat64Array([v.px, v.py, v.pz]))
+	var s20: PackedFloat64Array = r.solaire.soleil_vu(v.temps_univers)
+	var d_soleil := _ecart3(s20, PackedFloat64Array([v.px, v.py, v.pz]))
+	var chute := d_soleil0 - d_soleil
+	var ok3: bool = absf(v.temps_univers - 20.0 * jour) < 1.0 and chute > 5.0e9 and ecart3 < 1e-5 * chute
+	_resultat(ok3, "Grandes distances : le Soleil attire vraiment, loin de la planète",
+		"Lâché à mi-chemin du Soleil (%.1f millions de km), immobile par rapport à la planète : après 20 jours, il est %.2f millions de km plus près du Soleil. Le calcul de Newton fait à part, dans le repère du Soleil et de sa compagne, donne la même position à %.1f km près (relativité comprise dans le jeu)." % [d_soleil0 / 1e9, chute / 1e9, ecart3 / 1000.0])
+
+	# GD-4. Changer de repère avec une planète qui file à 30 km/s : aller-retour exact (position, heure, vitesse).
+	var t4 := 1.234e7
+	var x4 := PackedFloat64Array([3.0e14, -2.0e15, 1.0e15])
+	var ev: Array = r.depuis_maison(1, t4, x4)
+	var ret: Array = r.vers_maison(1, ev[0], ev[1])
+	var u4 := PackedFloat64Array([1.0e5, -2.0e8, 3.0e7])
+	var u_ret: PackedFloat64Array = r.vitesse_vers_maison(1, r.vitesse_depuis_maison(1, u4, t4), t4)
+	var vp: PackedFloat64Array = r.solaire.vitesse_autour_du_soleil(t4)
+	var ok4: bool = absf(float(ret[0]) - t4) < 1e-6 and _ecart3(ret[1], x4) < 4.0 * _precision(_norme3(r.systemes[1]["o"])) and _ecart3(u_ret, u4) < 1e-6 * _norme3(u4)
+	_resultat(ok4, "Grandes distances : repères avec une planète qui bouge",
+		"La planète file à %.2f km/s autour du Soleil. Maison → Alpha du Centaure → maison : écart %s s, %.2f m, vitesse %s m/s." % [_norme3(vp) / 1000.0, String.num_scientific(absf(float(ret[0]) - t4)), _ecart3(ret[1], x4), String.num_scientific(_ecart3(u_ret, u4))])
+
+	# GD-5. Le temps accéléré au-delà de x100 000 : seulement loin des astres.
+	var pas_jeu := 1.0 / 120.0
+	var vr5 := _vaisseau_maison()
+	var w = vr5[0]
+	var lim_orbite: float = w.limite_temps(0.05) / pas_jeu
+	var nom_orbite: String = w.astre_limitant
+	var sv5: PackedFloat64Array = vr5[1].solaire.soleil_vu(0.0)
+	w.px = -sv5[0] * 0.003   # 450 000 km de la planète, côté opposé au Soleil
+	w.py = -sv5[1] * 0.003
+	w.pz = -sv5[2] * 0.003
+	w.vx = 0.0
+	w.vy = 0.0
+	w.vz = 0.0
+	w._lire_vitesse()
+	var lim_loin: float = w.limite_temps(0.05) / pas_jeu
+	var vr6 := _vaisseau_maison()
+	var z = vr6[0]
+	_placer_vers(z, vr6[1], 1, 0.5, 0.9)
+	var lim_etoiles: float = z.limite_temps(0.05) / pas_jeu
+	var ok5: bool = lim_orbite < 1.0e5 and lim_loin > 1.0e6 and lim_etoiles > 1.0e7
+	_resultat(ok5, "Grandes distances : le temps accéléré loin des astres",
+		"Accélération permise (une image = 5 %% du chemin jusqu'à l'astre) : en orbite basse x%.0f (limitée par « %s » ; x100 000 reste toujours possible, comme avant) ; à 450 000 km de la planète x%s ; entre les étoiles à 0,9 c x%s (x10 millions possible : Alpha du Centaure en quelques minutes)." % [lim_orbite, nom_orbite, "%.0f" % lim_loin, "%.0f" % lim_etoiles])

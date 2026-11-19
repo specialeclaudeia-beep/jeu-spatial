@@ -498,16 +498,18 @@ func ajouter_astre(nom: String, gm_astre: float, x: float, y: float, z: float) -
 ## centré sur la planète), t = temps_univers. Le repère suit la planète, qui est elle aussi attirée par
 ## la lune : on retire donc cette attraction de la planète (« terme indirect ») ; il ne reste que ce
 ## qui change vraiment le mouvement du vaisseau par rapport à la planète (la marée de la lune).
-func ajouter_astre_mobile(nom: String, gm_astre: float, position: Callable) -> void:
+func ajouter_astre_mobile(nom: String, gm_astre: float, position: Callable, rayon := 0.0) -> void:
 	var p: PackedFloat64Array = position.call(temps_univers)
 	autres_astres.append({"nom": nom, "gm": gm_astre, "x": p[0], "y": p[1], "z": p[2], "position": position,
-		"indirect": true})
+		"indirect": true, "rayon": rayon})
 
 
-func _placer_astres() -> void:
+func _placer_astres(t := NAN) -> void:
+	if is_nan(t):
+		t = temps_univers
 	for a in autres_astres:
 		if a.has("position"):
-			var p: PackedFloat64Array = (a["position"] as Callable).call(temps_univers)
+			var p: PackedFloat64Array = (a["position"] as Callable).call(t)
 			a["x"] = p[0]
 			a["y"] = p[1]
 			a["z"] = p[2]
@@ -704,6 +706,10 @@ func _pas_un(dt: float) -> void:
 	ux *= ka
 	uy *= ka
 	uz *= ka
+	# les astres qui bougent (lune, Soleil vu de la planète) sont replacés à la fin du pas : sans ça,
+	# la seconde moitié de la gravité serait comptée avec leur position du début (erreur qui grandit
+	# avec la durée du pas, gênante en temps très accéléré)
+	_placer_astres(temps_univers + dt)
 	_pousser_u(gravite(px, py, pz), a_p, h, m1)
 	_ecrire_vitesse()
 	# horloges : celle du pilote avance de dt × N / Γ (N = ralentissement du temps par la gravité,
@@ -1192,6 +1198,47 @@ func orbite() -> Dictionary:
 		return {"peri": h2 / (gm * (1.0 + ecc)) - rayon_planete, "apo": INF, "excentricite": ecc}
 	var a := -gm / (2.0 * e_spec)
 	return {"peri": a * (1.0 - ecc) - rayon_planete, "apo": a * (1.0 + ecc) - rayon_planete, "excentricite": ecc}
+
+
+## Grandes distances : durée (s de l'univers) qu'une image peut couvrir pour que le vaisseau ne fasse pas
+## plus de « part » du chemin qui le sépare de l'astre le plus proche (en temps) : distance au sol de
+## l'astre ÷ (vitesse par rapport à lui + vitesse de chute √(2·G·M/r)). Sert à limiter le temps accéléré
+## au-delà de x100 000. astre_limitant = nom de l'astre qui limite.
+var astre_limitant := ""
+
+
+func limite_temps(part: float) -> float:
+	var v := vitesse()
+	var meilleur := INF
+	astre_limitant = ""
+	if gm > 0.0:
+		var r := distance_centre()
+		var t := maxf(r - rayon_planete, 1e-3 * r) / (v + sqrt(2.0 * gm / r))
+		if t < meilleur:
+			meilleur = t
+			astre_limitant = "planète" if rayon_planete > 0.0 else "étoile"
+	for a in autres_astres:
+		var dx := px - float(a["x"])
+		var dy := py - float(a["y"])
+		var dz := pz - float(a["z"])
+		var r := sqrt(dx * dx + dy * dy + dz * dz)
+		var w := Vector3(vx, vy, vz)
+		if a.has("position"):   # astre qui bouge : sa vitesse, mesurée sur une minute
+			var f: Callable = a["position"]
+			var p0: PackedFloat64Array = f.call(temps_univers - 30.0)
+			var p1: PackedFloat64Array = f.call(temps_univers + 30.0)
+			w -= Vector3(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]) / 60.0
+		var t := maxf(r - float(a.get("rayon", 0.0)), 1e-3 * r) / (w.length() + sqrt(2.0 * float(a["gm"]) / r))
+		if t < meilleur:
+			meilleur = t
+			astre_limitant = String(a["nom"])
+	if trou_de_ver != null:
+		var d: float = trou_de_ver.distance_gorge(self)
+		var t2 := d / maxf(v, 1.0)
+		if t2 < meilleur:
+			meilleur = t2
+			astre_limitant = "trou de ver"
+	return part * meilleur
 
 
 ## Vitesse d'une orbite circulaire à la distance r (coordonnées isotropes), mesurée sur place, selon
