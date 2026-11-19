@@ -310,6 +310,10 @@ func _brancher_lumiere() -> void:
 	# la petite lune attire aussi le vaisseau (elle bouge : sa position est recalculée à chaque pas)
 	if lumiere.lune:
 		vaisseau.ajouter_astre_mobile("lune", lumiere.gm_lune(), lumiere.position_lune, LumiereJeu.RAYON_LUNE)
+		# grandes distances : près de la lune, on compte depuis elle (on peut s'y poser)
+		var lune_planete = lumiere.lune
+		reperes.configurer_lune(lumiere.orbite, LumiereJeu.RAYON_LUNE, lumiere.gm_lune(), vaisseau.gm,
+			func(p: PackedFloat64Array) -> float: return lune_planete.hauteur_sol(p))
 	_creer_casque()
 	_appliquer_vue()
 
@@ -1090,7 +1094,8 @@ func _process(delta: float) -> void:
 	_mesurer(delta)
 	_regler_resolution(delta)
 	_lire_boutons()
-	pilote.basis = Basis(vaisseau.orientation)
+	# (près de la lune, les axes de la physique tournent avec elle : on dessine dans ceux de la maison)
+	pilote.basis = reperes.base_affichage() * Basis(vaisseau.orientation)
 	_suivre_g(delta)
 	_bouger_tete(delta)
 	_animer_modele()
@@ -1143,8 +1148,9 @@ func _placer_lumiere(delta: float) -> void:
 	var oeil_local := camera.position
 	var decalage := pilote.basis * oeil_local
 	pilote.position = -decalage
-	var oeil64 := PackedFloat64Array([vaisseau.px + float(decalage.x), vaisseau.py + float(decalage.y),
-		vaisseau.pz + float(decalage.z)])
+	var decalage_physique := Basis(vaisseau.orientation) * oeil_local   # axes de la physique (lune : les siens)
+	var oeil64 := PackedFloat64Array([vaisseau.px + float(decalage_physique.x), vaisseau.py + float(decalage_physique.y),
+		vaisseau.pz + float(decalage_physique.z)])
 	# Einstein A3 : la lumière compte depuis la maison (la planète, sa lune, le Soleil y sont). Loin
 	# d'elle, l'œil y est placé à quelques mètres près : seules des étoiles lointaines en dépendent.
 	var oeil_sys := oeil64.duplicate()
@@ -1169,8 +1175,10 @@ func _placer_lumiere(delta: float) -> void:
 			vaisseau.px * vaisseau.vy - vaisseau.py * vaisseau.vx)
 		if l.length() < 1e-6 * vaisseau.distance_centre() * maxf(vaisseau.vitesse(), 1e-3) or l.length() == 0.0:
 			l = Vector3.UP
-		toile.mettre_a_jour(Vector3(-oeil_sys[0], -oeil_sys[1], -oeil_sys[2]), PackedFloat64Array([vaisseau.px, vaisseau.py, vaisseau.pz]),
-			vaisseau.gm, _rayon_astre_principal(), l)
+		var ba := reperes.base_affichage()   # axes de la physique → axes du dessin (près de la lune)
+		var pv := ba * Vector3(vaisseau.px, vaisseau.py, vaisseau.pz)
+		toile.mettre_a_jour(ba * Vector3(-oeil_sys[0], -oeil_sys[1], -oeil_sys[2]), PackedFloat64Array([pv.x, pv.y, pv.z]),
+			vaisseau.gm, _rayon_astre_principal(), ba * l)
 	temps_lumiere_ms = lerpf(temps_lumiere_ms, (Time.get_ticks_usec() - t0) / 1000.0, 0.05)
 ## Rayon de l'astre au centre du système (0 pour un trou noir : toute sa masse est en un point).
 func _rayon_astre_principal() -> float:
@@ -1194,7 +1202,9 @@ func _infos_cockpit() -> Dictionary:
 	var astres := []
 	# planète : position de son centre vue depuis le vaisseau, distance jusqu'à la surface
 	var p := vers_vaisseau * Vector3(-vaisseau.px, -vaisseau.py, -vaisseau.pz)
-	if reperes.a_la_maison():
+	if reperes.sur_lune:
+		astres.append({"nom": "Lune", "position": p, "distance": vaisseau.altitude(), "principal": true})
+	elif reperes.a_la_maison():
 		astres.append({"nom": "Planète", "position": p, "distance": vaisseau.altitude(), "principal": true})
 	else:
 		var e0: Dictionary = reperes.systemes[reperes.courant]["etoiles"][0]
