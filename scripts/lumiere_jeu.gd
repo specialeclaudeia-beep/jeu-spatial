@@ -206,6 +206,10 @@ func preparer(p_camera: Camera3D, p_rayon: float, gm_planete := 0.0) -> bool:
 	lumiere_soleil.light_energy = 1.0
 	lumiere_soleil.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY
 	lumiere_soleil.shadow_enabled = true
+	# Carte d'ombre 2048 × 2048 (au lieu de 4096 par défaut) : mesuré sur le PC de Gwenaël (Intel UHD),
+	# 47 → 78 images/s en vue extérieure, presque autant que sans ombres (87). Loin du sol (une seule
+	# zone de 12 m en cockpit, 40 m dehors), ça fait encore un point de carte tous les 0,6 à 2 cm.
+	RenderingServer.directional_shadow_atlas_set_size(CARTE_OMBRE, true)
 	lumiere_soleil.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
 	lumiere_soleil.directional_shadow_max_distance = 200.0
 	lumiere_soleil.directional_shadow_split_1 = 0.1
@@ -431,6 +435,7 @@ func _regler_ombre_sol(oui: bool) -> void:
 ## au lieu de deux, moitié moins de travail pour la carte graphique), et plus fine. Cockpit : 12 m autour
 ## de l'œil (le pilote, l'habitacle, le nez, les ailes proches) ; vue extérieure : 40 m (caméra à 24 m
 ## du centre + longueur du vaisseau). Près du sol : les deux zones d'origine (0-20 m, 20-200 m).
+const CARTE_OMBRE := 2048
 const OMBRE_PROCHE_COCKPIT := 12.0
 const OMBRE_PROCHE_EXTERIEUR := 40.0
 var _zones_ombre := -1.0

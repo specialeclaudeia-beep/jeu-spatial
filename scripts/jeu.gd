@@ -225,11 +225,11 @@ func _mesurer(delta: float) -> void:
 
 
 const PHASES_MESURE := ["vue cockpit", "vue extérieure", "vue extérieure sans ombres",
-	"vue extérieure, image à 70 %", "vue extérieure, carte d'ombre 2048", "vue extérieure, carte d'ombre 1024",
-	"vue cockpit, image à 70 %, carte d'ombre 2048"]
+	"vue extérieure, image à 70 %", "vue extérieure, carte d'ombre 4096 (ancien réglage)",
+	"vue extérieure, carte d'ombre 1024", "vue cockpit, image à 70 %"]
 # [cockpit, ombres, échelle de l'image, taille de la carte d'ombre] pour chaque phase
-const REGLAGES_MESURE := [[true, true, 1.0, 4096], [false, true, 1.0, 4096], [false, false, 1.0, 4096],
-	[false, true, 0.7, 4096], [false, true, 1.0, 2048], [false, true, 1.0, 1024], [true, true, 0.7, 2048]]
+const REGLAGES_MESURE := [[true, true, 1.0, 2048], [false, true, 1.0, 2048], [false, false, 1.0, 2048],
+	[false, true, 0.7, 2048], [false, true, 1.0, 4096], [false, true, 1.0, 1024], [true, true, 0.7, 2048]]
 
 
 func _phase_mesure(phase: int) -> void:
