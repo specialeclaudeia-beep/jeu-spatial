@@ -106,25 +106,29 @@ static func goody(x: float, c3: float) -> float:
 
 ## Le souffle dans le cockpit. rho, t : air du dehors ; u : vitesse par rapport à l'air ; mach ;
 ## t_paroi : température de la coque (K, −1 si inconnue) ; transm : transmissions() pour cet air.
-## Renvoie {niveau (dB dans le cockpit), bandes (énergie Pa² par octave), q (pression du vent, Pa),
-## p_paroi (Pa efficaces sur la paroi), turbulent, fluide}.
+## Renvoie {niveau (dB dans le cockpit), bandes (énergie Pa² par octave), tiers (la même par tiers d'octave),
+## q (pression du vent, Pa), p_paroi (Pa efficaces sur la paroi), turbulent, fluide}.
 static func souffle(rho: float, t: float, u: float, mach: float, t_paroi: float, transm: PackedFloat64Array) -> Dictionary:
 	var bandes := PackedFloat64Array()
 	bandes.resize(10)
-	var res := {"niveau": -INF, "bandes": bandes, "q": 0.5 * rho * u * u, "p_paroi": 0.0, "turbulent": 0.0,
-		"fluide": part_fluide(rho)}
+	var tiers := PackedFloat64Array()   # les mêmes, par tiers d'octave (pour la partie C++, phase 2)
+	tiers.resize(30)
+	var res := {"niveau": -INF, "bandes": bandes, "tiers": tiers, "q": 0.5 * rho * u * u, "p_paroi": 0.0,
+		"turbulent": 0.0, "fluide": part_fluide(rho)}
 	var r := remous(rho, t, u, mach, t_paroi)
 	if r.is_empty():
 		return res
 	res["p_paroi"] = sqrt(float(r["p2"]))
 	res["turbulent"] = r["turbulent"]
 	var total := 0.0
+	var cabine := pow(10.0, GAIN_CABINE_DB / 10.0)
 	for b in 10:
 		var e := 0.0
 		for k in 3:
 			var f: float = BANDES[b] * TIERS[k]
-			e += densite_remous(f, r) * f * LARGEUR_TIERS * transm[b * 3 + k]
-		e *= pow(10.0, GAIN_CABINE_DB / 10.0)
+			var et := densite_remous(f, r) * f * LARGEUR_TIERS * transm[b * 3 + k] * cabine
+			tiers[b * 3 + k] = et
+			e += et
 		bandes[b] = e
 		total += e
 	res["niveau"] = 10.0 * log(maxf(total, 1e-30) / (P_REF * P_REF)) / log(10.0)

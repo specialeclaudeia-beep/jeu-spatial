@@ -307,6 +307,16 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
   l'étoile principale d'en face (taille de pixel mesurée avec `fwidth`, sinon une étoile y passe entre deux pixels).
 - Côté jeu : `scripts/physique/trou_de_ver.gd` (physique et réglage de la lumière), `lumiere_jeu.regler_trou_de_ver`.
 
+## Son du jeu, phase 2 (partie C++ `SyntheSon`, `AnalyseSon`)
+- `cpp/src/synthe_son.cpp` / `.h` : rien à voir avec la lumière, mais c'est la seule partie C++ du dépôt, donc le
+  son du jeu y vit aussi (même bibliothèque, mêmes commandes de compilation). Le labo ne s'en sert pas.
+- `SyntheSon` (AudioStream) : 30 tiers d'octave de bruit (Butterworth d'ordre 4, calibrés par Σh², le volume agit
+  AVANT le filtre : pas de clic dans les graves), 32 résonances (AR(2), durée 1/(π f η)), 8 sons purs ; voie droite
+  = gauche par 4 passe-tout. Cibles atomiques posées par `scripts/son/moteur_audio.gd` (jeu), rejointes par blocs de
+  256 échantillons. `AnalyseSon` = outil des tests du son du jeu (craquements par prédiction AR(16), spectre en
+  tiers d'octave, FFT de 65 536 points).
+- Tests : ceux du son du jeu (`scenes/tests_son.tscn` à la racine), pas ceux du labo.
+
 ## Organisation
 | Chemin | Contenu |
 |---|---|

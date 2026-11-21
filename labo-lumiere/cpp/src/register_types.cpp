@@ -1,5 +1,6 @@
-// Enregistre la classe ArbreLumiere auprès de Godot.
+// Enregistre les classes C++ auprès de Godot : lumière (ArbreLumiere, TrouDeVer) et son (SyntheSon, phase 2).
 #include "arbre_lumiere.h"
+#include "synthe_son.h"
 #include "trou_de_ver.h"
 
 #include <gdextension_interface.h>
@@ -15,6 +16,9 @@ static void initialiser(ModuleInitializationLevel p_niveau) {
 	}
 	GDREGISTER_CLASS(ArbreLumiere);
 	GDREGISTER_CLASS(TrouDeVer);   // Einstein C
+	GDREGISTER_CLASS(SyntheSon);   // son, phase 2 : sons continus fabriqués en direct
+	GDREGISTER_INTERNAL_CLASS(LectureSyntheSon);
+	GDREGISTER_CLASS(AnalyseSon);  // son : outil des tests
 }
 
 static void terminer(ModuleInitializationLevel p_niveau) {}
