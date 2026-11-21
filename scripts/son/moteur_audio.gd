@@ -20,12 +20,23 @@ extends Node
 ## dans Cockpit (petite réverbération), qui va dans Master (limiteur). Le souffle a un égaliseur à
 ## 10 octaves : on lui donne, bande par bande, le spectre calculé par la physique (egaliseur.gd calcule
 ## exactement ce qui en sort). Les jets n'en ont pas besoin : la forme de leur bruit ne change pas.
+##
+## Phase 2 : les sons continus sont fabriqués EN DIRECT par la partie C++ (classe SyntheSon,
+## labo-lumiere/cpp/src/synthe_son.cpp), dans le fil audio de Godot. Deux « voix » :
+##  - structure (bus Structure) : grondement des moteurs + souffle des petits propulseurs, qui arrivent par les
+##    panneaux du cockpit ; en grave, ces panneaux résonnent à leurs fréquences propres (resonances.gd) ;
+##  - air (bus Exterieur) : souffle de l'air + bruit des jets, à travers la verrière.
+## Ce fichier leur donne, 60 fois par seconde, l'énergie voulue dans 30 tiers d'octave (le spectre calculé par
+## la physique, sans égaliseur ni boucle) ; le C++ y glisse doucement par blocs de 5 ms. Le niveau qui sort est
+## exactement le niveau calculé. Sans la partie C++, ou avec l'option `-- --son-boucles`, on garde les
+## boucles de la phase 1.
 
 const Capteurs = preload("res://scripts/son/capteurs.gd")
 const MoteursSon = preload("res://scripts/son/moteurs_son.gd")
 const Fluides = preload("res://scripts/son/fluides_son.gd")
 const Egaliseur = preload("res://scripts/son/egaliseur.gd")
 const Synthese = preload("res://scripts/son/synthese.gd")
+const Resonances = preload("res://scripts/son/resonances.gd")
 
 const CATALOGUE := "res://sons/sons.json"
 const COUCHES_MAX := 8
@@ -46,6 +57,14 @@ const PLAFOND := -2.0
 const ATTAQUE := 0.02            # s : la compression réagit vite quand ça monte…
 const RELACHE := 0.3             # s : … et revient doucement
 const RELACHE_COUCHE := 0.06     # s : une couche qui baisse (jet de gaz coupé) s'éteint en ~60 ms
+## Phase 2 : les voix fabriquées en direct, et les couches qu'elles regroupent (bus, graine du hasard).
+const VOIX_DIRECTES := {
+	"structure": {"bus": "Structure", "couches": ["structure", "rcs"], "graine": 21},
+	"air": {"bus": "Exterieur", "couches": ["souffle", "jet", "jet_rcs"], "graine": 22},
+}
+const BOUCLE_DE := {"structure": "structure", "rcs": "rcs", "jet": "jet_moteur", "jet_rcs": "jet_rcs", "souffle": "souffle"}
+const LISSAGE_DIRECT := 0.01     # s : les cibles changent 60 fois par seconde, le C++ les rejoint en ~10 ms
+const BATTEMENT := 0.18          # léger battement du grondement des moteurs (le même que la boucle de la phase 1)
 
 enum { AMBIANCE, TENSION, AIR, MOTEUR, CHOC, ALARME }
 
@@ -64,6 +83,20 @@ var actif := false
 var pause := false
 var acc_temps := 1
 var vue_interieure := true
+
+# --- phase 2 : sons fabriqués en direct (C++) ---
+var forcer_boucles := false      # à mettre avant installer() : garder les boucles de la phase 1
+var hors_ligne := false          # tests : les voix ne jouent pas en vrai (le test calcule leur son lui-même)
+## Mode --mesure : les deux voix C++ calculent à pleine charge (30 bandes et 32 résonances), à −80 dB (inaudible),
+## pour mesurer leur coût dans le fil audio pendant que le jeu dessine.
+var banc := false
+var synthese_directe := false
+var voix_directes := {}          # nom → {lecteur, flux (SyntheSon), couches, bandes}
+var resonances = null
+var _formes := {}                # couche → part de son énergie dans chaque tiers d'octave (somme = 1)
+var _regime_forme := -1.0
+var _battement := []             # [fréquence, phase, poids] des 6 ondes lentes du battement
+var _norme_battement := 1.0
 
 # --- mixage ---
 var couches := {}       # nom → {lecteur, ref_dbfs, parts (énergie par octave de la boucle), eq, niveau, lisse, priorite}
@@ -94,6 +127,8 @@ func installer(v, noeud_pilote: Node3D, cam: Camera3D, oeil: Vector3) -> void:
 	oreille = oeil + capteurs.centre_gravite
 	_rng.seed = 7
 	preparer_bus()
+	synthese_directe = ClassDB.class_exists("SyntheSon") and not forcer_boucles \
+		and not OS.get_cmdline_user_args().has("--son-boucles")
 	_charger_sons()
 	ecoute = AudioListener3D.new()
 	ecoute.name = "OreillePilote"
@@ -158,11 +193,14 @@ func _charger_sons() -> void:
 	if not (cat is Dictionary):
 		return
 	var b: Dictionary = cat["boucles"]
-	_couche("structure", "structure", b, "Structure", MOTEUR)
-	_couche("rcs", "rcs", b, "Structure", MOTEUR)
-	_couche("jet", "jet_moteur", b, "Jet", MOTEUR)
-	_couche("jet_rcs", "jet_rcs", b, "Jet", MOTEUR)
-	_couche("souffle", "souffle", b, "Souffle", AIR)
+	if synthese_directe:
+		_preparer_voix_directes(b)
+	else:
+		_couche("structure", "structure", b, "Structure", MOTEUR)
+		_couche("rcs", "rcs", b, "Structure", MOTEUR)
+		_couche("jet", "jet_moteur", b, "Jet", MOTEUR)
+		_couche("jet_rcs", "jet_rcs", b, "Jet", MOTEUR)
+		_couche("souffle", "souffle", b, "Souffle", AIR)
 	for nom in cat["coups"]:
 		var liste := []
 		for v in cat["coups"][nom]:
@@ -192,6 +230,172 @@ func _couche(nom: String, boucle: String, catalogue: Dictionary, bus: String, pr
 	couches[nom] = {"lecteur": l, "ref_dbfs": float(infos["rms_dbfs"]), "parts": PackedFloat64Array(infos["bandes"]),
 		"eq": eq, "m_eq": m_eq, "niveau": -INF, "lisse": -INF, "priorite": priorite, "bandes_db": PackedFloat64Array(),
 		"volume": -80.0}
+
+
+## Phase 2 : les deux voix fabriquées en direct par la partie C++.
+func _preparer_voix_directes(catalogue: Dictionary) -> void:
+	resonances = Resonances.new()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1303
+	_battement.clear()
+	var somme := 0.0
+	for k in 6:
+		var poids := rng.randf_range(0.5, 1.0)
+		_battement.append([rng.randf_range(2.0, 10.0), rng.randf() * TAU, poids])
+		somme += poids * poids
+	_norme_battement = 1.0 / sqrt(somme * 0.5)   # le battement a une valeur efficace de 1 (× BATTEMENT)
+	for nv in VOIX_DIRECTES:
+		var d: Dictionary = VOIX_DIRECTES[nv]
+		var flux = ClassDB.instantiate("SyntheSon")
+		flux.graine = int(d["graine"])
+		flux.lissage = LISSAGE_DIRECT
+		if nv == "structure":
+			flux.regler_modes(resonances.frequences, resonances.pertes)
+		# les filtres sont calculés une fois ici (quelques ms), jamais pendant le jeu
+		flux.instantiate_playback().start(0.0)
+		var l := AudioStreamPlayer.new()
+		l.name = "Voix_" + nv
+		l.stream = flux
+		l.bus = d["bus"]
+		add_child(l)
+		var bandes := PackedFloat32Array()
+		bandes.resize(30)
+		voix_directes[nv] = {"lecteur": l, "flux": flux, "couches": d["couches"], "bandes": bandes}
+		for nom in d["couches"]:
+			var boucle: String = BOUCLE_DE[nom]
+			couches[nom] = {"lecteur": l, "ref_dbfs": 0.0, "parts": PackedFloat64Array(catalogue[boucle]["bandes"]),
+				"eq": null, "m_eq": PackedFloat64Array(), "niveau": -INF, "lisse": -INF,
+				"priorite": AIR if nom == "souffle" else MOTEUR, "bandes_db": PackedFloat64Array(), "volume": -80.0,
+				"voix": nv, "energie": 0.0}
+	_formes["rcs"] = _forme_fixe("rcs", 1.0)
+
+
+## Part de chaque tiers d'octave dans une boucle de la phase 1 (même couleur de son), fréquences ÷ p.
+func _forme_fixe(nom: String, p: float) -> PackedFloat64Array:
+	var forme := PackedFloat64Array()
+	forme.resize(30)
+	var tot := 0.0
+	for j in 30:
+		var f := Resonances.centre(j)
+		var e: float = Synthese.spectre(nom, f / p) * f * Fluides.LARGEUR_TIERS
+		forme[j] = e
+		tot += e
+	for j in 30:
+		forme[j] /= maxf(tot, 1e-30)
+	return forme
+
+
+## Forme du spectre d'une couche (30 tiers d'octave, somme = 1), d'après le dernier calcul de la physique.
+func _forme(nom: String) -> PackedFloat64Array:
+	var source := PackedFloat64Array()
+	match nom:
+		"structure":
+			# le grondement « monte en régime » avec la poussée (invention pour le son, à revoir en phase 6) :
+			# toutes ses fréquences × p, comme la hauteur de la boucle de la phase 1 ; les résonances, elles,
+			# restent celles des panneaux
+			var p := 0.9 + 0.25 * sqrt(clampf(moteurs.regime, 0.0, 1.5))
+			if absf(p - _regime_forme) > 0.003 or not _formes.has("structure"):
+				_formes["structure"] = _forme_fixe("structure", p)
+				_regime_forme = p
+			return _formes["structure"]
+		"rcs":
+			return _formes["rcs"]
+		"souffle":
+			source = souffle.get("tiers", PackedFloat64Array())
+		"jet":
+			source = moteurs.tiers_jet
+		"jet_rcs":
+			source = moteurs.tiers_jet_rcs
+	var tot := 0.0
+	for e in source:
+		tot += e
+	if tot > 0.0 and source.size() == 30:
+		var forme := PackedFloat64Array()
+		forme.resize(30)
+		for j in 30:
+			forme[j] = source[j] / tot
+		_formes[nom] = forme
+	return _formes.get(nom, PackedFloat64Array())
+
+
+## Battement du grondement : énergie × (1 + 0,18 s(t))² / (1 + 0,18²), s = 6 ondes lentes de 2 à 10 Hz
+## (valeur efficace 1, moyenne 0 : le niveau moyen ne change pas).
+func _facteur_battement(t: float) -> float:
+	var s := 0.0
+	for o in _battement:
+		s += float(o[2]) * sin(TAU * float(o[0]) * t + float(o[1]))
+	var m := 1.0 + BATTEMENT * s * _norme_battement
+	return m * m / (1.0 + BATTEMENT * BATTEMENT)
+
+
+## Donne aux voix C++ l'énergie voulue dans chaque tiers d'octave ; les démarre et les arrête.
+func _envoyer_voix() -> void:
+	if banc:
+		_envoyer_banc()
+		return
+	for nv in voix_directes:
+		var vd: Dictionary = voix_directes[nv]
+		var e30: PackedFloat32Array = vd["bandes"]
+		e30.fill(0.0)
+		var total := 0.0
+		for nom in vd["couches"]:
+			var en: float = couches[nom]["energie"]
+			if en <= 0.0:
+				continue
+			if nom == "structure":
+				en *= _facteur_battement(capteurs.temps)
+			var forme := _forme(nom)
+			if forme.size() != 30:
+				continue
+			for j in 30:
+				e30[j] += en * forme[j]
+			total += en
+		var flux = vd["flux"]
+		if nv == "structure":
+			var r: Array = resonances.partager(e30)
+			flux.regler_bandes(r[0])
+			flux.regler_energie_modes(r[1])
+		else:
+			flux.regler_bandes(e30)
+		var l := vd["lecteur"] as AudioStreamPlayer
+		if hors_ligne:
+			continue
+		if total > 0.0:
+			if not l.playing:
+				l.play()   # le C++ part du silence et monte en ~10 ms : pas de clic
+		elif l.playing and (fondu <= 0.0 or flux.est_silencieux()):
+			l.stop()       # seulement quand tout s'est tu (résonances comprises) ou que le silence est demandé
+
+
+func _envoyer_banc() -> void:
+	for nv in voix_directes:
+		var vd: Dictionary = voix_directes[nv]
+		var e30 := PackedFloat32Array()
+		e30.resize(30)
+		e30.fill(0.01)
+		vd["flux"].regler_bandes(e30)
+		if nv == "structure":
+			var em := PackedFloat32Array()
+			em.resize(resonances.frequences.size())
+			em.fill(0.01)
+			vd["flux"].regler_energie_modes(em)
+		var l := vd["lecteur"] as AudioStreamPlayer
+		l.volume_db = -80.0
+		if not l.playing and not hors_ligne:
+			l.play()
+
+
+## Part d'un cœur du processeur prise par les voix C++ (fil audio) depuis la dernière remise à zéro.
+func charge_fil_audio() -> float:
+	var ch := 0.0
+	for nv in voix_directes:
+		ch += float(voix_directes[nv]["flux"].mesures()["charge"])
+	return ch
+
+
+func remettre_mesures_fil_audio() -> void:
+	for nv in voix_directes:
+		voix_directes[nv]["flux"].remettre_mesures()
 
 
 ## L'état du jeu, à donner à chaque image.
@@ -264,7 +468,9 @@ func mettre_a_jour(delta: float) -> void:
 	# 4. chaque couche : volume, égaliseur, silence si trop faible ou cachée
 	for nom in couches:
 		_jouer_couche(nom, fondu_db)
-	if couches.has("structure"):
+	if synthese_directe:
+		_envoyer_voix()
+	elif couches.has("structure"):
 		# le grondement « monte en régime » avec la poussée (invention pour le son, à revoir en phase 6)
 		(couches["structure"]["lecteur"] as AudioStreamPlayer).pitch_scale = 0.9 + 0.25 * sqrt(clampf(moteurs.regime, 0.0, 1.5))
 	# 5. sons brefs
@@ -326,6 +532,11 @@ func _jouer_couche(nom: String, fondu_db: float) -> void:
 	var niveau: float = k["lisse"]
 	var dbfs := niveau - ZERO_DBFS + gain + fondu_db
 	var audible := niveau > -INF and dbfs > SEUIL_DB and not _masquee(nom)
+	if k.has("voix"):
+		# phase 2 : la couche ne fait que donner son énergie (pleine échelle) ; sa voix C++ la joue
+		k["energie"] = pow(10.0, dbfs / 10.0) if audible else 0.0
+		k["volume"] = dbfs if audible else -80.0
+		return
 	if not audible:
 		if l.playing:
 			l.stop()
@@ -492,11 +703,14 @@ func _faire_fondre(delta: float) -> void:
 			l.stop()
 
 
-## Nombre de voix qui jouent en ce moment (couches + sons brefs).
+## Nombre de voix qui jouent en ce moment (couches + sons brefs ; une voix C++ compte une fois).
 func voix_actives() -> int:
 	var n := 0
+	var vus := {}
 	for nom in couches:
-		if (couches[nom]["lecteur"] as AudioStreamPlayer).playing:
+		var l := couches[nom]["lecteur"] as AudioStreamPlayer
+		if l.playing and not vus.has(l):
+			vus[l] = true
 			n += 1
 	for v in voix:
 		if (v["lecteur"] as AudioStreamPlayer3D).playing:

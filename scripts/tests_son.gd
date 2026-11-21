@@ -1,5 +1,5 @@
 extends Node
-## Tests automatiques du moteur audio (phase 1). À part des tests de physique.
+## Tests automatiques du moteur audio (phases 1 et 2). À part des tests de physique.
 ## Ligne de commande (dans le cloud ou sur le PC) :
 ##   godot --headless --path . res://scenes/tests_son.tscn
 ## Sans écran, Godot calcule quand même le son (pilote audio « Dummy ») : on peut mesurer ce qui sort.
@@ -12,6 +12,8 @@ const MoteursSon = preload("res://scripts/son/moteurs_son.gd")
 const Capteurs = preload("res://scripts/son/capteurs.gd")
 const Synthese = preload("res://scripts/son/synthese.gd")
 const Jeu = preload("res://scripts/jeu.gd")
+const Resonances = preload("res://scripts/son/resonances.gd")
+const TAUX := 48000   # rendu hors ligne de la partie C++ (échantillons par seconde)
 const R := 600000.0
 const GM := 9.81 * 600000.0 * 600000.0
 const PAS := 1.0 / 120.0
@@ -38,6 +40,11 @@ func _ready() -> void:
 	_test_repetitions()
 	_test_generateur()
 	_test_vitesse()
+	_test_cpp_niveaux()
+	_test_cpp_resonances()
+	_test_cpp_detecteur()
+	_test_vol_10_minutes()
+	await _test_cpp_en_direct()
 	await _test_calibration()
 	print("Tests du son : %d / %d réussis (%.1f s)" % [reussis, total, (Time.get_ticks_msec() - debut) / 1000.0])
 	if DisplayServer.get_name() == "headless":
@@ -442,6 +449,360 @@ func _test_vitesse() -> void:
 
 
 # =====================================================================
+# 3 bis. PHASE 2 : SONS FABRIQUÉS EN DIRECT (partie C++)
+# =====================================================================
+func _cpp(titre: String) -> bool:
+	if ClassDB.class_exists("SyntheSon") and ClassDB.class_exists("AnalyseSon"):
+		return true
+	_resultat(false, titre, "la partie C++ (SyntheSon) n'est pas chargée")
+	return false
+
+
+## Calcule n échantillons d'une lecture C++ (hors ligne), par morceaux de 4 800 ; les donne à l'analyse.
+func _mixer(pb, n: int, analyse = null, garder := false) -> PackedVector2Array:
+	var tout := PackedVector2Array()
+	while n > 0:
+		var k := mini(n, 4800)
+		var b: PackedVector2Array = pb.mix_audio(1.0, k)
+		if analyse != null:
+			analyse.ajouter(b)
+		if garder:
+			tout.append_array(b)
+		n -= k
+	return tout
+
+
+func _test_cpp_niveaux() -> void:
+	var titre := "Partie C++ : le niveau et la couleur demandés sortent"
+	if not _cpp(titre):
+		return
+	var flux = ClassDB.instantiate("SyntheSon")
+	flux.taux = TAUX
+	# couleur du grondement des moteurs, 1e-3 en tout (−30 dB pleine échelle)
+	var e := PackedFloat32Array()
+	e.resize(30)
+	var tot := 0.0
+	for j in 30:
+		var f := Resonances.centre(j)
+		e[j] = Synthese.spectre("structure", f) * f
+		tot += e[j]
+	var e_max := 0.0
+	for j in 30:
+		e[j] *= 1e-3 / tot
+		e_max = maxf(e_max, e[j])
+	flux.regler_bandes(e)
+	var pb = flux.instantiate_playback()
+	pb.start(0.0)
+	_mixer(pb, TAUX / 2)
+	var a = ClassDB.instantiate("AnalyseSon")
+	var son := _mixer(pb, TAUX * 20, a, true)
+	var r: Dictionary = a.resultat()
+	var sp: PackedFloat64Array = a.spectre_tiers(son, TAUX)
+	var pire_bande := 0.0
+	var n_bandes := 0
+	for j in 30:
+		if e[j] > e_max * 0.03:   # bandes à moins de 15 dB du maximum
+			pire_bande = maxf(pire_bande, absf(_db(sp[j] / e[j])))
+			n_bandes += 1
+	var ecart_g := _db(float(r["gauche"]["energie"]) / 1e-3)
+	var ecart_d := _db(float(r["droite"]["energie"]) / 1e-3)
+	# son pur : 440 Hz, 1e-2 → crête √(2 × 0,01)
+	flux.couper()
+	flux.regler_raie(0, 440.0, 0.01)
+	_mixer(pb, TAUX)
+	a.remettre()
+	_mixer(pb, TAUX * 2, a)
+	var rr: Dictionary = a.resultat()
+	var ecart_raie := _db(float(rr["gauche"]["energie"]) / 0.01)
+	flux.couper()
+	_mixer(pb, TAUX / 2)
+	var silence: bool = flux.est_silencieux()
+	_resultat(absf(ecart_g) < 0.2 and absf(ecart_d) < 0.3 and pire_bande < 1.0 and absf(ecart_raie) < 0.05 \
+		and silence and int(r["craquements"]) == 0 and int(r["non_finis"]) == 0, titre,
+		"Grondement demandé à −30 dB : sorti à %+.2f dB (gauche) et %+.2f dB (droite) de la cible ; couleur : %d tiers d'octave vérifiés, plus grand écart %.2f dB (tolérance 1). Son pur à 440 Hz : %+.3f dB. Coupé : silence (%s). 20 s : %d craquement, %d valeur invalide." % [
+			ecart_g, ecart_d, n_bandes, pire_bande, ecart_raie, _oui(silence), r["craquements"], r["non_finis"]])
+
+
+func _test_cpp_resonances() -> void:
+	var titre := "Résonances des panneaux du cockpit"
+	if not _cpp(titre):
+		return
+	var res = Resonances.new()
+	var fr: float = res.frequence_recouvrement()
+	# une résonance seule à 60 Hz : elle monte, puis s'éteint en 1 / (π f η) comme une vraie plaque
+	var flux = ClassDB.instantiate("SyntheSon")
+	flux.taux = TAUX
+	flux.regler_modes(PackedFloat32Array([60.0]), PackedFloat32Array([Resonances.PERTE]))
+	flux.regler_energie_modes(PackedFloat32Array([1e-3]))
+	var pb = flux.instantiate_playback()
+	pb.start(0.0)
+	_mixer(pb, TAUX * 4)
+	var a = ClassDB.instantiate("AnalyseSon")
+	_mixer(pb, TAUX * 10, a)
+	var niveau := _db(float(a.resultat()["gauche"]["energie"]) / 1e-3)
+	flux.regler_energie_modes(PackedFloat32Array([0.0]))
+	var mesures := []
+	for k in 6:   # 6 fois 0,25 s
+		a.remettre()
+		_mixer(pb, TAUX / 4, a)
+		mesures.append(_db(float(a.resultat()["gauche"]["energie"])))
+	var pente := (float(mesures[5]) - float(mesures[1])) / 1.0   # dB par seconde
+	var attendu := -10.0 * 2.0 * PI * 60.0 * Resonances.PERTE / log(10.0)
+	# tout le cockpit : 32 résonances + le reste en bruit lisse, même énergie au total
+	var e := PackedFloat32Array()
+	e.resize(30)
+	e.fill(1e-5)
+	var parts: Array = res.partager(e)
+	var somme := 0.0
+	for x in parts[0]:
+		somme += x
+	for x in parts[1]:
+		somme += x
+	_resultat(absf(niveau) < 0.5 and absf(pente / attendu - 1.0) < 0.1 and res.frequences.size() == 32 \
+		and absf(somme / 30e-5 - 1.0) < 1e-4 and fr > 150.0 and fr < 600.0, titre,
+		"%d résonances de %.0f à %.0f Hz (plancher, parois, tableau de bord, cloison arrière) ; au-delà de %.0f Hz elles se chevauchent (son lisse). Une résonance à 60 Hz : niveau %+.2f dB de la cible ; coupée, elle s'éteint de %.1f dB par seconde (plaque d'aluminium rivetée, perte 1 %% : %.1f). Partage bruit / résonances : énergie gardée à %.4f %%." % [
+			res.frequences.size(), res.frequences[0], res.frequences[res.frequences.size() - 1], fr, niveau, pente, attendu,
+			somme / 30e-5 * 100.0])
+
+
+func _test_cpp_detecteur() -> void:
+	var titre := "Détecteur de craquements (outil des tests)"
+	if not _cpp(titre):
+		return
+	var flux = ClassDB.instantiate("SyntheSon")
+	flux.taux = TAUX
+	var e := PackedFloat32Array()
+	e.resize(30)
+	for j in 30:
+		e[j] = 1e-4 * pow(10.0, -0.1 * absf(j - 10))
+	flux.regler_bandes(e)
+	var pb = flux.instantiate_playback()
+	pb.start(0.0)
+	_mixer(pb, TAUX / 2)
+	var son := _mixer(pb, TAUX * 3, null, true)
+	var a = ClassDB.instantiate("AnalyseSon")
+	a.ajouter(son)
+	var propre: int = a.resultat()["craquements"]
+	# même son (valeur efficace 0,029), avec un saut brusque de 0,05 à 1,5 s : un petit « tic » à peine plus fort
+	# que le bruit lui-même
+	var abime := son.duplicate()
+	for i in range(TAUX * 3 / 2, abime.size()):
+		abime[i] += Vector2(0.05, 0.05)
+	a.remettre()
+	a.ajouter(abime)
+	var r: Dictionary = a.resultat()
+	var trouve: int = r["craquements"]
+	var quand: float = float(r["gauche"]["premier_clic"]) / TAUX
+	# montée brusque mais douce (le son passe de rien à −11 dB en 10 ms, comme un moteur qui s'allume net)
+	var flux2 = ClassDB.instantiate("SyntheSon")
+	flux2.taux = TAUX
+	var pb2 = flux2.instantiate_playback()
+	pb2.start(0.0)
+	a.remettre()
+	_mixer(pb2, TAUX / 2, a)
+	for j in 30:
+		e[j] *= 100.0
+	flux2.regler_bandes(e)
+	_mixer(pb2, TAUX, a)
+	var montee: int = a.resultat()["craquements"]
+	_resultat(propre == 0 and trouve >= 1 and absf(quand - 1.5) < 0.01 and montee == 0, titre,
+		"Bruit propre : %d craquement ; avec un petit saut caché dedans : %d trouvé(s) (gauche et droite), à %.3f s (vrai : 1,500 s) ; un son qui démarre fort en 10 ms : %d (ce n'est pas un clic)." % [
+			propre, trouve, quand, montee])
+
+
+## 10 minutes de vol, calculées plus vite que le temps réel : tout ce qui change le son, souvent et brusquement.
+## Chaque voix C++ est calculée ici (comme le fil audio de Godot le ferait) et écoutée par le détecteur.
+func _test_vol_10_minutes() -> void:
+	var titre := "10 minutes de vol sans un seul craquement"
+	if not _cpp(titre):
+		return
+	var t_debut := Time.get_ticks_msec()
+	var v = _vaisseau_air(1000.0, 150.0)
+	var s = _son(v)
+	s.hors_ligne = true
+	var lectures := {}
+	var analyses := {}
+	for nv in s.voix_directes:
+		var flux = s.voix_directes[nv]["flux"]
+		flux.taux = TAUX
+		flux.remettre_mesures()
+		var pb = flux.instantiate_playback()
+		pb.start(0.0)
+		lectures[nv] = pb
+		analyses[nv] = ClassDB.instantiate("AnalyseSon")
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 2026
+	var gaz := 0.0
+	var ordre := Vector3.ZERO
+	var prochain_ordre := 0.0
+	var prochain_gaz := 0.0
+	var gaz_doux := false
+	var gaz_cible := 0.0
+	var accel := 1
+	var en_pause := false
+	var fin_reglage := 0.0
+	var energie_max := 0.0
+	var secondes_son := 0.0   # temps où une voix est audible
+	var air := 0
+	for i in 600 * 120:
+		var t := i * PAS
+		var morceau := int(t / 20.0)
+		if i % (20 * 120) == 0:
+			# toutes les 20 s, un autre endroit : dans le vide, près du sol, très haut et très vite
+			air = morceau % 3
+			v.ecrase = false
+			v.omega = Vector3.ZERO
+			v.orientation = Quaternion(Vector3.BACK, deg_to_rad(-90.0))
+			match air:
+				0:
+					v.atmosphere = null
+					v.gm = 0.0
+					v.px = R + 5.0e5
+					v.vx = 0.0
+					v.vz = 0.0
+				1:
+					v.atmosphere = Atmosphere.new(R, 0.0)
+					v.gm = GM
+					v.px = R + 1500.0
+					v.vx = 0.0
+					v.vz = -rng.randf_range(80.0, 250.0)
+				2:
+					v.atmosphere = Atmosphere.new(R, 0.0)
+					v.gm = GM
+					v.px = R + 25000.0
+					v.vx = 0.0
+					v.vz = -rng.randf_range(500.0, 1200.0)
+			v.py = 0.0
+			v.pz = 0.0
+			v.vy = 0.0
+		# manche : de petits coups (les vannes claquent), parfois rien
+		if t >= prochain_ordre:
+			prochain_ordre = t + rng.randf_range(0.05, 2.0)
+			ordre = Vector3.ZERO if rng.randf() < 0.4 else Vector3(rng.randf_range(-1, 1), rng.randf_range(-1, 1), rng.randf_range(-1, 1))
+		# gaz : coupé net, à fond net, ou qui glisse
+		if t >= prochain_gaz:
+			prochain_gaz = t + rng.randf_range(0.2, 4.0)
+			gaz_doux = rng.randf() < 0.5
+			gaz_cible = [0.0, 1.0, rng.randf()][rng.randi() % 3]
+			if not gaz_doux:
+				gaz = gaz_cible
+		if gaz_doux:
+			gaz = move_toward(gaz, gaz_cible, PAS * 0.5)
+		v.commander(gaz, ordre.x, ordre.y, ordre.z)
+		v.pas(PAS)
+		# de temps en temps : pause, temps accéléré, vue de dehors
+		if t >= fin_reglage:
+			fin_reglage = t + rng.randf_range(1.0, 15.0)
+			var tirage := rng.randf()
+			en_pause = tirage < 0.1
+			accel = 100 if tirage > 0.9 else (10 if tirage > 0.8 else 1)
+			s.regler(en_pause, accel, rng.randf() < 0.8)
+		s.capteurs.temps = t
+		s._physics_process(PAS)
+		if i % 2 == 0:
+			s.mettre_a_jour(1.0 / 60.0)
+			var audible := false
+			for nv in lectures:
+				var morceau_son: PackedVector2Array = lectures[nv].mix_audio(1.0, TAUX / 60)
+				analyses[nv].ajouter(morceau_son)
+				var en: float = s.voix_directes[nv]["flux"].energie_en_cours()
+				energie_max = maxf(energie_max, en)
+				audible = audible or en > 1e-6
+			if audible:
+				secondes_son += 1.0 / 60.0
+	var craquements := 0
+	var invalides := 0
+	var lignes := PackedStringArray()
+	var charge := 0.0
+	for nv in analyses:
+		var r: Dictionary = analyses[nv].resultat()
+		var m: Dictionary = s.voix_directes[nv]["flux"].mesures()
+		craquements += int(r["craquements"])
+		invalides += int(r["non_finis"]) + int(m["non_finis"])
+		charge += float(m["charge"])
+		lignes.append("voix %s : %d craquement sur %.0f s, crête %.2f" % [nv, r["craquements"],
+			float(r["gauche"]["echantillons"]) / TAUX, r["crete"]])
+	var duree := (Time.get_ticks_msec() - t_debut) / 1000.0
+	_resultat(craquements == 0 and invalides == 0 and secondes_son > 300.0 and charge < 0.02, titre,
+		"600 s de vol (vide, près du sol, 25 km à Mach 3 ; gaz coupés et remis net, vannes, pause, x10, x100) : %s ; son audible %.0f s. %d valeur invalide. Coût de la partie C++ : %.2f %% d'un cœur du processeur (budget 1 à 2 %%). Calculé en %.0f s." % [
+			"; ".join(lignes), secondes_son, invalides, charge * 100.0, duree])
+	_liberer(s)
+
+
+## En vrai, dans le fil audio de Godot : les voix démarrent, s'arrêtent, repartent (moteur, pause, x100).
+func _test_cpp_en_direct() -> void:
+	var titre := "Son en direct : démarrer, couper, reprendre sans clic"
+	if not _cpp(titre):
+		return
+	var v = _vaisseau_vide()
+	var s = _son(v, true)
+	for vx in s.voix:
+		(vx["lecteur"] as AudioStreamPlayer3D).bus = "Alarmes"   # les claquements voulus (vannes) à part
+	var captures := {}
+	for nom in ["Structure", "Exterieur"]:
+		var i_bus := AudioServer.get_bus_index(nom)
+		var cap := AudioEffectCapture.new()
+		cap.buffer_length = 1.0
+		AudioServer.add_bus_effect(i_bus, cap)
+		captures[nom] = [cap, i_bus, AudioServer.get_bus_effect_count(i_bus) - 1, ClassDB.instantiate("AnalyseSon")]
+	s.remettre_mesures_fil_audio()
+	# [instant (s), action]
+	var etapes := [[0.3, "moteur"], [1.5, "roulis"], [2.3, "lacher"], [3.0, "pause"], [4.0, "reprise"],
+		[5.0, "x100"], [6.0, "x1"], [7.0, "coupe"], [8.5, "moteur"], [9.3, "pause"], [9.8, "fin"]]
+	var depart := Time.get_ticks_msec()
+	var k := 0
+	var arrets := 0
+	var departs := 0
+	var joue_avant := false
+	var l_structure := s.voix_directes["structure"]["lecteur"] as AudioStreamPlayer
+	while k < etapes.size():
+		await get_tree().process_frame
+		var t := (Time.get_ticks_msec() - depart) / 1000.0
+		while k < etapes.size() and t >= float(etapes[k][0]):
+			match etapes[k][1]:
+				"moteur":
+					v.moteurs[4]["actuel"] = 1.0
+				"roulis":
+					v.commander(0.0, 0.0, 0.0, 1.0)
+				"lacher":
+					v.commander(0.0, 0.0, 0.0, 0.0)
+				"pause":
+					s.regler(true, 1, true)
+				"reprise", "x1":
+					s.regler(false, 1, true)
+				"x100":
+					s.regler(false, 100, true)
+				"coupe":
+					v.moteurs[4]["actuel"] = 0.0
+			k += 1
+		for nom in captures:
+			var c: Array = captures[nom]
+			var n: int = c[0].get_frames_available()
+			if n > 0:
+				c[3].ajouter(c[0].get_buffer(n))
+		var joue := l_structure.playing
+		if joue and not joue_avant:
+			departs += 1
+		if joue_avant and not joue:
+			arrets += 1
+		joue_avant = joue
+	var craquements := 0
+	var lignes := PackedStringArray()
+	for nom in captures:
+		var c: Array = captures[nom]
+		AudioServer.remove_bus_effect(c[1], c[2])
+		var r: Dictionary = c[3].resultat()
+		craquements += int(r["craquements"]) + int(r["non_finis"])
+		lignes.append("%s : %d craquement (%.1f s écoutées)" % [nom, r["craquements"], float(r["gauche"]["echantillons"]) / AudioServer.get_mix_rate()])
+	var charge: float = s.charge_fil_audio()
+	_resultat(craquements == 0 and departs >= 3 and arrets >= 3, titre,
+		"10 s dans le vrai fil audio : la voix des moteurs a démarré %d fois et s'est arrêtée %d fois ; %s. Charge du fil audio : %.2f %% d'un cœur." % [
+			departs, arrets, "; ".join(lignes), charge * 100.0])
+	_liberer(s)
+	await get_tree().process_frame
+
+
+# =====================================================================
 # 4. CE QUI SORT VRAIMENT DES HAUT-PARLEURS
 # =====================================================================
 ## Pour chaque couche, on mesure le son qui sort de son bus et on le compare au niveau calculé.
@@ -450,7 +811,6 @@ func _test_calibration() -> void:
 	var pire := 0.0
 	for cas in ["structure", "rcs", "jet", "souffle"]:
 		var v
-		var bus := "Structure"
 		match cas:
 			"structure":
 				v = _vaisseau_vide()
@@ -461,11 +821,11 @@ func _test_calibration() -> void:
 			"jet":
 				v = _vaisseau_air(500.0, 0.0)
 				v.moteurs[4]["actuel"] = 1.0
-				bus = "Jet"
 			"souffle":
 				v = _vaisseau_air(1000.0, 150.0)
-				bus = "Souffle"
 		var s = _son(v, true)
+		# le bus où joue la couche (phase 1 : un bus par couche ; phase 2 : celui de sa voix fabriquée en direct)
+		var bus: String = (s.couches[cas]["lecteur"] as AudioStreamPlayer).bus
 		var i_bus := AudioServer.get_bus_index(bus)
 		var cap := AudioEffectCapture.new()
 		cap.buffer_length = 0.5
@@ -490,7 +850,10 @@ func _test_calibration() -> void:
 			# toutes les couches qui jouent sur ce bus (ex. : les petits propulseurs qui tiennent le vaisseau)
 			for nom in s.couches:
 				var l := s.couches[nom]["lecteur"] as AudioStreamPlayer
-				if l.bus == bus and l.playing:
+				var joue: bool = l.playing
+				if s.couches[nom].has("voix"):
+					joue = joue and float(s.couches[nom]["energie"]) > 0.0   # couche cachée ou trop faible : rien
+				if l.bus == bus and joue:
 					energie += pow(10.0, (_niveau(s, nom) - MoteurAudio.ZERO_DBFS + s.gain) / 10.0)
 					if not nom in avec:
 						avec.append(nom)

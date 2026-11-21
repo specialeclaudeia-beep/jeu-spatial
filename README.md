@@ -217,6 +217,28 @@ que **lire** la physique, il ne la change jamais (un test le vérifie). Tout est
 - Extraits à écouter, sans lancer le jeu :
   `godot --headless --path . --script res://outils/extraits_son.gd -- <dossier>`
 
+## Son (phase 2 : sons fabriqués en direct)
+- Les sons continus (grondement des moteurs, souffle des petits propulseurs, souffle de l'air, bruit des jets) ne
+  sont plus des boucles enregistrées : la partie C++ (`SyntheSon`, dans `labo-lumiere/cpp/src/synthe_son.cpp`) les
+  fabrique **en direct** dans le fil audio de Godot, 48 000 fois par seconde. Le son ne se répète donc jamais, et sa
+  couleur suit exactement le spectre calculé par la physique, dans 30 tiers d'octave (25 Hz à 20 kHz).
+- Deux voix : **structure** (moteurs + petits propulseurs, par les panneaux du cockpit) et **air** (souffle + jets, par
+  la verrière). 60 fois par seconde, `moteur_audio.gd` leur donne l'énergie voulue dans chaque bande ; le C++ y glisse
+  doucement par blocs de 5 ms (jamais de marche d'escalier, donc pas de craquement). Le niveau qui sort = le niveau
+  calculé (test, à 0,3 dB près).
+- **Résonances des panneaux** (`scripts/son/resonances.gd`) : en grave, le plancher, les parois, le tableau de bord
+  et la cloison arrière (aluminium de 2 à 3 mm) vibrent à leurs fréquences propres (plaques de Kirchhoff, perte
+  1 %). Les 32 plus graves sont de petits résonateurs : ils mettent un peu de temps à monter et à s'éteindre, comme
+  une vraie tôle. Plus haut (au-delà de ~300 Hz), elles se chevauchent et le son redevient un bruit lisse.
+- Le grondement monte un peu en fréquence avec la poussée (comme la boucle de la phase 1 ; vrai modèle du moteur :
+  phase 6), avec un léger battement de 2 à 10 Hz.
+- Coût : environ 1 % d'un cœur du processeur (ligne « son fabriqué en direct » du mode `--mesure`).
+- Tests : niveaux et couleur exacts, résonances, détecteur de craquements, **10 minutes de vol sans un seul
+  craquement** (vide, sol, haute altitude, gaz coupés net, vannes, pause, x10, x100), et démarrages / arrêts dans le
+  vrai fil audio.
+- Ancienne version (boucles de la phase 1), en secours ou pour comparer : lancer avec `-- --son-boucles`
+  (aussi pour l'outil des extraits). Sans la partie C++, le jeu reprend tout seul les boucles.
+
 ## Organisation
 - `scripts/physique/vaisseau_physique.gd` : toute la physique (indépendante de l'affichage).
 - `scripts/physique/atmosphere.gd` et `aerodynamique.gd` : l'air de la planète et ce qu'il fait au vaisseau.

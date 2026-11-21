@@ -198,6 +198,8 @@ func _mesurer(delta: float) -> void:
 	var phase: int = _mesure.phase
 	if _mesure.t < 3.0:
 		return    # on laisse l'œil et le jeu se stabiliser
+	if _mesure.n == 0 and son != null:
+		son.remettre_mesures_fil_audio()   # sons fabriqués en direct (C++) : on mesure cette phase seulement
 	_mesure.n += 1
 	_mesure.somme += delta
 	_mesure.pire = maxf(_mesure.pire, delta)
@@ -223,6 +225,9 @@ func _mesurer(delta: float) -> void:
 		ligne += "\n   carte graphique %.1f ms, préparation du dessin %.1f ms, scripts %.1f ms, physique %.1f ms, son %.2f ms, fenêtre %s" % [
 			_mesure.gpu / _mesure.n, _mesure.dessin_cpu / _mesure.n, _mesure.jeu / _mesure.n, _mesure.physique / _mesure.n,
 			_mesure.son / _mesure.n, str(get_viewport().get_visible_rect().size)]
+		if son != null and son.synthese_directe:
+			# fabriqué dans le fil audio de Godot, à côté des images : part d'un cœur du processeur
+			ligne += "\n   son fabriqué en direct (C++, fil audio, 2 voix à pleine charge) : %.2f %% d'un cœur" % (son.charge_fil_audio() * 100.0)
 		print(ligne)
 		_mesure.texte += ligne + "\n"
 		if phase + 1 < PHASES_MESURE.size():
@@ -1165,6 +1170,8 @@ static func pas_physique(a: int) -> float:
 # AFFICHAGE
 # =====================================================================
 func _debut_mesure() -> void:
+	if son != null and son.synthese_directe:
+		son.banc = true   # coût du son fabriqué en direct à pleine charge (inaudible)
 	_phase_mesure(0)
 
 

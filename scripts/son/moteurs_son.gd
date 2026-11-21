@@ -64,15 +64,21 @@ var bandes_jet := PackedFloat64Array()    # Pa² par octave : bruit des jets des
 var niveau_jet := -INF
 var bandes_jet_rcs := PackedFloat64Array()  # Pa² par octave : bruit des jets des petits propulseurs
 var niveau_jet_rcs := -INF
+var tiers_jet := PackedFloat64Array()       # les mêmes, par tiers d'octave (partie C++, phase 2)
+var tiers_jet_rcs := PackedFloat64Array()
 var _transm_connue := PackedFloat64Array()
 var _k_moteur := PackedFloat64Array()
 var _k_rcs := PackedFloat64Array()
+var _k30_moteur := PackedFloat64Array()
+var _k30_rcs := PackedFloat64Array()
 var regime := 0.0                # 0..1 : poussée des moteurs / poussée maximale réelle (x1)
 
 
 func _init() -> void:
 	bandes_jet.resize(10)
 	bandes_jet_rcs.resize(10)
+	tiers_jet.resize(30)
+	tiers_jet_rcs.resize(30)
 
 
 ## Distance dans la structure de chaque propulseur jusqu'au pilote (refaite quand les ailes bougent).
@@ -97,16 +103,16 @@ func calculer(c: Capteurs, oreille: Vector3, transm: PackedFloat64Array) -> void
 	var p_struct := 0.0
 	var p_rcs := 0.0
 	var f_moteurs := 0.0
-	bandes_jet.fill(0.0)
-	bandes_jet_rcs.fill(0.0)
+	var p2_moteurs := 0.0   # Pa² des jets arrivés sur la verrière (avant la forme du spectre)
+	var p2_rcs := 0.0
 	var dans_air := c.densite > 0.0 and transm.size() == 30
 	var son := Fluides.vitesse_son(c.temperature) if dans_air else SON_REF
-	if dans_air and transm != _transm_connue:   # l'air du dehors a changé : on refait les deux formes
+	if dans_air and transm != _transm_connue:   # l'air du dehors a changé : on refait les formes
 		_k_moteur = _transfert_jet(FP_MOTEUR, transm)
 		_k_rcs = _transfert_jet(FP_RCS, transm)
+		_k30_moteur = _transfert_jet(FP_MOTEUR, transm, true)
+		_k30_rcs = _transfert_jet(FP_RCS, transm, true)
 		_transm_connue = transm.duplicate()
-	var k_moteur := _k_moteur
-	var k_rcs := _k_rcs
 	for i in c.nombre:
 		var f := c.forces[i]
 		if f <= 0.0:
@@ -120,11 +126,16 @@ func calculer(c: Capteurs, oreille: Vector3, transm: PackedFloat64Array) -> void
 		if dans_air:
 			var p2 := _jet_par_air(c, i, oreille, son)
 			if rcs:
-				for b in 10:
-					bandes_jet_rcs[b] += p2 * k_rcs[b]
+				p2_rcs += p2
 			else:
-				for b in 10:
-					bandes_jet[b] += p2 * k_moteur[b]
+				p2_moteurs += p2
+	# même forme pour tous les moteurs (et pour tous les petits propulseurs) : on multiplie une seule fois
+	for b in 10:
+		bandes_jet[b] = p2_moteurs * _k_moteur[b] if dans_air else 0.0
+		bandes_jet_rcs[b] = p2_rcs * _k_rcs[b] if dans_air else 0.0
+	for t in 30:
+		tiers_jet[t] = p2_moteurs * _k30_moteur[t] if dans_air else 0.0
+		tiers_jet_rcs[t] = p2_rcs * _k30_rcs[t] if dans_air else 0.0
 	niveau_structure = _db(p_struct)
 	niveau_rcs = _db(p_rcs)
 	niveau_jet = _niveau_bandes(bandes_jet)
@@ -162,16 +173,21 @@ func _jet_par_air(c: Capteurs, i: int, oreille: Vector3, son: float) -> float:
 
 ## Pour un jet dont le bruit culmine à fp : part de sa pression² qui arrive dans chaque octave du cockpit
 ## (forme du spectre × passage par la verrière ; une onde qui frappe une paroi y double sa pression).
-static func _transfert_jet(fp: float, transm: PackedFloat64Array) -> PackedFloat64Array:
+## par_tiers : 30 valeurs (tiers d'octave) au lieu de 10 (octaves).
+static func _transfert_jet(fp: float, transm: PackedFloat64Array, par_tiers := false) -> PackedFloat64Array:
 	var k := PackedFloat64Array()
-	k.resize(10)
+	k.resize(30 if par_tiers else 10)
 	var cabine := pow(10.0, Fluides.GAIN_CABINE_DB / 10.0)
 	for b in 10:
 		var e := 0.0
 		for t in 3:
 			var f: float = Fluides.BANDES[b] * Fluides.TIERS[t]
-			e += forme_jet(f, fp) * f * Fluides.LARGEUR_TIERS * 4.0 * transm[b * 3 + t]
-		k[b] = e * cabine
+			var et := forme_jet(f, fp) * f * Fluides.LARGEUR_TIERS * 4.0 * transm[b * 3 + t]
+			if par_tiers:
+				k[b * 3 + t] = et * cabine
+			e += et
+		if not par_tiers:
+			k[b] = e * cabine
 	return k
 
 

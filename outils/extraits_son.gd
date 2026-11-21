@@ -2,6 +2,8 @@ extends SceneTree
 ## Enregistre de courts extraits du son du cockpit (pour écouter le moteur audio sans lancer le jeu).
 ## Ligne de commande :
 ##   godot --headless --path . --script res://outils/extraits_son.gd -- <dossier de sortie>
+## Ajouter `--son-boucles` après le dossier pour entendre l'ancienne version (boucles de la phase 1) :
+## on peut ainsi comparer avant / après la phase 2 (sons fabriqués en direct par la partie C++).
 ## Chaque extrait est une petite scène jouée en vrai (la physique du vaisseau tourne, le moteur audio
 ## l'écoute) ; ce qui sort du bus Master est enregistré dans un fichier .wav.
 ## Les commandes (gaz, manche) sont rejouées par le script ; seul l'extrait « souffle » force la vitesse.
@@ -58,9 +60,9 @@ class Pilotage extends Node:
 
 
 func _initialize() -> void:
-	var args := OS.get_cmdline_user_args()
-	if args.size() > 0:
-		dossier = args[0]
+	for a in OS.get_cmdline_user_args():
+		if not a.begins_with("--"):
+			dossier = a   # (--son-boucles est lu par le moteur audio lui-même)
 	DirAccess.make_dir_recursive_absolute(dossier)
 	_tout()
 
