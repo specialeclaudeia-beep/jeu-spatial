@@ -227,7 +227,7 @@ func _mesurer(delta: float) -> void:
 			_mesure.son / _mesure.n, str(get_viewport().get_visible_rect().size)]
 		if son != null and son.synthese_directe:
 			# fabriqué dans le fil audio de Godot, à côté des images : part d'un cœur du processeur
-			ligne += "\n   son fabriqué en direct (C++, fil audio) : %.2f %% d'un cœur" % (son.charge_fil_audio() * 100.0)
+			ligne += "\n   son fabriqué en direct (C++, fil audio, 2 voix à pleine charge) : %.2f %% d'un cœur" % (son.charge_fil_audio() * 100.0)
 		print(ligne)
 		_mesure.texte += ligne + "\n"
 		if phase + 1 < PHASES_MESURE.size():
@@ -1170,6 +1170,8 @@ static func pas_physique(a: int) -> float:
 # AFFICHAGE
 # =====================================================================
 func _debut_mesure() -> void:
+	if son != null and son.synthese_directe:
+		son.banc = true   # coût du son fabriqué en direct à pleine charge (inaudible)
 	_phase_mesure(0)
 
 

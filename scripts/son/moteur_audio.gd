@@ -87,6 +87,9 @@ var vue_interieure := true
 # --- phase 2 : sons fabriqués en direct (C++) ---
 var forcer_boucles := false      # à mettre avant installer() : garder les boucles de la phase 1
 var hors_ligne := false          # tests : les voix ne jouent pas en vrai (le test calcule leur son lui-même)
+## Mode --mesure : les deux voix C++ calculent à pleine charge (30 bandes et 32 résonances), à −80 dB (inaudible),
+## pour mesurer leur coût dans le fil audio pendant que le jeu dessine.
+var banc := false
 var synthese_directe := false
 var voix_directes := {}          # nom → {lecteur, flux (SyntheSon), couches, bandes}
 var resonances = null
@@ -327,6 +330,9 @@ func _facteur_battement(t: float) -> float:
 
 ## Donne aux voix C++ l'énergie voulue dans chaque tiers d'octave ; les démarre et les arrête.
 func _envoyer_voix() -> void:
+	if banc:
+		_envoyer_banc()
+		return
 	for nv in voix_directes:
 		var vd: Dictionary = voix_directes[nv]
 		var e30: PackedFloat32Array = vd["bandes"]
@@ -359,6 +365,24 @@ func _envoyer_voix() -> void:
 				l.play()   # le C++ part du silence et monte en ~10 ms : pas de clic
 		elif l.playing and (fondu <= 0.0 or flux.est_silencieux()):
 			l.stop()       # seulement quand tout s'est tu (résonances comprises) ou que le silence est demandé
+
+
+func _envoyer_banc() -> void:
+	for nv in voix_directes:
+		var vd: Dictionary = voix_directes[nv]
+		var e30 := PackedFloat32Array()
+		e30.resize(30)
+		e30.fill(0.01)
+		vd["flux"].regler_bandes(e30)
+		if nv == "structure":
+			var em := PackedFloat32Array()
+			em.resize(resonances.frequences.size())
+			em.fill(0.01)
+			vd["flux"].regler_energie_modes(em)
+		var l := vd["lecteur"] as AudioStreamPlayer
+		l.volume_db = -80.0
+		if not l.playing and not hors_ligne:
+			l.play()
 
 
 ## Part d'un cœur du processeur prise par les voix C++ (fil audio) depuis la dernière remise à zéro.
