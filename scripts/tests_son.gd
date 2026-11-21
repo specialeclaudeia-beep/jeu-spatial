@@ -13,6 +13,8 @@ const Capteurs = preload("res://scripts/son/capteurs.gd")
 const Synthese = preload("res://scripts/son/synthese.gd")
 const Jeu = preload("res://scripts/jeu.gd")
 const Resonances = preload("res://scripts/son/resonances.gd")
+const Chocs = preload("res://scripts/son/chocs.gd")
+const SolSon = preload("res://scripts/son/sol_son.gd")
 const TAUX := 48000   # rendu hors ligne de la partie C++ (échantillons par seconde)
 const R := 600000.0
 const GM := 9.81 * 600000.0 * 600000.0
@@ -38,11 +40,17 @@ func _ready() -> void:
 	_test_voix()
 	_test_plafond()
 	_test_repetitions()
-	_test_generateur()
+	_test_prises_sol()
+	_test_toucher()
+	_test_rouler()
+	_test_raclage()
+	_test_verins()
 	_test_vitesse()
 	_test_cpp_niveaux()
 	_test_cpp_resonances()
 	_test_cpp_detecteur()
+	_test_chocs_niveau()
+	_test_chocs_tempete()
 	_test_vol_10_minutes()
 	await _test_cpp_en_direct()
 	await _test_calibration()
@@ -370,13 +378,10 @@ func _test_voix() -> void:
 			for nom in s.couches:
 				var vol: float = (s.couches[nom]["lecteur"] as AudioStreamPlayer).volume_db
 				invalide = invalide or is_nan(vol) or is_inf(vol)
-			for vx in s.voix:
-				var vol: float = (vx["lecteur"] as AudioStreamPlayer3D).volume_db
-				invalide = invalide or is_nan(vol) or is_inf(vol)
 	var apres: int = s.get_child_count() + _pilotes[0].get_child_count()
 	var ok: bool = voix_max <= MoteurAudio.VOIX_MAX and voix_max > 8 and not invalide and apres == noeuds and s.joues > 50
 	_resultat(ok, "Tempête de sons : 24 voix au plus",
-		"5 s de vannes qui claquent sans arrêt (22 propulseurs) et de moteurs qui s'allument : au plus %d voix en même temps (limite 24), %d sons brefs joués, %d écartés (trop faibles, cachés ou sans lecteur libre). Lecteurs créés au départ et jamais recréés : %s. Volume invalide : %s." % [
+		"5 s de vannes qui claquent sans arrêt (22 propulseurs) et de moteurs qui s'allument : au plus %d voix en même temps (limite 24 : couches + 16 chocs fabriqués en direct), %d sons brefs joués, %d écartés (trop faibles, cachés ou sans place). Aucun nœud créé en jeu : %s. Volume invalide : %s." % [
 			voix_max, s.joues, s.oublies, _oui(apres == noeuds), "oui" if invalide else "aucun"])
 	_liberer(s)
 
@@ -398,36 +403,195 @@ func _test_plafond() -> void:
 
 
 func _test_repetitions() -> void:
-	var v = _vaisseau_vide()
-	var s = _son(v)
-	var suite := []
-	for i in 1000:
-		var k: int = s._choisir("rcs_ouverture")
-		s._retenir("rcs_ouverture", k)
-		suite.append(k)
-	var n: int = s.coups["rcs_ouverture"].size()
-	var repete := 0
-	for i in suite.size():
-		for j in range(maxi(0, i - (n - 1)), i):
-			if suite[j] == suite[i]:
-				repete += 1
-	_resultat(repete == 0 and n == 6, "Sons brefs : jamais deux fois le même de suite",
-		"1 000 vannes qui s'ouvrent, %d variantes : %d fois la même variante parmi %d sons consécutifs (attendu 0)." % [n, repete, n])
+	# chaque choc est tiré au hasard dans sa matière : jamais deux fois le même ; plus fort = plus bref = plus aigu
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5
+	var pareils := 0
+	var precedent := PackedFloat32Array()
+	for k in 200:
+		var r := Chocs.recette("rcs_ouverture", 0.6, 1e-3, rng)
+		if r["modes"] == precedent:
+			pareils += 1
+		precedent = r["modes"]
+	var aigus := []   # part de l'énergie au-dessus de 90 Hz
+	for i in [0.1, 0.9]:
+		var moy := 0.0
+		for k in 50:
+			var p: PackedFloat64Array = Chocs.recette("pneu_toucher", i, 1e-3, rng)["parts"]
+			for b in range(2, 10):
+				moy += p[b] / 50.0
+		aigus.append(moy)
+	var ok: bool = pareils == 0 and aigus[1] > 1.2 * aigus[0]
+	_resultat(ok, "Chocs : jamais deux fois le même",
+		"200 vannes de suite : %d fois la même recette (attendu 0). Pneu qui touche doucement / fort : %.1f %% / %.1f %% de l'énergie au-dessus de 90 Hz (un choc rapide est plus bref, donc plus aigu : loi de Hertz)." % [
+			pareils, aigus[0] * 100.0, aigus[1] * 100.0])
+
+
+# =====================================================================
+# 2 bis. PHASE 3 : LE SOL (prises en lecture seule, chocs par l'énergie ½ m v²)
+# =====================================================================
+## Vaisseau posé (ou à h m au-dessus de son posé), sans air, haut vers +X, avant vers −Z, qui roule à u m/s et
+## descend à w m/s. train = false : sur le ventre.
+func _vaisseau_sol(h: float, u: float, w := 0.0, train := true):
+	var v = VaisseauPhysique.new()
+	v.reactivite_moteurs = 1e-6
+	v.gm = GM
+	v.rayon_planete = R
+	v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)
+	if train:
+		v.sortir_train(true)
+		v.train = 1.0
+	v.px = R + (1.56 if train else 1.0) + h
+	v.vz = -u
+	v.vx = -w
+	return v
+
+
+## n pas de physique (1/120 s) avec le son ; renvoie les sons brefs demandés [nom, dB, …].
+func _rouler(v, s, n: int, avant := Callable()) -> Array:
+	var ev := []
+	for i in n:
+		if avant.is_valid():
+			avant.call(i)
+		v.pas(PAS)
+		s._physics_process(PAS)
+		ev.append_array(s._demandes)
+		if i % 2 == 0:
+			s.mettre_a_jour(1.0 / 60.0)
+		else:
+			s._demandes.clear()
+	return ev
+
+
+func _compter(ev: Array, nom: String) -> int:
+	return ev.filter(func(e): return e[0] == nom).size()
+
+
+func _max_db(ev: Array, nom: String) -> float:
+	var m := -INF
+	for e in ev:
+		if e[0] == nom:
+			m = maxf(m, float(e[1]))
+	return m
+
+
+func _test_prises_sol() -> void:
+	# deux vaisseaux identiques : posé à 1,2 m/s en roulant à 40 m/s, freins, roue avant qui braque, train
+	# rentré (il racle sur le ventre) ; l'un avec le son, l'autre sans
+	var a = _vaisseau_sol(0.3, 40.0, 1.2)
+	var b = _vaisseau_sol(0.3, 40.0, 1.2)
+	var s = _son(b)
+	for i in 120 * 8:
+		var t := i * PAS
+		for v in [a, b]:
+			v.commander(0.0, 0.0, 0.0, 0.0)
+			v.braquage_consigne = sin(t * 1.7)
+			v.frein = 1.0 if t > 2.0 and t < 3.0 else (0.4 if t > 3.0 else 0.0)
+			if i == 120 * 5:
+				v.sortir_train(false)
+			v.pas(PAS)
+		s._physics_process(PAS)
+		if i % 2 == 0:
+			s.mettre_a_jour(1.0 / 60.0)
+	var ea := _etat_physique(a)
+	var eb := _etat_physique(b)
+	ea.append_array([a.braquage, a.train, a.frein_parc, a.vitesse_impact])
+	eb.append_array([b.braquage, b.train, b.frein_parc, b.vitesse_impact])
+	var ecarts := 0
+	for k in ea.size():
+		if ea[k] != eb[k]:
+			ecarts += 1
+	_resultat(ecarts == 0 and s.joues > 3, "Sol : la physique ne change pas",
+		"8 s au sol (posé à 1,2 m/s en roulant à 40 m/s, freins, roue avant qui braque, train rentré : la coque racle), un vaisseau avec le son, un sans : %d valeurs sur %d différentes (attendu 0). Sons brefs joués : %d." % [
+			ecarts, ea.size(), s.joues])
 	_liberer(s)
 
 
-func _test_generateur() -> void:
-	var r: Array = Synthese.fabriquer_coup("rcs_fermeture", 0)
-	var neuf := Synthese.en_16_bits(r[0])
-	var fichier := FileAccess.get_file_as_bytes("res://sons/coups/rcs_fermeture_1.wav")
-	var ecart := 0
-	var ok := fichier.size() == neuf.size() + 44
-	if ok:
-		for i in range(0, neuf.size(), 2):
-			ecart = maxi(ecart, absi(neuf.decode_s16(i) - fichier.decode_s16(44 + i)))
-	_resultat(ok and ecart <= 1, "Générateur : même graine, même son",
-		"Vanne qui se referme refaite à partir de sa graine (%d) : %d échantillons, écart maximal %d (sur 32 767) avec le fichier du jeu." % [
-			r[1]["graine"], neuf.size() / 2, ecart])
+func _test_toucher() -> void:
+	var niveaux := []
+	var lignes := PackedStringArray()
+	var ok := true
+	for w in [0.5, 1.0]:
+		var v = _vaisseau_sol(0.05, 60.0, w)
+		var s = _son(v)
+		var ev := _rouler(v, s, 120)
+		var n_t := _compter(ev, "pneu_toucher")
+		var n_c := _compter(ev, "pneu_crissement")
+		niveaux.append(_max_db(ev, "pneu_toucher"))
+		ok = ok and n_t >= 2 and n_c >= 1 and not v.ecrase
+		lignes.append("%.1f m/s : %d pneus qui touchent (le plus fort %.1f dB), %d crissements" % [w, n_t, niveaux[-1], n_c])
+		_liberer(s)
+	var ecart: float = niveaux[1] - niveaux[0]
+	ok = ok and absf(ecart - 6.02) < 1.0
+	_resultat(ok, "Posé : les pneus touchent et crissent",
+		"Posé en roulant à 60 m/s : %s. Deux fois plus vite = 4 fois plus d'énergie (½ m v²) : %+.1f dB (attendu +6,0)." % [
+			" ; ".join(lignes), ecart])
+
+
+func _test_rouler() -> void:
+	var r := {}
+	for cas in ["10", "40", "frein", "bloque", "cote"]:
+		var v = _vaisseau_sol(0.0, 40.0 if cas != "10" else 10.0)
+		if cas == "cote":
+			v.vy = 4.0   # il glisse de côté : les pneus dérapent
+		var s = _son(v)
+		var frein := 0.0
+		match cas:
+			"frein":
+				frein = 0.4
+			"bloque":
+				frein = 1.0
+		var der_max := [-INF]
+		_rouler(v, s, 60, func(i: int) -> void:
+			v.frein = frein
+			der_max[0] = maxf(der_max[0], float(s.sol.niveaux["derapage"])))
+		r[cas] = [float(s.sol.niveaux["roulage"]), float(s.sol.niveaux["frein"]), der_max[0], s.sol.vitesse_roulage]
+		_liberer(s)
+	var ecart: float = r["40"][0] - r["10"][0]
+	var v_ratio: float = r["40"][3] / r["10"][3]
+	var attendu := 25.0 * log(v_ratio) / log(10.0)
+	var ok: bool = absf(ecart - attendu) < 1.0 and r["10"][2] == -INF and r["40"][1] == -INF and r["frein"][1] > 50.0 \
+		and r["bloque"][2] > 60.0 and r["cote"][2] > 60.0
+	_resultat(ok, "Rouler, freiner, déraper",
+		"Roulement à %.1f m/s : %.1f dB ; à %.1f m/s : %.1f dB (%+.1f, loi en 25 log v : %+.1f). Freins à 40 %% : frein %.1f dB, dérapage %s. Freins à fond (roues bloquées) : dérapage %.1f dB. Glisse de côté à 4 m/s : dérapage %.1f dB." % [
+			r["10"][3], r["10"][0], r["40"][3], r["40"][0], ecart, attendu, r["frein"][1], str(r["frein"][2]), r["bloque"][2], r["cote"][2]])
+
+
+func _test_raclage() -> void:
+	var v = _vaisseau_sol(0.1, 20.0, 0.8, false)
+	var s = _son(v)
+	var ev := _rouler(v, s, 90)
+	var racle: float = s.sol.niveaux["raclage"]
+	var n := _compter(ev, "coque_choc")
+	var ok: bool = n >= 1 and racle > 70.0 and not v.ecrase
+	_resultat(ok, "Sur le ventre : la coque tape et racle",
+		"Train rentré, posé à 0,8 m/s en avançant à 20 m/s : %d chocs de la coque (le plus fort %.1f dB), raclage %.1f dB." % [n, _max_db(ev, "coque_choc"), racle])
+	_liberer(s)
+
+
+func _test_verins() -> void:
+	var v = _vaisseau_vide()
+	v.sortir_train(true)
+	var s = _son(v)
+	var ev := []
+	var bouge := -INF
+	for i in 120 * 4:
+		v.pas(PAS)
+		s._physics_process(PAS)
+		ev.append_array(s._demandes)
+		if i % 2 == 0:
+			s.mettre_a_jour(1.0 / 60.0)
+			if i == 120:
+				bouge = s.sol.niveaux["verins"]
+		else:
+			s._demandes.clear()
+	var arret: float = s.sol.niveaux["verins"]
+	var ok: bool = _compter(ev, "verin_depart") == 1 and _compter(ev, "verin_arret") == 1 and _compter(ev, "verrouillage") == 1 \
+		and bouge > 50.0 and arret == -INF and v.train == 1.0
+	_resultat(ok, "Vérins : le train qui sort",
+		"Sortie du train (3 s) : départ %d, arrêt %d, verrou %d (attendu 1, 1, 1) ; pompe et huile pendant la course %.1f dB, après : %s." % [
+			_compter(ev, "verin_depart"), _compter(ev, "verin_arret"), _compter(ev, "verrouillage"), bouge, str(arret)])
+	_liberer(s)
 
 
 func _test_vitesse() -> void:
@@ -612,6 +776,66 @@ func _test_cpp_detecteur() -> void:
 
 ## 10 minutes de vol, calculées plus vite que le temps réel : tout ce qui change le son, souvent et brusquement.
 ## Chaque voix C++ est calculée ici (comme le fil audio de Godot le ferait) et écoutée par le détecteur.
+## Les chocs fabriqués en direct : le niveau demandé sort (100 premières ms), puis le silence.
+func _test_chocs_niveau() -> void:
+	var titre := "Chocs fabriqués en direct : le niveau demandé sort"
+	if not _cpp(titre) or not ClassDB.class_exists("ChocsSon"):
+		_resultat(false, titre, "classe C++ ChocsSon absente")
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 9
+	var pire := 0.0
+	var lignes := PackedStringArray()
+	var fin_ok := true
+	for famille in Chocs.FAMILLES:
+		var c = ClassDB.instantiate("ChocsSon")
+		c.taux = TAUX
+		var pb = c.instantiate_playback()
+		pb.start(0.0)
+		var r := Chocs.recette(famille, 0.6, 1e-3, rng)   # −30 dB pleine échelle
+		c.frapper(r["modes"], r["options"])
+		var b: PackedVector2Array = _mixer(pb, int(0.1 * TAUX), null, true)
+		var e := 0.0
+		for f in b:
+			e += f.x * f.x
+		var ecart := _db(e / b.size() / 1e-3)
+		pire = maxf(pire, absf(ecart))
+		_mixer(pb, int((float(r["duree"]) + 0.02) * TAUX))
+		var fini: bool = c.est_silencieux()
+		fin_ok = fin_ok and fini and int(c.mesures()["non_finis"]) == 0
+		lignes.append("%s %+.2f" % [famille, ecart])
+	_resultat(pire < 1.0 and fin_ok, titre,
+		"14 familles demandées à −30 dB (moyenne des 100 premières ms), écart en dB : %s. Plus grand écart %.2f dB (tolérance 1). Tous finis et silencieux après leur durée calculée : %s." % [
+			", ".join(lignes), pire, _oui(fin_ok)])
+
+
+## Tempête de chocs : 40 par seconde pendant 10 s ; 16 à la fois au plus, rien d'invalide, et léger.
+func _test_chocs_tempete() -> void:
+	var titre := "Tempête de chocs : 16 à la fois, léger"
+	if not ClassDB.class_exists("ChocsSon"):
+		_resultat(false, titre, "classe C++ ChocsSon absente")
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 12
+	var c = ClassDB.instantiate("ChocsSon")
+	c.taux = TAUX
+	var pb = c.instantiate_playback()
+	pb.start(0.0)
+	var familles: Array = Chocs.FAMILLES.keys()
+	for i in 10 * 60:
+		for k in 2 if i % 3 != 0 else 0:
+			var f: String = familles[rng.randi() % familles.size()]
+			var g := Chocs.panoramique(Vector3(rng.randf_range(-3, 3), 0, rng.randf_range(-5, 5)), Vector3.ZERO)
+			var r := Chocs.recette(f, rng.randf(), pow(10.0, rng.randf_range(-40.0, -15.0) / 10.0), rng, g.x, g.y, float(rng.randi() % 5))
+			c.frapper(r["modes"], r["options"])
+		_mixer(pb, TAUX / 60)
+	var m: Dictionary = c.mesures()
+	var ok: bool = int(m["actifs_max"]) <= 16 and int(m["non_finis"]) == 0 and float(m["charge"]) < 0.03 and int(m["joues"]) > 300
+	_resultat(ok, titre,
+		"10 s, 40 chocs par seconde (toutes les familles, toutes les forces) : %d joués, au plus %d en même temps (limite 16), %d remplacés par un plus important, %d perdus ; %d valeur invalide ; crête %.2f. Coût : %.2f %% d'un cœur du processeur (cloud)." % [
+			m["joues"], m["actifs_max"], m["voles"], m["refuses"], m["non_finis"], m["crete"], float(m["charge"]) * 100.0])
+
+
 func _test_vol_10_minutes() -> void:
 	var titre := "10 minutes de vol sans un seul craquement"
 	if not _cpp(titre):
@@ -736,8 +960,12 @@ func _test_cpp_en_direct() -> void:
 		return
 	var v = _vaisseau_vide()
 	var s = _son(v, true)
-	for vx in s.voix:
-		(vx["lecteur"] as AudioStreamPlayer3D).bus = "Alarmes"   # les claquements voulus (vannes) à part
+	if s.lecteur_chocs != null:
+		s.lecteur_chocs.bus = "Alarmes"   # les claquements voulus (vannes) à part
+	# les tests d'avant ont laissé des lecteurs de chocs qui sonnaient encore ; ils disparaissent à l'image
+	# suivante (coupés net) : on attend qu'ils soient partis avant d'écouter
+	for k in 4:
+		await get_tree().process_frame
 	var captures := {}
 	for nom in ["Structure", "Exterieur"]:
 		var i_bus := AudioServer.get_bus_index(nom)
@@ -793,7 +1021,8 @@ func _test_cpp_en_direct() -> void:
 		AudioServer.remove_bus_effect(c[1], c[2])
 		var r: Dictionary = c[3].resultat()
 		craquements += int(r["craquements"]) + int(r["non_finis"])
-		lignes.append("%s : %d craquement (%.1f s écoutées)" % [nom, r["craquements"], float(r["gauche"]["echantillons"]) / AudioServer.get_mix_rate()])
+		lignes.append("%s : %d craquement (%.1f s écoutées%s)" % [nom, r["craquements"], float(r["gauche"]["echantillons"]) / AudioServer.get_mix_rate(),
+			", le premier à %.2f s" % float(r["gauche"]["premier_clic"]) if int(r["craquements"]) > 0 and r["gauche"].has("premier_clic") else ""])
 	var charge: float = s.charge_fil_audio()
 	_resultat(craquements == 0 and departs >= 3 and arrets >= 3, titre,
 		"10 s dans le vrai fil audio : la voix des moteurs a démarré %d fois et s'est arrêtée %d fois ; %s. Charge du fil audio : %.2f %% d'un cœur." % [

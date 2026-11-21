@@ -2,13 +2,11 @@ extends RefCounted
 ## Fabrication des sons par le calcul (moteur audio, phase 1). Rien n'est enregistré : chaque son est
 ## calculé à partir d'une « graine » (le nombre de départ du hasard). Même graine = même son.
 ##
-## Deux sortes de sons :
+## Depuis la phase 3, ce fichier ne fabrique plus que les boucles (secours sans la partie C++) ; les sons brefs sont
+## fabriqués en direct (scripts/son/chocs.gd et la classe C++ ChocsSon).
 ## - des boucles de bruit dont on choisit exactement le spectre (la part de chaque fréquence). Elles sont
 ##   fabriquées directement en fréquences puis ramenées dans le temps (transformée de Fourier inverse) :
 ##   la fin rejoint parfaitement le début, la boucle ne « claque » jamais ;
-## - des coups brefs (vanne qui s'ouvre, moteur qui s'allume) : une pièce frappée vibre selon quelques
-##   façons propres (ses « modes »), chacune à sa fréquence, et s'éteint plus ou moins vite selon sa
-##   matière (synthèse modale).
 ##
 ## Ce fichier ne sert que hors du jeu : outils/generateur_sons.gd l'appelle dans le cloud et écrit les
 ## fichiers .wav de res://sons/. Le jeu, lui, ne fait que les lire.
@@ -37,24 +35,6 @@ const BOUCLES := {
 	"structure": {"n": 131072, "graine": 1303, "spectre": "structure", "modulation": 0.18},
 	"rcs": {"n": 131072, "graine": 1404, "spectre": "rcs", "modulation": 0.0},
 }
-## Les coups brefs, chacun en plusieurs variantes (graines différentes) pour ne jamais rejouer le même.
-## perte = facteur de perte (amortissement) de la structure, jonctions comprises ; contact = durée du choc.
-const COUPS := {
-	# vanne d'un petit propulseur qui s'ouvre : métal contre métal (choc de 0,4 ms) + bouffée de gaz
-	"rcs_ouverture": {"variantes": 6, "graine": 2100, "duree": 0.35, "f_min": 180.0, "f_max": 4500.0,
-		"modes": 14, "perte": 0.012, "contact": 0.0004, "souffle": 0.5, "souffle_f": 1800.0},
-	# la même vanne qui se referme : choc plus bref et plus léger, sans gaz
-	"rcs_fermeture": {"variantes": 4, "graine": 2200, "duree": 0.25, "f_min": 400.0, "f_max": 6000.0,
-		"modes": 10, "perte": 0.015, "contact": 0.0002},
-	# un moteur qui s'allume : la poussée arrive en ~30 ms et fait « sonner » les grandes pièces (graves)
-	"moteur_allumage": {"variantes": 3, "graine": 2300, "duree": 1.4, "f_min": 35.0, "f_max": 600.0,
-		"modes": 16, "perte": 0.02, "contact": 0.004, "attaque": 0.03},
-	# un moteur qui se coupe : la structure, déchargée, se relâche (plus doux, plus lent)
-	"moteur_coupure": {"variantes": 3, "graine": 2400, "duree": 1.0, "f_min": 30.0, "f_max": 400.0,
-		"modes": 12, "perte": 0.03, "contact": 0.01, "attaque": 0.06},
-}
-
-
 ## Spectres des boucles (densité relative à la fréquence f, en Hz).
 static var _remous_ref := {}
 
@@ -94,17 +74,6 @@ static func fabriquer_boucle(nom: String) -> Array:
 	multiplier(x, RMS_BOUCLES / maxf(rms(x), 1e-12))
 	return [x, {"fichier": "res://sons/boucles/%s.wav" % nom, "duree": float(x.size()) / TAUX,
 		"rms_dbfs": db(rms(x)), "crete_dbfs": db(crete(x)), "bandes": Array(r[1]), "graine": int(b["graine"])}]
-
-
-## Fabrique la variante k (0, 1, …) d'un coup. Renvoie [signal, infos].
-static func fabriquer_coup(nom: String, k: int) -> Array:
-	var c: Dictionary = COUPS[nom]
-	var graine := int(c["graine"]) + k
-	var x := coup_modal(c, graine)
-	multiplier(x, CRETE_COUPS / maxf(crete(x), 1e-12))
-	return [x, {"fichier": "res://sons/coups/%s_%d.wav" % [nom, k + 1], "duree": float(x.size()) / TAUX,
-		"rms_dbfs": db(rms(x, 0, mini(int(0.1 * TAUX), x.size()))), "crete_dbfs": db(crete(x)),
-		"bandes": Array(bandes_octave(x)), "graine": graine}]
 
 
 ## Part de l'énergie d'un signal dans chaque bande d'octave (transformée de Fourier).
@@ -250,84 +219,6 @@ static func modulation(n: int, profondeur: float, graine: int) -> PackedFloat32A
 			v += float(c[2]) * sin(TAU * float(c[0]) * i / n + float(c[1]))
 		m[i] = 1.0 + v * norme
 	return m
-
-
-# =====================================================================
-# COUPS BREFS (SYNTHÈSE MODALE)
-# =====================================================================
-## Une pièce frappée. p : dictionnaire
-##   duree (s), f_min / f_max (Hz) des modes, modes (nombre), perte (facteur de perte de la matière :
-##   la durée d'un mode vaut 1 / (π × f × perte)), contact (s : durée du choc, loi de Hertz),
-##   souffle (0..1 : part d'un bref bruit de gaz), souffle_f (Hz), attaque (s : montée de la force)
-## Renvoie le signal (non normalisé).
-static func coup_modal(p: Dictionary, graine: int) -> PackedFloat32Array:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = graine
-	var n := int(float(p["duree"]) * TAUX)
-	var x := PackedFloat32Array()
-	x.resize(n)
-	var nb: int = p["modes"]
-	var f_min: float = p["f_min"]
-	var f_max: float = p["f_max"]
-	var perte: float = p["perte"]
-	var contact: float = p.get("contact", 0.0005)
-	var attaque: float = p.get("attaque", 0.0)
-	var point := rng.randf_range(0.15, 0.85)   # endroit frappé : il change l'importance de chaque mode
-	for m in nb:
-		# fréquences réparties en échelle logarithmique, chacune décalée de ±2 % (deux pièces ne sont
-		# jamais identiques)
-		var f := f_min * pow(f_max / f_min, (m + rng.randf_range(0.1, 0.9)) / nb) * rng.randf_range(0.98, 1.02)
-		var tau := 1.0 / (PI * f * perte * rng.randf_range(0.8, 1.25))
-		# force du mode : forme du mode au point frappé × spectre du choc (impulsion en demi-sinus de durée
-		# « contact » : plus le choc est bref, plus il nourrit les aigus) × 1/√f (masse modale)
-		var forme := absf(sin(PI * (m + 1) * point))
-		var tc := f * contact
-		var choc := 1.0 if absf(1.0 - 4.0 * tc * tc) < 1e-6 else absf(cos(PI * tc) / (1.0 - 4.0 * tc * tc))
-		# une force qui monte en « attaque » secondes ne nourrit pas les modes plus rapides que ça
-		var montee := 1.0 / sqrt(1.0 + pow(TAU * f * attaque, 2.0))
-		var amp := forme * choc * montee / sqrt(f) * rng.randf_range(0.6, 1.0)
-		var phase := rng.randf() * TAU
-		# oscillateur amorti calculé par récurrence (rotation complexe à chaque échantillon)
-		var w := TAU * f / TAUX
-		var r := exp(-1.0 / (tau * TAUX))
-		var cr := r * cos(w)
-		var ci := r * sin(w)
-		var yr := cos(phase) * amp
-		var yi := sin(phase) * amp
-		var i0 := int(rng.randf_range(0.0, 0.0006) * TAUX)   # les modes ne démarrent pas tous au même échantillon
-		for i in range(i0, n):
-			x[i] += yi
-			var nr := yr * cr - yi * ci
-			yi = yr * ci + yi * cr
-			yr = nr
-	# montée douce de la force (allumage d'un moteur : la poussée met ~ « attaque » s à arriver)
-	if attaque > 0.0:
-		var na := int(attaque * TAUX)
-		for i in mini(na, n):
-			x[i] *= 0.5 - 0.5 * cos(PI * float(i) / na)
-	# bref souffle de gaz (vanne qui s'ouvre) : bruit filtré, montée rapide, décroissance de ~30 ms
-	var s: float = p.get("souffle", 0.0)
-	if s > 0.0:
-		var crete := 0.0
-		for v in x:
-			crete = maxf(crete, absf(v))
-		var fs: float = p.get("souffle_f", 1500.0)
-		var a := exp(-TAU * fs / TAUX)
-		var b := exp(-TAU * fs * 0.25 / TAUX)
-		var lp := 0.0
-		var lp2 := 0.0
-		for i in mini(int(0.15 * TAUX), n):
-			var t := float(i) / TAUX
-			var env := (1.0 - exp(-t / 0.002)) * exp(-t / 0.03)
-			var bruit := rng.randfn(0.0, 1.0)
-			lp = a * lp + (1.0 - a) * bruit
-			lp2 = b * lp2 + (1.0 - b) * bruit
-			x[i] += (lp - lp2) * env * s * crete * 3.0   # bande autour de fs
-	# fin en fondu (pas de coupure audible)
-	var nf := mini(int(0.02 * TAUX), n)
-	for i in nf:
-		x[n - 1 - i] *= float(i) / nf
-	return x
 
 
 # =====================================================================

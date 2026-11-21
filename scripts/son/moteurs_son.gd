@@ -55,7 +55,7 @@ var _geometrie := -1
 var _ouvert := PackedByteArray()
 var _dernier := PackedFloat64Array()
 var _max_recent := PackedFloat64Array()   # N : plus forte poussée récente (pour le relâchement)
-## Sons brefs demandés depuis la dernière lecture : [nom, niveau (dB dans le cockpit), position, n°]
+## Sons brefs demandés depuis la dernière lecture : [nom, niveau (dB dans le cockpit), position, n°, intensité 0..1]
 var evenements: Array = []
 ## Dernier calcul (lu par le chef d'orchestre et par les tests).
 var niveau_structure := -INF     # dB : grondement des moteurs par la structure
@@ -211,13 +211,13 @@ func detecter(c: Capteurs, oreille: Vector3) -> void:
 				_ouvert[i] = 1
 				if t - _dernier[i] >= ECART_CLACS:
 					_dernier[i] = t
-					evenements.append(["rcs_ouverture", CLAC_OUVERTURE_DB + 10.0 * log(minf(niveau, 1.0)) / log(10.0) - attenuation[i], c.positions[i], i])
+					evenements.append(["rcs_ouverture", CLAC_OUVERTURE_DB + 10.0 * log(minf(niveau, 1.0)) / log(10.0) - attenuation[i], c.positions[i], i, minf(niveau, 1.0)])
 			elif _ouvert[i] and niveau < SEUIL_FERME:
 				_ouvert[i] = 0
 				if t - _dernier[i] >= ECART_CLACS:
 					_dernier[i] = t
 					var avant := maxf(_max_recent[i] / F_REF_RCS, 0.03)
-					evenements.append(["rcs_fermeture", CLAC_FERMETURE_DB + 10.0 * log(minf(avant, 1.0)) / log(10.0) - attenuation[i], c.positions[i], i])
+					evenements.append(["rcs_fermeture", CLAC_FERMETURE_DB + 10.0 * log(minf(avant, 1.0)) / log(10.0) - attenuation[i], c.positions[i], i, minf(avant, 1.0)])
 		else:
 			if c.poussees_max[i] <= 0.0:
 				_ouvert[i] = 0
@@ -227,13 +227,13 @@ func detecter(c: Capteurs, oreille: Vector3) -> void:
 				if t - _dernier[i] >= ECART_MOTEUR:
 					_dernier[i] = t
 					var cible := maxf(c.consignes[i], niveau) * c.poussees_max[i]
-					evenements.append(["moteur_allumage", ALLUMAGE_DB + 20.0 * log(cible / c.poussee_reference) / log(10.0) - attenuation[i], c.positions[i], i])
+					evenements.append(["moteur_allumage", ALLUMAGE_DB + 20.0 * log(cible / c.poussee_reference) / log(10.0) - attenuation[i], c.positions[i], i, clampf(cible / c.poussee_reference, 0.0, 1.0)])
 			elif _ouvert[i] and niveau < SEUIL_ETEINT:
 				_ouvert[i] = 0
 				if t - _dernier[i] >= ECART_MOTEUR:
 					_dernier[i] = t
 					var avant := maxf(_max_recent[i], 1.0)
-					evenements.append(["moteur_coupure", COUPURE_DB + 20.0 * log(avant / c.poussee_reference) / log(10.0) - attenuation[i], c.positions[i], i])
+					evenements.append(["moteur_coupure", COUPURE_DB + 20.0 * log(avant / c.poussee_reference) / log(10.0) - attenuation[i], c.positions[i], i, clampf(avant / c.poussee_reference, 0.0, 1.0)])
 
 
 static func _db(p2_rel: float) -> float:

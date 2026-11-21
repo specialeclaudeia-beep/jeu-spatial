@@ -30,6 +30,13 @@ extends Node
 ## la physique, sans égaliseur ni boucle) ; le C++ y glisse doucement par blocs de 5 ms. Le niveau qui sort est
 ## exactement le niveau calculé. Sans la partie C++, ou avec l'option `-- --son-boucles`, on garde les
 ## boucles de la phase 1.
+##
+## Phase 3 : le sol et les mécanismes (sol_son.gd). Les sons BREFS (chocs, vannes, verrous, pneus) sont eux
+## aussi fabriqués en direct : chocs.gd écrit la recette de chaque choc (modes de la pièce frappée), la classe C++
+## ChocsSon la fait sonner (16 chocs à la fois au plus). Les sons continus du sol (roulement, frein, dérapage,
+## raclage) et des vérins s'ajoutent aux voix C++ : roulement et vérins dans la voix « structure » (ils passent par
+## les panneaux qui résonnent), dérapage, frein et raclage dans une 3e voix « sol » dont les sons purs tremblent
+## plus (un pneu qui crisse n'est jamais stable). Sans la partie C++, pas de sons brefs ni de sons du sol.
 
 const Capteurs = preload("res://scripts/son/capteurs.gd")
 const MoteursSon = preload("res://scripts/son/moteurs_son.gd")
@@ -37,16 +44,16 @@ const Fluides = preload("res://scripts/son/fluides_son.gd")
 const Egaliseur = preload("res://scripts/son/egaliseur.gd")
 const Synthese = preload("res://scripts/son/synthese.gd")
 const Resonances = preload("res://scripts/son/resonances.gd")
+const SolSon = preload("res://scripts/son/sol_son.gd")
+const Chocs = preload("res://scripts/son/chocs.gd")
 
 const CATALOGUE := "res://sons/sons.json"
 const COUCHES_MAX := 8
-const LECTEURS := 16
+const LECTEURS := 16            # chocs à la fois (partie C++ ChocsSon)
 const VOIX_MAX := COUCHES_MAX + LECTEURS
 const SEUIL_DB := -60.0          # dB pleine échelle : en dessous, on ne joue pas
 const MASQUAGE_DB := 20.0
 const FONDU_SILENCE := 0.1       # s
-const FONDU_VOIX := 0.03         # s : une voix moins prioritaire qu'on interrompt
-const ATTENTE_MAX := 0.06        # s : un son bref qui n'a pas trouvé de lecteur après ça est oublié
 const TEMPS_MAX_SON := 10        # au-delà de x10, silence
 ## Échelle du volume : 107 dB dans le cockpit = pleine échelle (0 dB). Au-delà de 95 dB, compression 4:1 ;
 ## jamais plus fort que −2 dB pleine échelle (le limiteur du bus Master garde encore 1 dB de marge).
@@ -59,9 +66,15 @@ const RELACHE := 0.3             # s : … et revient doucement
 const RELACHE_COUCHE := 0.06     # s : une couche qui baisse (jet de gaz coupé) s'éteint en ~60 ms
 ## Phase 2 : les voix fabriquées en direct, et les couches qu'elles regroupent (bus, graine du hasard).
 const VOIX_DIRECTES := {
-	"structure": {"bus": "Structure", "couches": ["structure", "rcs"], "graine": 21},
+	"structure": {"bus": "Structure", "couches": ["structure", "rcs", "roulage", "verins"], "graine": 21},
 	"air": {"bus": "Exterieur", "couches": ["souffle", "jet", "jet_rcs"], "graine": 22},
+	"sol": {"bus": "Structure", "couches": ["derapage", "frein", "raclage"], "graine": 23, "instabilite": 0.03, "instabilite_temps": 0.02},
 }
+## Couches de la phase 3 (sol et vérins) : elles n'ont pas de boucle de la phase 1.
+const COUCHES_SOL := ["roulage", "verins", "derapage", "frein", "raclage"]
+## Priorité de chaque famille de sons brefs.
+const PRIORITE_CHOC := {"pneu_toucher": 4, "coque_choc": 4, "train_butee": 4, "amortisseur_detente": 4, "pneu_crissement": 4,
+	"gravier": 1, "frein_serrage": 3, "verin_depart": 3, "verin_arret": 3, "verrouillage": 3}
 const BOUCLE_DE := {"structure": "structure", "rcs": "rcs", "jet": "jet_moteur", "jet_rcs": "jet_rcs", "souffle": "souffle"}
 const LISSAGE_DIRECT := 0.01     # s : les cibles changent 60 fois par seconde, le C++ les rejoint en ~10 ms
 const BATTEMENT := 0.18          # léger battement du grondement des moteurs (le même que la boucle de la phase 1)
@@ -76,6 +89,7 @@ var oreille_scene := Vector3.ZERO      # tête du pilote dans le nœud « pilote
 var oreille := Vector3.ZERO            # la même, repère du modèle (comme la physique)
 var capteurs := Capteurs.new()
 var moteurs := MoteursSon.new()
+var sol := SolSon.new()
 var ecoute: AudioListener3D = null
 var actif := false
 
@@ -100,10 +114,11 @@ var _norme_battement := 1.0
 
 # --- mixage ---
 var couches := {}       # nom → {lecteur, ref_dbfs, parts (énergie par octave de la boucle), eq, niveau, lisse, priorite}
-var voix: Array = []    # lecteurs des sons brefs : {lecteur, priorite, debut, fondu, volume, ref}
-var coups := {}         # nom → [{stream, ref_dbfs, parts}]
-var _recents := {}      # nom → dernières variantes jouées
-var _demandes: Array = []   # sons brefs en attente : [nom, niveau (dB), position, priorite, âge]
+## Phase 3 : sons brefs fabriqués en direct (partie C++ ChocsSon) ; chocs en cours, vus d'ici : [fin (s), priorité]
+var chocs = null              # ChocsSon
+var lecteur_chocs: AudioStreamPlayer = null
+var _chocs_en_cours: Array = []
+var _demandes: Array = []   # sons brefs en attente : [nom, niveau (dB), position, priorite, âge, intensité]
 var fondu := 0.0        # 0 = silence, 1 = son normal
 var gain := 0.0         # dB : réduction de la compression (≤ 0)
 var souffle := {}       # dernier calcul du souffle (fluides_son.gd)
@@ -135,17 +150,6 @@ func installer(v, noeud_pilote: Node3D, cam: Camera3D, oeil: Vector3) -> void:
 	pilote.add_child(ecoute)
 	ecoute.position = oreille_scene
 	ecoute.make_current()
-	for i in LECTEURS:
-		var l := AudioStreamPlayer3D.new()
-		l.name = "Voix%d" % i
-		l.bus = "Structure"
-		l.attenuation_model = AudioStreamPlayer3D.ATTENUATION_DISABLED
-		l.attenuation_filter_cutoff_hz = 20500.0
-		l.panning_strength = 0.5   # vibrations de la structure : on devine d'où ça vient, sans plus
-		l.max_db = 24.0
-		l.doppler_tracking = AudioStreamPlayer3D.DOPPLER_TRACKING_DISABLED
-		pilote.add_child(l)
-		voix.append({"lecteur": l, "priorite": AMBIANCE, "debut": 0.0, "fondu": -1.0, "volume": -80.0})
 	actif = true
 
 
@@ -201,12 +205,13 @@ func _charger_sons() -> void:
 		_couche("jet", "jet_moteur", b, "Jet", MOTEUR)
 		_couche("jet_rcs", "jet_rcs", b, "Jet", MOTEUR)
 		_couche("souffle", "souffle", b, "Souffle", AIR)
-	for nom in cat["coups"]:
-		var liste := []
-		for v in cat["coups"][nom]:
-			liste.append({"stream": load(v["fichier"]), "ref_dbfs": float(v["rms_dbfs"]), "parts": PackedFloat64Array(v["bandes"])})
-		coups[nom] = liste
-		_recents[nom] = []
+	if synthese_directe and ClassDB.class_exists("ChocsSon"):
+		chocs = ClassDB.instantiate("ChocsSon")
+		lecteur_chocs = AudioStreamPlayer.new()
+		lecteur_chocs.name = "Voix_chocs"
+		lecteur_chocs.stream = chocs
+		lecteur_chocs.bus = "Structure"
+		add_child(lecteur_chocs)
 
 
 func _couche(nom: String, boucle: String, catalogue: Dictionary, bus: String, priorite: int) -> void:
@@ -249,6 +254,9 @@ func _preparer_voix_directes(catalogue: Dictionary) -> void:
 		var flux = ClassDB.instantiate("SyntheSon")
 		flux.graine = int(d["graine"])
 		flux.lissage = LISSAGE_DIRECT
+		if d.has("instabilite"):
+			flux.instabilite = float(d["instabilite"])
+			flux.instabilite_temps = float(d["instabilite_temps"])
 		if nv == "structure":
 			flux.regler_modes(resonances.frequences, resonances.pertes)
 		# les filtres sont calculés une fois ici (quelques ms), jamais pendant le jeu
@@ -262,10 +270,14 @@ func _preparer_voix_directes(catalogue: Dictionary) -> void:
 		bandes.resize(30)
 		voix_directes[nv] = {"lecteur": l, "flux": flux, "couches": d["couches"], "bandes": bandes}
 		for nom in d["couches"]:
-			var boucle: String = BOUCLE_DE[nom]
-			couches[nom] = {"lecteur": l, "ref_dbfs": 0.0, "parts": PackedFloat64Array(catalogue[boucle]["bandes"]),
+			var parts := PackedFloat64Array()
+			if BOUCLE_DE.has(nom):
+				parts = PackedFloat64Array(catalogue[BOUCLE_DE[nom]]["bandes"])
+			else:
+				parts = SolSon.octaves(sol.formes.get(nom, SolSon.forme_roulage(10.0)))
+			couches[nom] = {"lecteur": l, "ref_dbfs": 0.0, "parts": parts,
 				"eq": null, "m_eq": PackedFloat64Array(), "niveau": -INF, "lisse": -INF,
-				"priorite": AIR if nom == "souffle" else MOTEUR, "bandes_db": PackedFloat64Array(), "volume": -80.0,
+				"priorite": AIR if nom == "souffle" or nom in COUCHES_SOL else MOTEUR, "bandes_db": PackedFloat64Array(), "volume": -80.0,
 				"voix": nv, "energie": 0.0}
 	_formes["rcs"] = _forme_fixe("rcs", 1.0)
 
@@ -306,6 +318,9 @@ func _forme(nom: String) -> PackedFloat64Array:
 			source = moteurs.tiers_jet
 		"jet_rcs":
 			source = moteurs.tiers_jet_rcs
+		_:
+			if sol.formes.has(nom):
+				return sol.formes[nom]
 	var tot := 0.0
 	for e in source:
 		tot += e
@@ -338,6 +353,8 @@ func _envoyer_voix() -> void:
 		var e30: PackedFloat32Array = vd["bandes"]
 		e30.fill(0.0)
 		var total := 0.0
+		var e_raies := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+		var f_raies := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 		for nom in vd["couches"]:
 			var en: float = couches[nom]["energie"]
 			if en <= 0.0:
@@ -347,10 +364,20 @@ func _envoyer_voix() -> void:
 			var forme := _forme(nom)
 			if forme.size() != 30:
 				continue
+			# sons purs de la couche (sifflement de la pompe, pneu qui crisse) : leur part de l'énergie
+			var reste := 1.0
+			for r in sol.raies.get(nom, []):
+				e_raies[int(r[0])] += en * float(r[2])
+				f_raies[int(r[0])] = float(r[1])
+				reste -= float(r[2])
 			for j in 30:
-				e30[j] += en * forme[j]
+				e30[j] += en * reste * forme[j]
 			total += en
 		var flux = vd["flux"]
+		for r in 8:
+			if e_raies[r] > 0.0 or vd.get("raies_utilisees", false):
+				flux.regler_raie(r, f_raies[r] if f_raies[r] > 0.0 else 1000.0, e_raies[r])
+		vd["raies_utilisees"] = e_raies.max() > 0.0
 		if nv == "structure":
 			var r: Array = resonances.partager(e30)
 			flux.regler_bandes(r[0])
@@ -368,6 +395,17 @@ func _envoyer_voix() -> void:
 
 
 func _envoyer_banc() -> void:
+	# 16 chocs à la fois (coque qui tape, 20 modes et des grains), calculés à −30 dB mais joués à −80 dB (inaudibles)
+	if chocs != null:
+		lecteur_chocs.volume_db = -80.0
+		var t := capteurs.temps
+		_chocs_en_cours = _chocs_en_cours.filter(func(ch): return float(ch[0]) > t)
+		while _chocs_en_cours.size() < LECTEURS:
+			var r := Chocs.recette("coque_choc", 0.9, 1e-3, _rng)
+			if not lecteur_chocs.playing and not hors_ligne:
+				lecteur_chocs.play()
+			chocs.frapper(r["modes"], r["options"])
+			_chocs_en_cours.append([t + float(r["duree"]), 0])
 	for nv in voix_directes:
 		var vd: Dictionary = voix_directes[nv]
 		var e30 := PackedFloat32Array()
@@ -379,6 +417,8 @@ func _envoyer_banc() -> void:
 			em.resize(resonances.frequences.size())
 			em.fill(0.01)
 			vd["flux"].regler_energie_modes(em)
+		for r in 2:
+			vd["flux"].regler_raie(r, 400.0 * (r + 1), 0.01)
 		var l := vd["lecteur"] as AudioStreamPlayer
 		l.volume_db = -80.0
 		if not l.playing and not hors_ligne:
@@ -390,12 +430,16 @@ func charge_fil_audio() -> float:
 	var ch := 0.0
 	for nv in voix_directes:
 		ch += float(voix_directes[nv]["flux"].mesures()["charge"])
+	if chocs != null:
+		ch += float(chocs.mesures()["charge"])
 	return ch
 
 
 func remettre_mesures_fil_audio() -> void:
 	for nv in voix_directes:
 		voix_directes[nv]["flux"].remettre_mesures()
+	if chocs != null:
+		chocs.remettre_mesures()
 
 
 ## L'état du jeu, à donner à chaque image.
@@ -418,8 +462,14 @@ func _physics_process(delta: float) -> void:
 	if son_permis():
 		moteurs.detecter(capteurs, oreille)
 		for e in moteurs.evenements:
-			_demandes.append([e[0], e[1], e[2], CHOC if String(e[0]).begins_with("choc") else MOTEUR, 0.0])
+			_demandes.append([e[0], e[1], e[2], MOTEUR, 0.0, float(e[4]) if e.size() > 4 else 0.5])
+		sol.detecter(capteurs, oreille, delta)
+		for e in sol.evenements:
+			_demandes.append([e[0], e[1], e[2], PRIORITE_CHOC.get(e[0], CHOC), 0.0, float(e[4])])
+	else:
+		sol.detecter(capteurs, oreille, delta)   # garde son état à jour (pas de vieux choc au retour du son)
 	moteurs.evenements.clear()
+	sol.evenements.clear()
 	_us_physique += Time.get_ticks_usec() - t0
 
 
@@ -457,6 +507,9 @@ func mettre_a_jour(delta: float) -> void:
 	_poser("jet", moteurs.niveau_jet, delta)
 	_poser("jet_rcs", moteurs.niveau_jet_rcs, delta)
 	_poser("souffle", float(souffle["niveau"]), delta)
+	sol.calculer(c, oreille)
+	for nom in COUCHES_SOL:
+		_poser(nom, float(sol.niveaux[nom]), delta)
 	# 3. compression : du vrai niveau total au volume des haut-parleurs
 	var total := _somme_db(couches.values().map(func(k): return float(k["lisse"])))
 	var cible := 0.0
@@ -475,7 +528,6 @@ func mettre_a_jour(delta: float) -> void:
 		(couches["structure"]["lecteur"] as AudioStreamPlayer).pitch_scale = 0.9 + 0.25 * sqrt(clampf(moteurs.regime, 0.0, 1.5))
 	# 5. sons brefs
 	_servir_demandes(delta, fondu_db)
-	_faire_fondre(delta)
 	# 6. l'oreille suit la tête du pilote en vue cockpit ; dehors, elle reste à sa place, tête droite
 	if ecoute:
 		if vue_interieure and camera != null and camera.get_parent() == pilote:
@@ -517,6 +569,8 @@ func _poser(nom: String, niveau: float, delta: float) -> void:
 		spectre = moteurs.bandes_jet
 	elif nom == "jet_rcs":
 		spectre = moteurs.bandes_jet_rcs
+	elif sol.formes.has(nom):
+		spectre = SolSon.octaves(sol.formes[nom])
 	var tot := 0.0
 	for e in spectre:
 		tot += e
@@ -591,43 +645,53 @@ func _masquee(nom: String) -> bool:
 
 
 func _servir_demandes(delta: float, fondu_db: float) -> void:
-	var restent := []
+	var t := capteurs.temps
+	# chocs finis (d'après leur durée calculée) ; silence demandé : tout s'éteint en 30 ms
+	var restent_chocs := []
+	for ch in _chocs_en_cours:
+		if float(ch[0]) > t and fondu > 0.0:
+			restent_chocs.append(ch)
+	if fondu <= 0.0 and not _chocs_en_cours.is_empty() and chocs != null:
+		chocs.couper()
+	_chocs_en_cours = restent_chocs
 	for d in _demandes:
-		d[4] += delta
 		var nom: String = d[0]
-		if not coups.has(nom) or fondu < 0.999:
+		if chocs == null or not Chocs.existe(nom) or fondu < 0.999:
 			oublies += 1
 			continue
 		var niveau: float = d[1]
-		var dbfs := niveau - ZERO_DBFS + gain + fondu_db
-		var variantes: Array = coups[nom]
-		var choix := _choisir(nom)
-		var v: Dictionary = variantes[choix]
-		if dbfs < SEUIL_DB or _coup_cache(niveau, v["parts"]):
+		var dbfs := niveau - ZERO_DBFS + gain + fondu_db + _rng.randf_range(-1.0, 1.0)
+		if dbfs < SEUIL_DB:
 			oublies += 1
 			continue
-		var i := _voix_libre(int(d[3]))
-		if i < 0:
-			if d[4] < ATTENTE_MAX:
-				restent.append(d)   # une voix est en train de s'éteindre pour lui : on réessaie
-			else:
-				oublies += 1
+		var g := Chocs.panoramique(d[2], oreille)
+		var r := Chocs.recette(nom, float(d[5]), pow(10.0, dbfs / 10.0), _rng, g.x, g.y, float(d[3]))
+		if _coup_cache(niveau, r["parts"]):
+			oublies += 1
 			continue
-		_retenir(nom, choix)
-		var vx: Dictionary = voix[i]
-		var l := vx["lecteur"] as AudioStreamPlayer3D
-		l.stream = v["stream"]
-		l.position = (d[2] as Vector3) - capteurs.centre_gravite
-		var vol: float = dbfs - float(v["ref_dbfs"]) + _rng.randf_range(-1.0, 1.0)
-		l.volume_db = vol
-		l.pitch_scale = pow(2.0, _rng.randf_range(-0.4, 0.4) / 12.0)   # ±0,4 demi-ton : deux coups ne sont jamais identiques
-		l.play()
-		vx["priorite"] = d[3]
-		vx["debut"] = capteurs.temps
-		vx["fondu"] = -1.0
-		vx["volume"] = vol
+		# 16 chocs à la fois : sinon le moins important (puis le plus ancien) laisse la place, s'il l'est moins
+		if _chocs_en_cours.size() >= LECTEURS:
+			var victime := -1
+			for k in _chocs_en_cours.size():
+				var p := int(_chocs_en_cours[k][1])
+				if p <= int(d[3]) and (victime < 0 or p < int(_chocs_en_cours[victime][1])):
+					victime = k
+			if victime < 0:
+				oublies += 1
+				continue
+			_chocs_en_cours.remove_at(victime)
+		if hors_ligne or lecteur_chocs.playing or _demarrer_chocs():
+			chocs.frapper(r["modes"], r["options"])
+		_chocs_en_cours.append([t + float(r["duree"]), int(d[3])])
 		joues += 1
-	_demandes = restent
+	_demandes.clear()
+
+
+func _demarrer_chocs() -> bool:
+	if lecteur_chocs == null:
+		return false
+	lecteur_chocs.play()
+	return true
 
 
 ## Un son bref est caché si, dans sa plus forte octave, les couches continues sont 20 dB plus fortes.
@@ -641,66 +705,9 @@ func _coup_cache(niveau: float, parts: PackedFloat64Array) -> bool:
 		var o: PackedFloat64Array = couches[nom]["bandes_db"]
 		if o.size() == 10 and o[b_max] > -INF:
 			e += pow(10.0, o[b_max] / 10.0)
-	if e <= 0.0:
+	if e <= 0.0 or parts[b_max] <= 0.0:
 		return false
 	return niveau + 10.0 * log(parts[b_max]) / log(10.0) < 10.0 * log(e) / log(10.0) - MASQUAGE_DB
-
-
-## Variante au hasard parmi celles qui n'ont pas été jouées récemment.
-func _choisir(nom: String) -> int:
-	var n: int = coups[nom].size()
-	var recents: Array = _recents[nom]
-	var permis := []
-	for k in n:
-		if not recents.has(k):
-			permis.append(k)
-	if permis.is_empty():
-		return _rng.randi_range(0, n - 1)
-	return permis[_rng.randi_range(0, permis.size() - 1)]
-
-
-func _retenir(nom: String, k: int) -> void:
-	var recents: Array = _recents[nom]
-	recents.append(k)
-	var garder := mini(8, coups[nom].size() - 1)
-	while recents.size() > garder:
-		recents.pop_front()
-
-
-## Un lecteur libre ; sinon, la voix la moins prioritaire (puis la plus ancienne) commence à s'éteindre.
-## Renvoie -1 si rien n'est libre tout de suite.
-func _voix_libre(priorite: int) -> int:
-	var victime := -1
-	for i in voix.size():
-		var v: Dictionary = voix[i]
-		var l := v["lecteur"] as AudioStreamPlayer3D
-		if not l.playing and float(v["fondu"]) < 0.0:
-			return i
-		if float(v["fondu"]) >= 0.0:
-			continue   # déjà en train de s'éteindre
-		if int(v["priorite"]) <= priorite:
-			if victime < 0 or int(v["priorite"]) < int(voix[victime]["priorite"]) \
-					or (int(v["priorite"]) == int(voix[victime]["priorite"]) and float(v["debut"]) < float(voix[victime]["debut"])):
-				victime = i
-	if victime >= 0:
-		voix[victime]["fondu"] = FONDU_VOIX
-	return -1
-
-
-func _faire_fondre(delta: float) -> void:
-	for v in voix:
-		var l := v["lecteur"] as AudioStreamPlayer3D
-		if float(v["fondu"]) >= 0.0:
-			v["fondu"] = float(v["fondu"]) - delta
-			if float(v["fondu"]) <= 0.0:
-				l.stop()
-				v["fondu"] = -1.0
-			else:
-				l.volume_db = float(v["volume"]) + 20.0 * log(float(v["fondu"]) / FONDU_VOIX) / log(10.0)
-		elif l.playing and fondu < 1.0:
-			l.volume_db = float(v["volume"]) + 20.0 * log(maxf(fondu, 1e-4)) / log(10.0)
-		if fondu <= 0.0 and l.playing:
-			l.stop()
 
 
 ## Nombre de voix qui jouent en ce moment (couches + sons brefs ; une voix C++ compte une fois).
@@ -712,10 +719,7 @@ func voix_actives() -> int:
 		if l.playing and not vus.has(l):
 			vus[l] = true
 			n += 1
-	for v in voix:
-		if (v["lecteur"] as AudioStreamPlayer3D).playing:
-			n += 1
-	return n
+	return n + _chocs_en_cours.size()
 
 
 static func _somme_db(niveaux: Array) -> float:

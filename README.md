@@ -209,8 +209,8 @@ que **lire** la physique, il ne la change jamais (un test le vérifie). Tout est
 - 24 voix au plus (8 sons continus + 16 sons brefs), un son trop faible ou caché par un autre n'est pas joué.
   Calcul du son : environ 0,2 ms par image (ligne « son » du mode `--mesure`).
 - Fichiers : `scripts/son/` (`moteur_audio.gd` = le chef d'orchestre, `capteurs.gd` = le seul qui lit la
-  physique, `moteurs_son.gd`, `fluides_son.gd`, `egaliseur.gd` = l'égaliseur de Godot refait en calcul pour que
-  le volume soit exact, `synthese.gd` = fabrication des sons), `sons/` (fichiers fabriqués).
+  physique, `moteurs_son.gd`, `fluides_son.gd`, `sol_son.gd`, `chocs.gd`, `egaliseur.gd` = l'égaliseur de Godot
+  refait en calcul pour que le volume soit exact, `synthese.gd` = fabrication des boucles), `sons/` (boucles de secours).
 - Refabriquer les sons (même graine = même son) :
   `godot --headless --path . --script res://outils/generateur_sons.gd`
 - Tests du son : `godot --headless --path . res://scenes/tests_son.tscn`
@@ -238,6 +238,29 @@ que **lire** la physique, il ne la change jamais (un test le vérifie). Tout est
   vrai fil audio.
 - Ancienne version (boucles de la phase 1), en secours ou pour comparer : lancer avec `-- --son-boucles`
   (aussi pour l'outil des extraits). Sans la partie C++, le jeu reprend tout seul les boucles.
+
+## Son (phase 3 : le sol, les chocs, les vannes, les vérins)
+- **Tous les sons brefs sont fabriqués en direct** (demande de Gwenaël) : plus aucun fichier enregistré. Pour
+  chaque choc, `scripts/son/chocs.gd` écrit la « recette » de la pièce frappée (ses fréquences propres, leur durée
+  de résonance, leur force, les rebonds), et la partie C++ `ChocsSon` (`labo-lumiere/cpp/src/chocs_son.cpp`) la fait
+  sonner dans le fil audio. 16 chocs à la fois au plus ; plein, le moins important s'éteint en 30 ms. Deux chocs
+  ne sont jamais identiques (endroit frappé, pièce, force tirés à chaque fois).
+- **Chocs par l'énergie** (idée de Gwenaël) : ce qui frappe a une masse et une vitesse ; la pièce frappée absorbe
+  l'énergie ½ m v² en se déformant, et une part repart en son : +10 dB quand l'énergie est 10 fois plus grande. La
+  matière donne le timbre (caoutchouc sourd, acier qui sonne, aluminium de la coque, roche) ; la vitesse donne la
+  durée du contact (loi de Hertz : plus vite = plus bref = plus aigu).
+- **Au sol** (« prises » ajoutées dans `_forces_sol`, en lecture seule : la physique ne change pas, un test le
+  vérifie) : pneu qui touche (et crisse s'il ne tournait pas), amortisseur en bout de course ou qui se détend,
+  coque qui tape et qui racle, cailloux projetés par les roues, roulement des pneus (grave qui monte avec la
+  vitesse), dérapage (crissement vers 1 kHz), freins (frottement, disque qui chante), clic des freins.
+- **Vérins** : train, ailes, roue avant, tuyères : départ, pompe qui siffle et huile qui coule pendant la course,
+  arrêt, verrou qui claque au bout (« clac-clac »).
+- Vannes des petits propulseurs et allumage / coupure des moteurs : mêmes sons qu'avant, maintenant fabriqués
+  en direct.
+- 3 voix continues (structure, air, sol) + 16 chocs. Coût au pire (tout à pleine charge, `--mesure`) : environ
+  2,5 % d'un cœur du processeur dans le cloud ; GDScript : environ 0,2 ms par image.
+- Sans la partie C++ (ou avec `-- --son-boucles`) : pas de sons brefs ni de sons du sol, seulement les boucles.
+- Extraits à écouter : `outils/extraits_son.gd` (extraits 5 à 7 : se poser et freiner, train et ailes, sur le ventre).
 
 ## Organisation
 - `scripts/physique/vaisseau_physique.gd` : toute la physique (indépendante de l'affichage).

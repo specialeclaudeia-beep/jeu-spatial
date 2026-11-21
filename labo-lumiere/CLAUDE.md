@@ -315,6 +315,11 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
   = gauche par 4 passe-tout. Cibles atomiques posées par `scripts/son/moteur_audio.gd` (jeu), rejointes par blocs de
   256 échantillons. `AnalyseSon` = outil des tests du son du jeu (craquements par prédiction AR(16), spectre en
   tiers d'octave, FFT de 65 536 points).
+- **Phase 3** : `cpp/src/chocs_son.cpp` / `.h`, classe `ChocsSon` (AudioStream) : sons brefs fabriqués en direct.
+  `frapper(modes, options)` (modes = n × [f, τ, force, retard], au plus 48 ; options = 11 nombres, voir le .h), file
+  sans verrou de 64 chocs, 16 qui sonnent à la fois (plein : le moins prioritaire s'éteint en 30 ms, le nouveau attend
+  sa place). Chaque mode boucle à part (un mode sous −110 dB n'est plus calculé) ; crissement = phaseur revu tous
+  les 16 échantillons. Recettes écrites par `scripts/son/chocs.gd` (jeu). 16 chocs de 38 modes ≈ 1,5 % d'un cœur.
 - Tests : ceux du son du jeu (`scenes/tests_son.tscn` à la racine), pas ceux du labo.
 
 ## Organisation

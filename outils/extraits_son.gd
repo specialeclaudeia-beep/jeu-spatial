@@ -4,6 +4,7 @@ extends SceneTree
 ##   godot --headless --path . --script res://outils/extraits_son.gd -- <dossier de sortie>
 ## Ajouter `--son-boucles` après le dossier pour entendre l'ancienne version (boucles de la phase 1) :
 ## on peut ainsi comparer avant / après la phase 2 (sons fabriqués en direct par la partie C++).
+## Phase 3 : extraits 5 à 7 (se poser, rouler, freiner ; train et ailes ; sur le ventre).
 ## Chaque extrait est une petite scène jouée en vrai (la physique du vaisseau tourne, le moteur audio
 ## l'écoute) ; ce qui sort du bus Master est enregistré dans un fichier .wav.
 ## Les commandes (gaz, manche) sont rejouées par le script ; seul l'extrait « souffle » force la vitesse.
@@ -20,6 +21,10 @@ const EXTRAITS := [
 	["2-espace-moteurs-a-fond", 9.0, "vide"],
 	["3-air-depart-moteurs-a-fond", 10.0, "air_bas"],
 	["4-air-souffle-de-30-a-600-ms", 10.0, "air_souffle"],
+	# phase 3 : le sol et les vérins (sans air, pour n'entendre que la structure)
+	["5-sol-pose-roulage-freins", 14.0, "sol"],
+	["6-vide-train-et-ailes", 13.0, "vide"],
+	["7-sol-sur-le-ventre", 8.0, "ventre"],
 ]
 
 var dossier := "res://extraits"
@@ -55,6 +60,15 @@ class Pilotage extends Node:
 				v.vx = 0.0
 				v.vy = 0.0
 				v.vz = -u
+			"5-sol-pose-roulage-freins":
+				# posé à 1,2 m/s en roulant à 50 m/s, roue avant qui braque un peu, freins à 5 s, arrêt
+				v.braquage_consigne = 0.3 * sin(t * 0.8)
+				v.frein = 0.6 if t > 5.0 else 0.0
+			"6-vide-train-et-ailes":
+				if t > 0.5 and t < 0.6: v.sortir_train(true)
+				if t > 4.5 and t < 4.6: v.ouvrir_ailes(false)
+				if t > 8.0 and t < 8.1: v.ouvrir_ailes(true)
+				if t > 11.0 and t < 11.1: v.sortir_train(false)
 		v.commander(gaz, tangage, lacet, roulis)
 		v.pas(delta)
 
@@ -83,6 +97,16 @@ func _tout() -> void:
 				v.atmosphere = Atmosphere.new(R, 0.0)
 				v.px = R + (100.0 if e[2] == "air_bas" else 1000.0)
 				v.orientation = Quaternion(Vector3.BACK, deg_to_rad(-90.0))
+			"sol", "ventre":
+				v.gm = GM
+				v.rayon_planete = R
+				v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)
+				if e[2] == "sol":
+					v.sortir_train(true)
+					v.train = 1.0
+				v.px = R + (1.86 if e[2] == "sol" else 1.15)
+				v.vx = -1.2 if e[2] == "sol" else -0.8
+				v.vz = -50.0 if e[2] == "sol" else -20.0
 		var p := Node3D.new()
 		root.add_child(p)
 		var pil := Pilotage.new()
