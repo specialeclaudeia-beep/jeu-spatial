@@ -19,6 +19,7 @@ const Reperes = preload("res://scripts/physique/reperes.gd")
 const TrouVer = preload("res://scripts/physique/trou_de_ver.gd")
 const Toile = preload("res://scripts/einstein/toile.gd")
 const Atmosphere = preload("res://scripts/physique/atmosphere.gd")
+const MoteurAudio = preload("res://scripts/son/moteur_audio.gd")
 
 # =====================================================================
 # CONSTANTES
@@ -101,6 +102,7 @@ var tete_g_vit := Vector3.ZERO
 var casque: CanvasLayer              # bord du casque (vue cockpit)
 var lampe_ancienne: OmniLight3D
 var temps_lumiere_ms := 0.0          # temps de calcul du système de lumière par image (moyenne)
+var son = null                       # moteur audio (scripts/son/) : il lit la physique, ne l'écrit jamais
 
 # calotte détaillée
 var calotte_dir := Vector3.ZERO
@@ -205,6 +207,8 @@ func _mesurer(delta: float) -> void:
 	_mesure.dessin_cpu += RenderingServer.viewport_get_measured_render_time_cpu(vp)
 	_mesure.jeu += Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
 	_mesure.physique += Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+	if son != null:
+		_mesure.son += son.ms_par_image
 	if avec_lumiere:
 		for k in lumiere.ms_parties:
 			_mesure.parties[k] = _mesure.parties.get(k, 0.0) + lumiere.ms_parties[k]
@@ -216,14 +220,14 @@ func _mesurer(delta: float) -> void:
 		for k in _mesure.parties:
 			detail.append("%s %.1f" % [k, _mesure.parties[k] / _mesure.n])
 		ligne += "\n   détail (ms) : " + ", ".join(detail)
-		ligne += "\n   carte graphique %.1f ms, préparation du dessin %.1f ms, scripts %.1f ms, physique %.1f ms, fenêtre %s" % [
+		ligne += "\n   carte graphique %.1f ms, préparation du dessin %.1f ms, scripts %.1f ms, physique %.1f ms, son %.2f ms, fenêtre %s" % [
 			_mesure.gpu / _mesure.n, _mesure.dessin_cpu / _mesure.n, _mesure.jeu / _mesure.n, _mesure.physique / _mesure.n,
-			str(get_viewport().get_visible_rect().size)]
+			_mesure.son / _mesure.n, str(get_viewport().get_visible_rect().size)]
 		print(ligne)
 		_mesure.texte += ligne + "\n"
 		if phase + 1 < PHASES_MESURE.size():
 			_mesure.merge({"phase": phase + 1, "t": 0.0, "n": 0, "somme": 0.0, "pire": 0.0, "lumiere": 0.0, "parties": {},
-				"gpu": 0.0, "dessin_cpu": 0.0, "jeu": 0.0, "physique": 0.0}, true)
+				"gpu": 0.0, "dessin_cpu": 0.0, "jeu": 0.0, "physique": 0.0, "son": 0.0}, true)
 			_phase_mesure(phase + 1)
 		else:
 			var f := FileAccess.open("user://mesure.txt", FileAccess.WRITE)
@@ -255,7 +259,7 @@ func _ready() -> void:
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 		RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
 		_mesure = {"phase": 0, "t": 0.0, "n": 0, "somme": 0.0, "pire": 0.0, "lumiere": 0.0, "parties": {}, "texte": "",
-			"gpu": 0.0, "dessin_cpu": 0.0, "jeu": 0.0, "physique": 0.0}
+			"gpu": 0.0, "dessin_cpu": 0.0, "jeu": 0.0, "physique": 0.0, "son": 0.0}
 		call_deferred("_debut_mesure")
 	else:
 		# Synchronisation « adaptative » : à 60 i/s, l'image attend l'écran (pas de déchirure) ; en dessous,
@@ -279,6 +283,11 @@ func _ready() -> void:
 	droide = Droide.new()
 	add_child(droide)
 	droide.installer(self, couche_hud, modele_droide)
+	# le son du cockpit (phase 1) : il lit la physique après chaque pas, sans jamais la modifier
+	son = MoteurAudio.new()
+	son.name = "Son"
+	add_child(son)
+	son.installer(vaisseau, pilote, camera, oeil_pilote)
 
 
 ## Étape 8 : le système de lumière (vrai Soleil, planète en rayons, œil du pilote). Sans sa partie C++,
@@ -1196,6 +1205,8 @@ func _process(delta: float) -> void:
 	_mesurer(delta)
 	_regler_resolution(delta)
 	_lire_boutons()
+	if son != null:
+		son.regler(en_pause or ecran_touches != null, acc_effectif, vue_interieure)
 	# (près de la lune, les axes de la physique tournent avec elle : on dessine dans ceux de la maison)
 	pilote.basis = reperes.base_affichage() * Basis(vaisseau.orientation)
 	_suivre_g(delta)

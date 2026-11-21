@@ -189,6 +189,34 @@ ou couper la poussée, le désactive.
 - Pas de carburant.
 - Marqueurs : (o) = direction où l'on va, (x) = direction d'où l'on vient.
 
+## Son (phase 1 du moteur audio)
+Un casque est conseillé. On n'entend **que le cockpit**, jamais l'espace : le cockpit est plein d'air
+(pressurisé), et les sons du dehors n'y arrivent qu'en faisant vibrer la coque et la verrière. Le son ne fait
+que **lire** la physique, il ne la change jamais (un test le vérifie). Tout est calculé, rien n'est enregistré.
+- **Dans le vide** : seul ce qui passe par la structure arrive. Grondement des moteurs (son énergie suit la force
+  au carré, il perd 1 dB par mètre de structure et 6 dB à l'emplanture d'une aile) ; souffle des petits
+  propulseurs ; claquement de leurs vannes quand elles s'ouvrent et se ferment ; « coup » d'un moteur qui
+  s'allume ou se coupe (plusieurs variantes, jamais deux fois la même de suite).
+- **Dans l'air**, en plus : le bruit des jets (loi de Lighthill : il suit la puissance du jet et la densité de
+  l'air ; plus fort derrière le jet que devant ; en vol, le son remonte mal le vent, et plus du tout au-delà de
+  Mach 1) et le **souffle** de l'air sur la coque (remous de la couche limite : modèle de Goody, énergie de
+  Farabee et Casarella ; air lisse et presque muet à basse vitesse ou très haut ; rien quand l'air est trop rare).
+  Tout passe par la paroi (loi de masse : elle arrête bien les aigus ; sa résonance vers 80 Hz fait gronder).
+- **Volume** : on calcule le vrai niveau dans le cockpit (en dB), puis 107 dB = plein volume. Au-delà de 95 dB, le
+  volume monte 4 fois moins vite (une poussée x100 000 ne fait pas exploser les oreilles).
+- **Temps accéléré** : son normal jusqu'à x10, silence au-delà. Pause, écran des touches, vaisseau écrasé :
+  silence en 0,1 s. En vue extérieure, on entend toujours le cockpit.
+- 24 voix au plus (8 sons continus + 16 sons brefs), un son trop faible ou caché par un autre n'est pas joué.
+  Calcul du son : environ 0,2 ms par image (ligne « son » du mode `--mesure`).
+- Fichiers : `scripts/son/` (`moteur_audio.gd` = le chef d'orchestre, `capteurs.gd` = le seul qui lit la
+  physique, `moteurs_son.gd`, `fluides_son.gd`, `egaliseur.gd` = l'égaliseur de Godot refait en calcul pour que
+  le volume soit exact, `synthese.gd` = fabrication des sons), `sons/` (fichiers fabriqués).
+- Refabriquer les sons (même graine = même son) :
+  `godot --headless --path . --script res://outils/generateur_sons.gd`
+- Tests du son : `godot --headless --path . res://scenes/tests_son.tscn`
+- Extraits à écouter, sans lancer le jeu :
+  `godot --headless --path . --script res://outils/extraits_son.gd -- <dossier>`
+
 ## Organisation
 - `scripts/physique/vaisseau_physique.gd` : toute la physique (indépendante de l'affichage).
 - `scripts/physique/atmosphere.gd` et `aerodynamique.gd` : l'air de la planète et ce qu'il fait au vaisseau.
@@ -204,4 +232,5 @@ ou couper la poussée, le désactive.
 - `scripts/lumiere/` : le système de lumière, copie exacte de `labo-lumiere/scripts/lumiere/` (un test le vérifie : on le change dans le labo, puis on recopie).
 - `scripts/lumiere_jeu.gd` : branche le système dans le jeu (Soleil, planète, lampes, visière, posemètre de l'œil).
 - `scripts/tests_physique.gd` : les tests automatiques (F1).
+- `scripts/son/`, `sons/`, `outils/` : le son (voir « Son » plus haut) ; `scripts/tests_son.gd` : ses tests.
 - `shaders/` : surface de la planète et ciel étoilé.
