@@ -227,7 +227,7 @@ func _mesurer(delta: float) -> void:
 			_mesure.son / _mesure.n, str(get_viewport().get_visible_rect().size)]
 		if son != null and son.synthese_directe:
 			# fabriqué dans le fil audio de Godot, à côté des images : part d'un cœur du processeur
-			ligne += "\n   son fabriqué en direct (C++, fil audio, 2 voix à pleine charge) : %.2f %% d'un cœur" % (son.charge_fil_audio() * 100.0)
+			ligne += "\n   son fabriqué en direct (C++, fil audio, 3 voix et 16 chocs à pleine charge) : %.2f %% d'un cœur" % (son.charge_fil_audio() * 100.0)
 		print(ligne)
 		_mesure.texte += ligne + "\n"
 		if phase + 1 < PHASES_MESURE.size():

@@ -35,6 +35,28 @@ var au_sol := false
 var ecrase := false
 var temps := 0.0            # s : temps réel écoulé (horloge du son)
 
+# --- sol (phase 3) : la « prise » de _forces_sol, depuis la photo précédente ---
+## Points qui touchent le sol : roues 0 à 2 (avant, arrière gauche, arrière droite), puis 6 points de la coque.
+var points_sol := PackedVector3Array()
+var poids := 0.0                                  # N : masse × 9,81 (référence des forces du sol)
+var sol_choc := PackedFloat64Array()              # m/s : vitesse d'arrivée sur le sol d'un point qui touche (0 = rien)
+var sol_choc_cote := PackedFloat64Array()         # m/s : vitesse le long du sol à ce moment
+var sol_butee := PackedFloat64Array()             # m/s : amortisseur arrivé en bout de course
+var sol_fn := PackedFloat64Array()                # N : force moyenne qui appuie sur le sol
+var sol_roule := PackedFloat64Array()             # m/s : vitesse de roulement moyenne de chaque roue
+var sol_glisse := PackedFloat64Array()            # m/s : vitesse moyenne de glissement (dérapage, raclage)
+var sol_frein := PackedFloat64Array()             # 0..1 : serrage moyen des freins d'une roue qui roule
+var compression := PackedFloat64Array()           # m : écrasement de chaque amortisseur
+var frein_parc := false
+var frein := 0.0                                  # 0..1 : freins demandés (Maj)
+var train_sorti := 0.0                            # 0 = rentré, 1 = sorti
+var train_consigne := 0.0
+var ailes := 1.0                                  # 0 = repliées, 1 = ouvertes
+var ailes_consigne := 1.0
+var braquage := 0.0                               # rad : roue avant
+var vertical := 0.0                               # 0 = vol normal, 1 = vol vertical (tuyère tournée)
+var vertical_consigne := 0.0
+
 var _ailes := -1.0
 var _vertical := -1.0
 
@@ -85,3 +107,44 @@ func lire(v, dt: float) -> void:
 		vent = Vector3.ZERO
 	au_sol = v.au_sol
 	ecrase = v.ecrase
+	_lire_sol(v)
+
+
+## Phase 3 : la prise du sol (moyennes sur les petits pas de physique depuis la photo précédente), puis on
+## la vide. C'est la seule chose que le son « écrit » : des compteurs que la physique ne lit jamais.
+func _lire_sol(v) -> void:
+	var np: int = v.PRISE_POINTS
+	if points_sol.size() != np:
+		points_sol.clear()
+		for p in v.ROUES:
+			points_sol.append(p)
+		for p in v.COQUE:
+			points_sol.append(p)
+		for a in [sol_choc, sol_choc_cote, sol_fn, sol_glisse]:
+			a.resize(np)
+		for a in [sol_butee, sol_roule, sol_frein]:
+			a.resize(3)
+	poids = v.masse * 9.81
+	var n: int = maxi(v.prise_n, 1)
+	for k in np:
+		sol_choc[k] = v.prise_choc[k]
+		sol_choc_cote[k] = v.prise_choc_cote[k]
+		sol_fn[k] = v.prise_fn[k] / n
+		sol_glisse[k] = v.prise_glisse[k] / n
+	for k in 3:
+		sol_butee[k] = v.prise_butee[k]
+		sol_roule[k] = v.prise_roule[k] / n
+		sol_frein[k] = v.prise_frein[k] / n
+	if v.prise_n == 0:
+		sol_fn.fill(0.0)
+	v.vider_prise_sol()
+	compression = v.compression_roues
+	frein_parc = v.frein_parc
+	frein = v.frein
+	train_sorti = v.train
+	train_consigne = v.train_consigne
+	ailes = v.ailes
+	ailes_consigne = v.ailes_consigne
+	braquage = v.braquage
+	vertical = v.vertical
+	vertical_consigne = v.vertical_consigne

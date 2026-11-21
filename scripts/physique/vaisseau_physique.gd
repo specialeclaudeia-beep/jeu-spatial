@@ -868,6 +868,29 @@ const VISCOSITE_SOL := 40000.0   # N·s/m : force de freinage d'un point qui gli
 const CHOC_MAX_COQUE := 3.0      # m/s : la coque qui tape le sol plus vite que ça = écrasé
 const CHOC_MAX_TRAIN := 2.0      # m/s : jambe en bout de course encore plus vite que ça = train cassé
 var _touchait := {}              # points qui touchaient déjà le sol au pas précédent
+## Son, phase 3 : « prise » du sol, en LECTURE SEULE. _forces_sol y note ce qui se passe sous chaque point
+## (choc au contact, roulement, glissement, freins). Le son (scripts/son/capteurs.gd) la lit puis la vide.
+## Rien de ce qui est écrit ici ne sert à la physique : aucun résultat ne change (test « La physique ne
+## change pas » du son, et les tests de la physique). Index : roues 0 à 2, puis points de la coque 3 à 8.
+const PRISE_POINTS := 9
+var prise_n := 0                                               # morceaux de pas de physique notés
+var prise_choc := PackedFloat64Array([0, 0, 0, 0, 0, 0, 0, 0, 0])       # m/s : plus forte vitesse d'arrivée sur le sol
+var prise_choc_cote := PackedFloat64Array([0, 0, 0, 0, 0, 0, 0, 0, 0])  # m/s : vitesse le long du sol à ce moment
+var prise_butee := PackedFloat64Array([0, 0, 0])               # m/s : amortisseur qui arrive en bout de course
+var prise_fn := PackedFloat64Array([0, 0, 0, 0, 0, 0, 0, 0, 0])         # N (somme) : force qui appuie sur le sol
+var prise_roule := PackedFloat64Array([0, 0, 0])               # m/s (somme) : vitesse de roulement des roues
+var prise_glisse := PackedFloat64Array([0, 0, 0, 0, 0, 0, 0, 0, 0])     # m/s (somme) : vitesse de glissement (dérapage, raclage)
+var prise_frein := PackedFloat64Array([0, 0, 0])               # (somme) serrage des freins d'une roue qui roule
+var _prise_butee := PackedByteArray([0, 0, 0])                 # amortisseur déjà en bout de course (pour la prise)
+
+
+## Le son lit la prise puis la vide (aucun effet sur la physique).
+func vider_prise_sol() -> void:
+	prise_n = 0
+	for a in [prise_choc, prise_choc_cote, prise_fn, prise_glisse]:
+		a.fill(0.0)
+	for a in [prise_butee, prise_roule, prise_frein]:
+		a.fill(0.0)
 var compression_roues := PackedFloat64Array([0.0, 0.0, 0.0])   # m, écrasement de chaque amortisseur (pour le dessin)
 
 
@@ -953,6 +976,7 @@ func _forces_sol(base: Basis) -> Array:
 	var accroches := _accroches
 	_accroches = {}
 	var avant: Vector3 = base * Vector3(0.0, 0.0, -1.0)
+	prise_n += 1   # prise du son (lecture seule)
 	for pt in points:
 		var r_corps: Vector3 = (pt[0] as Vector3) - CENTRE_GRAVITE   # vu du centre de gravité
 		var k_roue: int = pt[1]
@@ -968,6 +992,8 @@ func _forces_sol(base: Basis) -> Array:
 		var sol_ici := _sol_sous(cle, ici, qx, qy, qz, false)
 		var h := dq - rayon_planete - float(sol_ici[0])
 		if h >= 0.0:
+			if roue:
+				_prise_butee[k_roue] = 0   # prise du son : roue en l'air
 			continue
 		var up := Vector3(qx / dq, qy / dq, qz / dq)
 		var n: Vector3 = _sol_sous(cle, ici, qx, qy, qz, true)[1]
@@ -981,6 +1007,11 @@ func _forces_sol(base: Basis) -> Array:
 			if deja.is_empty() and _touchait.is_empty():
 				vitesse_impact = 0.0   # premier point qui touche : nouveau posé
 			vitesse_impact = maxf(vitesse_impact, -vn)
+			# prise du son : choc au contact (vitesse d'arrivée, et le long du sol pour le crissement du pneu)
+			var ip := k_roue if roue else cle - 7
+			if -vn > prise_choc[ip]:
+				prise_choc[ip] = -vn
+				prise_choc_cote[ip] = (v_point - n * vn).length()
 			if not roue and -vn > CHOC_MAX_COQUE:
 				ecrase = true
 		_touchait[cle] = true
@@ -994,6 +1025,11 @@ func _forces_sol(base: Basis) -> Array:
 				fn += RAIDEUR_COQUE * (c - course) - AMORTI_COQUE * vn
 				if -vn > CHOC_MAX_TRAIN:
 					ecrase = true
+				if _prise_butee[k_roue] == 0:
+					prise_butee[k_roue] = maxf(prise_butee[k_roue], -vn)   # prise du son
+				_prise_butee[k_roue] = 1
+			else:
+				_prise_butee[k_roue] = 0
 		else:
 			fn = RAIDEUR_COQUE * c - AMORTI_COQUE * vn
 		fn = maxf(fn, 0.0)
@@ -1020,6 +1056,7 @@ func _forces_sol(base: Basis) -> Array:
 		# jusqu'à l'adhérence du pneu
 		var ft_max := (ADHERENCE_PNEU if roue else FROTTEMENT) * fn
 		if ft.length() > ft_max:
+			prise_glisse[k_roue if roue else cle - 7] += vt.length()   # prise du son : ça dérape ou ça racle
 			# ça glisse : la force est limitée et l'accroche suit le point
 			ft = ft.normalized() * ft_max
 			var e_ok := ecart.normalized() * minf(ecart.length(), ft_max / RAIDEUR_COTE)
@@ -1040,6 +1077,11 @@ func _forces_sol(base: Basis) -> Array:
 			var ft_roue := (ADHERENCE_PNEU + RESISTANCE_ROULEMENT) * fn
 			if ft.length() > ft_roue:
 				ft = ft.normalized() * ft_roue
+				if serrage > 0.95:
+					prise_glisse[k_roue] += absf(v_roule)   # prise du son : roue bloquée par le frein, qui glisse
+			prise_roule[k_roue] += absf(v_roule)   # prise du son (lecture seule)
+			prise_frein[k_roue] += serrage
+		prise_fn[k_roue if roue else cle - 7] += fn   # prise du son (lecture seule)
 		var f: Vector3 = n * fn + ft
 		f_monde += f
 		couple += r_corps.cross(base.inverse() * f)
