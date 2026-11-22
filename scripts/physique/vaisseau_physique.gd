@@ -800,8 +800,18 @@ func _morceaux_dense(dt: float) -> int:
 	return clampi(int(ceil(dt / (0.005 * t_car))), 1, MORCEAUX_DENSE_MAX)
 
 
+## Un pas. La planète tourne À LA FIN du pas : les forces du sol sont calculées avec la position du début
+## du pas, il faut donc le sol tel qu'il est à ce moment-là. (Avant l'atelier, la planète tournait au début :
+## le sol sous les roues était cherché un pas trop loin, 1,9 m à 240 pas par seconde, et le vaisseau posé
+## sur un vrai relief pouvait s'enfoncer ou flotter de quelques centimètres.)
 func _pas_un(dt: float) -> void:
-	angle_planete = fposmod(angle_planete + omega_planete * dt, TAU)
+	var angle_avant := angle_planete
+	_pas_corps(dt)
+	if angle_planete == angle_avant:   # (un changement de système d'étoile a pu le régler lui-même)
+		angle_planete = fposmod(angle_planete + omega_planete * dt, TAU)
+
+
+func _pas_corps(dt: float) -> void:
 	_placer_astres()
 	# 1. Les moteurs suivent leur consigne avec un petit temps de réponse
 	var k := clampf(dt / maxf(reactivite_moteurs, 1e-9), 0.0, 1.0)
@@ -1723,3 +1733,101 @@ func placer_en_orbite(altitude_m: float) -> void:
 	_placer_propulseurs()
 	_preparer_repartition()
 	_calculer_poussee_max()
+
+
+## Atelier, étape 2 : pose le vaisseau à l'arrêt sur le sol, train sorti et ailes repliées (départ « devant
+## le hangar »). Ailes repliées : ouvertes (en X), les deux ailes du bas descendent à 1 m SOUS les roues.
+## haut_planete : direction de l'endroit depuis le centre, dans le repère de la PLANÈTE (l'endroit reste le
+## même quand elle a tourné) ; avant_planete : vers où pointe le nez (ramené dans le plan du sol).
+## Le vaisseau est placé roues à 1 cm du sol sous chacune d'elles, immobile par rapport au sol (qui tourne
+## avec la planète), puis la physique le laisse se poser pendant duree_calage secondes, gaz à zéro : il
+## repose ensuite sur ses amortisseurs exactement comme après un vrai atterrissage. Rien n'est forcé : ce
+## sont les ressorts du train et le frottement du sol qui le tiennent.
+func poser_au_sol(haut_planete: Vector3, avant_planete: Vector3, duree_calage := 2.0) -> void:
+	placer_en_orbite(0.0)   # remet tout l'état comme au départ du plan (commandes, chaleur, contacts)
+	train = 1.0
+	train_consigne = 1.0
+	ailes = 0.0
+	ailes_consigne = 0.0
+	var haut := _depuis_planete(haut_planete.normalized())
+	# positions en 64 bits (nombres séparés) : un Vector3 (32 bits) à 600 km ne voit que des pas de 6 cm
+	var r_sol := rayon_planete + hauteur_sol(haut.x * rayon_planete, haut.y * rayon_planete, haut.z * rayon_planete)
+	var sx := haut.x * r_sol
+	var sy := haut.y * r_sol
+	var sz := haut.z * r_sol
+	var n := normale_sol(sx, sy, sz)
+	var avant := _depuis_planete(avant_planete)
+	avant = avant - n * avant.dot(n)
+	if avant.length() < 1e-6:
+		avant = n.cross(Vector3.RIGHT if absf(n.x) < 0.9 else Vector3.FORWARD)
+	avant = avant.normalized()
+	# repère du vaisseau : +Y = perpendiculaire au sol, −Z = le nez
+	var z := -avant
+	var b := Basis(n.cross(z).normalized(), n, z).orthonormalized()
+	# centre de gravité au-dessus du sol ; puis, à chaque essai : le vaisseau est penché comme le sol SOUS
+	# SES ROUES (le plan des points du sol sous chaque roue, pas seulement la pente au centre : sinon, sur
+	# un terrain inégal, une roue reste 15 cm en l'air et le nez tombe), et monté ou descendu pour que la
+	# roue la plus enfoncée soit à 1 cm du sol.
+	var e := hauteur_train + centre_gravite.y
+	var cx := sx + n.x * e
+	var cy := sy + n.y * e
+	var cz := sz + n.z * e
+	var roues_corps: Array = roues.map(func(r): return (r as Vector3) - centre_gravite)
+	var n_roues := _normale_points(roues_corps, Vector3.UP)
+	for essai in 6:
+		var ecart_min := INF
+		var sous_roues := []   # point du sol sous chaque roue, par rapport au centre de gravité
+		for d0 in roues_corps:
+			var d: Vector3 = b * (d0 as Vector3)
+			var qx := cx + d.x
+			var qy := cy + d.y
+			var qz := cz + d.z
+			var rq := sqrt(qx * qx + qy * qy + qz * qz)
+			var r_s := rayon_planete + hauteur_sol(qx, qy, qz)
+			ecart_min = minf(ecart_min, rq - r_s)
+			var k_s := r_s / rq
+			sous_roues.append(Vector3(qx * k_s - cx, qy * k_s - cy, qz * k_s - cz))
+		var rc := sqrt(cx * cx + cy * cy + cz * cz)
+		var haut_c := Vector3(cx / rc, cy / rc, cz / rc)
+		if essai < 3 and roues.size() >= 3:
+			var n_sol := _normale_points(sous_roues, haut_c)
+			var n_vaisseau := b * n_roues
+			if n_sol.length() > 0.5 and n_vaisseau.length() > 0.5 and n_vaisseau.angle_to(n_sol) > 1e-6:
+				b = (Basis(Quaternion(n_vaisseau, n_sol)) * b).orthonormalized()
+				continue   # nouvelle pente : on refait les écarts avec elle
+		var k := (0.01 - ecart_min) / rc
+		cx += cx * k
+		cy += cy * k
+		cz += cz * k
+	orientation = b.get_rotation_quaternion()
+	px = cx
+	py = cy
+	pz = cz
+	var v_sol := vitesse_sol(px, py, pz)
+	vx = v_sol.x
+	vy = v_sol.y
+	vz = v_sol.z
+	_lire_vitesse()
+	omega = b.inverse() * Vector3(0.0, omega_planete, 0.0)   # il tourne avec la planète, comme le sol
+	_placer_propulseurs()
+	_preparer_repartition()
+	_calculer_poussee_max()
+	var n_pas := roundi(duree_calage * 240.0)
+	for i in n_pas:
+		commander(0.0, 0.0, 0.0, 0.0)
+		pas(1.0 / 240.0)
+	vider_prise_sol()   # le son n'entend pas ce calage (fait avant la première image)
+	vitesse_impact = 0.0   # ce calage n'est pas un atterrissage
+
+
+## Perpendiculaire (normée, du côté de « haut ») au plan qui passe au mieux par ces points : somme des
+## perpendiculaires de tous leurs triangles (exacte pour 3 points, comme un train tricycle).
+static func _normale_points(points: Array, haut: Vector3) -> Vector3:
+	var somme := Vector3.ZERO
+	var nb := points.size()
+	for i in nb:
+		for j in range(i + 1, nb):
+			for k in range(j + 1, nb):
+				var c: Vector3 = ((points[j] as Vector3) - (points[i] as Vector3)).cross((points[k] as Vector3) - (points[i] as Vector3))
+				somme += c if c.dot(haut) >= 0.0 else -c
+	return somme.normalized() if somme.length() > 1e-9 else Vector3.ZERO

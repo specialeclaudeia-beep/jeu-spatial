@@ -54,7 +54,7 @@ const CoteSon = preload("res://scripts/son/cote_son.gd")
 const P_REF := 2.0e-5
 const COUCHES := ["sifflement", "cavites", "tremblement", "choc_verriere"]
 const STROUHAL_JAMBE := 0.2
-const PART_TRAPPES := 0.3          # comme jeu.gd : les trappes s'ouvrent pendant les premiers 30 % du train
+const PART_TRAPPES := 0.3          # comme modele_vaisseau.gd : les trappes s'ouvrent pendant les premiers 30 % du train
 ## Jambes et roues du train sorti (modèle v27, repère du vaisseau) : point, diamètre D (m), longueur L (m), raie
 ## (−1 = pas de son pur : une roue est trop « épaisse » pour siffler net).
 const JAMBES := [

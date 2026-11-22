@@ -20,6 +20,9 @@ const TrouVer = preload("res://scripts/physique/trou_de_ver.gd")
 const Toile = preload("res://scripts/einstein/toile.gd")
 const Atmosphere = preload("res://scripts/physique/atmosphere.gd")
 const MoteurAudio = preload("res://scripts/son/moteur_audio.gd")
+const ModeleVaisseau = preload("res://scripts/modele_vaisseau.gd")
+const Partie = preload("res://scripts/partie.gd")
+const Plan = preload("res://scripts/atelier/plan.gd")
 
 # =====================================================================
 # CONSTANTES
@@ -29,6 +32,12 @@ const GRAVITE_SURFACE := 9.81            # m/s² au sol
 ## Atmosphère : à 100 km, il reste assez d'air pour faire retomber le vaisseau en une heure (comme sur
 ## Terre). L'orbite de départ est donc plus haut, à 250 km : l'air y freine si peu qu'elle tient des mois.
 const ALTITUDE_DEPART := 250000.0        # m
+## Atelier, étape 2 : le départ « devant le hangar » (bouton Lancer de l'atelier). Endroit choisi sur la
+## planète (repère de la planète, direction depuis son centre) : un des sols les moins en pente du côté
+## éclairé au départ (pente 1,5° sous le vaisseau, 2 100 m d'altitude, 30° de latitude nord), le matin :
+## le Soleil est à 38° au-dessus de l'horizon et monte. Le nez du vaisseau pointe à l'opposé du Soleil.
+## (test « Départ devant le hangar » dans scripts/tests_atelier.gd)
+const LIEU_HANGAR := Vector3(0.3635219, 0.5054473, 0.7825438)
 ## La planète tourne sur elle-même en 2 h (comme le labo, Q40 : jour court pour les essais). Au sol, à
 ## l'équateur, on file donc à 524 m/s dans l'espace : pour se poser, il faut suivre le sol.
 const DUREE_JOUR := 7200.0               # s
@@ -45,7 +54,6 @@ const VUE_EXT_DISTANCE := 24.0
 const VUE_EXT_HAUTEUR := deg_to_rad(-12.0)    # un peu au-dessus du vaisseau
 const FOV_NORMAL := 75.0
 const FOV_ZOOM := 25.0        # zoom pour lire les instruments (3 fois plus gros)
-const PART_TRAPPES := 0.3     # part du mouvement du train pendant laquelle les trappes s'ouvrent
 const ACCELERATIONS_TEMPS := [1, 10, 100, 1000, 10000, 100000, 1000000, 10000000]
 ## Au-delà de x100 000, le temps n'accélère autant que loin des astres (voir VaisseauPhysique.limite_temps).
 const TEMPS_TOUJOURS := 100000
@@ -69,6 +77,7 @@ const TETE_G_AMORTI := 0.7
 # ÉTAT
 # =====================================================================
 var vaisseau
+var depart := Partie.DEPART_ORBITE   # où commence le vol (et où « recommencer » ramène)
 var gaz := 0.0
 var stabilisateur := false
 var reperes = Reperes.new()          # Einstein A3 : un repère par système d'étoile
@@ -115,20 +124,9 @@ var pilote: Node3D
 var camera: Camera3D
 var exterieur: Node3D                # coque, ailes, train (visible dans les deux vues)
 var cockpit: Node3D                  # intérieur du cockpit et grande verrière (vue intérieure seulement)
-var charnieres := {}                 # nom de l'aile -> nœud Charniere_* du modèle
-var trains: Array = []               # [nœud Train_*, "rotation", "piston" ou "oblique", angle rentré (°) ou course sorti (m), position de repos, axe, pied (fusée + roue), axe de la jambe]
-var trappes: Array = []              # [nœud Charniere_Trappe_*, angle ouvert (degrés), true = trappe des moteurs de levage]
-var tuyere: Node3D                   # pivot de la tuyère orientable du moteur central
-var moteurs_levage: Array = []       # [nœud Moteur_levage_*, position de repos, course (m)]
+var modele                           # le dessin du vaisseau mis dans la pose de sa physique (modele_vaisseau.gd)
 var maillages_exterieurs: Array = [] # pour couper leurs ombres en vue cockpit
 var caches_en_cockpit: Array = []    # pièces du nez (train avant, moteurs de levage) qui bouchent la vue du pilote
-var amortisseurs: Array = []         # [nœud Amortisseur_*, position de repos, n° de roue de la physique]
-var ressorts: Array = []             # [nœud Ressort_*, échelle de repos, n° de roue, longueur au repos (m)]
-var roue_avant: Node3D = null
-var roues_arriere: Array = []        # [nœud Roue_arriere_*, n° de roue de la physique] (modèle v27)
-var amortisseur_avant: Node3D = null   # tourne avec le braquage de la roue avant
-var rotation_amortisseur_avant := Basis.IDENTITY
-var rayon_roue := 0.18
 var lueurs: Array = []               # [nœud, matériau, propulseur de la physique, couleur faible, couleur forte, énergie min, énergie max]
 var panaches: Array = []             # [nœud, matériau, propulseur de la physique, échelle de repos, axe (0,1,2), couleur faible, couleur forte]
 const SHADER_PANACHE := """
@@ -273,7 +271,19 @@ func _ready() -> void:
 	commandes = Commandes.new()
 	commandes.charger()      # réglages de la dernière partie (sinon : disposition par défaut)
 	commandes.appliquer()
-	vaisseau = VaisseauPhysique.new()
+	# le vaisseau : construit à partir de son plan (celui choisi dans l'atelier, sinon le chasseur de départ)
+	var plan = Plan.par_defaut()
+	var chemin_plan := Partie.plan_choisi()
+	if chemin_plan != Plan.PLAN_PAR_DEFAUT:
+		var autre = Plan.new()
+		if autre.charger(chemin_plan):
+			plan = autre
+		else:
+			push_warning("Plan « %s » illisible : chasseur de départ. %s" % [chemin_plan, "; ".join(autre.erreurs)])
+	vaisseau = VaisseauPhysique.new(plan)
+	# lancé depuis l'atelier ou l'accueil : devant le hangar ; lancé tout seul (ou --mesure) : en orbite
+	if Partie.depart() == Partie.DEPART_HANGAR and _mesure.is_empty():
+		depart = Partie.DEPART_HANGAR
 	vaisseau.gm = GRAVITE_SURFACE * RAYON_PLANETE * RAYON_PLANETE
 	vaisseau.rayon_planete = RAYON_PLANETE
 	vaisseau.omega_planete = TAU / DUREE_JOUR
@@ -283,6 +293,8 @@ func _ready() -> void:
 	_brancher_lumiere()
 	vaisseau.trou_de_ver = trou_de_ver
 	reperes.preparer(vaisseau)   # après la lune : ajoute la gravité du Soleil et de la compagne
+	if depart == Partie.DEPART_HANGAR:
+		_poser_devant_hangar()   # après le relief et les astres : il se pose sur le vrai sol
 	_creer_hud()
 	_appliquer_vue()
 	droide = Droide.new()
@@ -293,6 +305,12 @@ func _ready() -> void:
 	son.name = "Son"
 	add_child(son)
 	son.installer(vaisseau, pilote, camera, oeil_pilote)
+
+
+## Départ « devant le hangar » : posé sur ses roues, à l'arrêt, nez à l'opposé du Soleil du départ.
+func _poser_devant_hangar() -> void:
+	vaisseau.poser_au_sol(LIEU_HANGAR, -LumiereJeu.VERS_SOLEIL.normalized())
+	gaz = 0.0
 
 
 ## Étape 8 : le système de lumière (vrai Soleil, planète en rayons, œil du pilote). Sans sa partie C++,
@@ -460,48 +478,9 @@ func _creer_pilote_et_cockpit() -> void:
 	if logement != null and ResourceLoader.exists(MODELE_DROIDE):
 		modele_droide = (load(MODELE_DROIDE) as PackedScene).instantiate()
 		logement.add_child(modele_droide)
-	for nom in vaisseau.ailes_def:
-		var n := exterieur.find_child("Charniere_" + nom, true, false) as Node3D
-		if n != null:
-			charnieres[nom] = n
-	for nom in ["Train_avant", "Train_arriere_gauche", "Train_arriere_droit"]:
-		var n := exterieur.find_child(nom, true, false) as Node3D
-		if n != null:
-			var extras = n.get_meta("extras", {})
-			if not (extras is Dictionary):
-				extras = {}
-			if extras.get("type", "") == "piston":
-				# jambe qui coulisse (vérin) : translation selon Z de Blender = Y de Godot
-				trains.append([n, "piston", float(extras.get("course_sorti_m", -0.56)), n.position])
-			elif extras.get("type", "") == "pivot_oblique":
-				# modèle v26 : jambe arrière qui pivote autour d'un axe en biais (axe_godot). Sortie, elle
-				# part vers l'extérieur sous le réacteur d'aile ; rentrée, elle se couche vers l'avant dans
-				# le ventre. Le pied (v27 : la fusée et sa roue) reste parallèle à la coque (biellette).
-				var a: Array = extras.get("axe_godot", [1.0, 0.0, 0.0])
-				var cote := String(nom).trim_prefix("Train_arriere_")
-				trains.append([n, "oblique", float(extras.get("angle_rentre_deg", 90.0)), n.position,
-					Vector3(float(a[0]), float(a[1]), float(a[2])).normalized(),
-					n.find_child("Pied_arriere_" + cote, true, false), n.find_child("Jambe_axe_arriere_" + cote, true, false)])
-			else:
-				# jambe qui pivote autour de X : angle rentré lu dans le modèle
-				trains.append([n, "rotation", float(extras.get("angle_rentre_deg", -90.0)), n.position])
-	# trappes du train : elles tournent autour de l'axe avant-arrière (Y de Blender = -Z de Godot)
-	for n in exterieur.find_children("Charniere_Trappe_*", "Node3D", true, false):
-		var extras = n.get_meta("extras", {})
-		var ouvert := 0.0
-		if extras is Dictionary and extras.has("angle_ouvert_deg"):
-			ouvert = -float(extras["angle_ouvert_deg"])
-		trappes.append([n, ouvert, String(n.name).contains("levage")])
-	tuyere = exterieur.find_child("Pivot_tuyere_centrale", true, false) as Node3D
-	for nom in ["Moteur_levage_gauche", "Moteur_levage_droit"]:
-		var n := exterieur.find_child(nom, true, false) as Node3D
-		if n != null:
-			var extras = n.get_meta("extras", {})
-			var course := -0.32
-			if extras is Dictionary:
-				course = float(extras.get("course_sorti_m", course))
-			moteurs_levage.append([n, n.position, course])
-	_trouver_amortisseurs_et_lueurs()
+	# ailes, train, trappes, moteurs de levage, tuyère, amortisseurs : le même code que l'atelier
+	modele = ModeleVaisseau.new(exterieur, vaisseau)
+	_trouver_lueurs()
 	var oeil := cockpit.find_child("Oeil_pilote", true, false) as Node3D
 	if oeil != null:
 		oeil_pilote = oeil.position
@@ -579,72 +558,11 @@ func _appliquer_vue() -> void:
 
 ## Ailes et train : le modèle suit exactement l'état de la physique (mêmes angles que le calcul des poussées).
 func _animer_modele() -> void:
-	for nom in charnieres:
-		(charnieres[nom] as Node3D).rotation = Vector3(0, 0, deg_to_rad(vaisseau.angle_aile(nom)))
-	# sortie du train : d'abord les trappes s'ouvrent (premiers 30 %), puis les jambes descendent ;
-	# en rentrant, c'est l'inverse (les jambes remontent, puis les trappes se ferment)
-	var porte := clampf(vaisseau.train / PART_TRAPPES, 0.0, 1.0)
-	var jambe := clampf((vaisseau.train - PART_TRAPPES) / (1.0 - PART_TRAPPES), 0.0, 1.0)
-	for t in trains:
-		if t[1] == "piston":
-			(t[0] as Node3D).position = (t[3] as Vector3) + Vector3(0, float(t[2]) * jambe, 0)
-		elif t[1] == "oblique":
-			var q := Quaternion(t[4] as Vector3, deg_to_rad(float(t[2]) * (1.0 - jambe)))
-			(t[0] as Node3D).quaternion = q
-			if t[5] != null and t[6] != null:
-				(t[5] as Node3D).quaternion = (q * (t[6] as Node3D).quaternion).inverse()
-		else:
-			(t[0] as Node3D).rotation = Vector3(deg_to_rad(lerpf(float(t[2]), 0.0, jambe)), 0, 0)
-	# moteurs de levage : d'abord leurs trappes s'ouvrent, puis le vérin les descend (l'inverse en rentrant)
-	var s_levage: float = vaisseau.sortie_levage()
-	var porte_levage := clampf(s_levage / PART_TRAPPES, 0.0, 1.0)
-	var verin := clampf((s_levage - PART_TRAPPES) / (1.0 - PART_TRAPPES), 0.0, 1.0)
-	for t in trappes:
-		var ouverture: float = porte_levage if t[2] else porte
-		(t[0] as Node3D).rotation = Vector3(0, 0, deg_to_rad(float(t[1]) * ouverture))
-	for m in moteurs_levage:
-		(m[0] as Node3D).position = (m[1] as Vector3) + Vector3(0, float(m[2]) * verin, 0)
-	if tuyere != null:
-		# tuyère en 3 anneaux (v18) : chacun tourne d'un tiers de l'angle
-		var n_tuyere := tuyere
-		var tiers := deg_to_rad(vaisseau.angle_tuyere()) / 3.0
-		for nom in ["Pivot_tuyere_centrale_2", "Pivot_tuyere_centrale_3", ""]:
-			n_tuyere.rotation = Vector3(tiers, 0, 0)
-			if nom == "":
-				break
-			n_tuyere = n_tuyere.find_child(nom, true, false) as Node3D
-			if n_tuyere == null:
-				break
+	modele.poser(vaisseau)
 
 
-## Modèle v20 : amortisseurs, ressorts, roue avant ; v19 : lueurs et jets des moteurs.
-func _trouver_amortisseurs_et_lueurs() -> void:
-	var roue_de := {"Amortisseur_avant": 0, "Amortisseur_arriere_gauche": 1, "Amortisseur_arriere_droit": 2,
-		"Ressort_arriere_gauche": 1, "Ressort_arriere_droit": 2}
-	for nom in roue_de:
-		var n := exterieur.find_child(nom, true, false) as Node3D
-		if n == null:
-			continue
-		var e = n.get_meta("extras", {})
-		if nom.begins_with("Ressort"):
-			var l := 0.18
-			if e is Dictionary:
-				l = float(e.get("longueur_repos_m", l))
-			ressorts.append([n, n.scale, roue_de[nom], l])
-		else:
-			amortisseurs.append([n, n.position, roue_de[nom]])
-			if nom == "Amortisseur_avant":
-				amortisseur_avant = n
-				rotation_amortisseur_avant = n.basis
-	roue_avant = exterieur.find_child("Roue_avant", true, false) as Node3D
-	for cote in [["gauche", 1], ["droit", 2]]:
-		var r := exterieur.find_child("Roue_arriere_" + cote[0], true, false) as Node3D
-		if r != null:
-			roues_arriere.append([r, cote[1]])
-	if roue_avant != null:
-		var e = roue_avant.get_meta("extras", {})
-		if e is Dictionary:
-			rayon_roue = float(e.get("rayon_m", rayon_roue))
+## Modèle v19 : lueurs et jets des moteurs.
+func _trouver_lueurs() -> void:
 	# n° du moteur de la physique pour chaque point de poussée du modèle
 	var num := {}
 	for m in vaisseau.moteurs:
@@ -735,28 +653,9 @@ func _animer_lueurs() -> void:
 			mat.set_shader_parameter("puissance", 1.0)
 
 
-## Amortisseurs et ressorts : ils s'écrasent comme dans la physique ; la roue avant tourne en roulant.
+## Amortisseurs et ressorts : ils s'écrasent comme dans la physique ; les roues tournent en roulant.
 func _animer_amortisseurs(delta: float) -> void:
-	var c: PackedFloat64Array = vaisseau.compression_roues
-	for a in amortisseurs:
-		(a[0] as Node3D).position = (a[1] as Vector3) + Vector3(0, c[a[2]], 0)
-	for r in ressorts:
-		var sc: Vector3 = r[1]
-		sc.y *= maxf(0.05, (float(r[3]) - c[r[2]]) / float(r[3]))
-		(r[0] as Node3D).scale = sc
-	if amortisseur_avant != null:
-		# la roue avant (et sa fourche) tourne avec le braquage, autour de l'axe de l'amortisseur
-		amortisseur_avant.basis = rotation_amortisseur_avant * Basis(Vector3.UP, vaisseau.braquage)
-	if roue_avant != null and vaisseau.au_sol and c[0] > 0.0:
-		var dir_roue := Vector3(-sin(vaisseau.braquage), 0.0, -cos(vaisseau.braquage))
-		var avance: float = (Basis(vaisseau.orientation).inverse() * vaisseau.vitesse_par_rapport_au_sol()).dot(dir_roue)
-		roue_avant.rotate_x(-avance / rayon_roue * delta)
-	# roues arrière (v27) : elles roulent dans l'axe du vaisseau, et ne tournent pas frein de parc serré
-	if vaisseau.au_sol and not vaisseau.frein_parc:
-		var avance_ar: float = -(Basis(vaisseau.orientation).inverse() * vaisseau.vitesse_par_rapport_au_sol()).z
-		for r in roues_arriere:
-			if c[r[1]] > 0.0:
-				(r[0] as Node3D).rotate_x(-avance_ar / rayon_roue * delta)
+	modele.amortir(vaisseau, delta)
 
 
 func _label(taille: int, couleur := Color(0.75, 0.95, 0.8)) -> Label:
@@ -819,7 +718,7 @@ func _ecrire_aide() -> void:
 		+ "Pilote auto : %s garder le cap   %s s'arrêter   %s atterrir (une touche de pilotage le coupe)\n" % [c.resume("pilote_cap"), c.resume("pilote_arret"), c.resume("pilote_atterrir")]
 		+ "%s : stabilisateur   %s : pause   Temps : %s %s %s %s %s %s, loin des astres %s %s, ou %s / %s\n" % [c.resume("stabilisateur"), c.resume("pause"), c.resume("temps_x1"), c.resume("temps_x10"), c.resume("temps_x100"), c.resume("temps_x1000"), c.resume("temps_x10000"), c.resume("temps_x100000"), c.resume("temps_x1000000"), c.resume("temps_x10000000"), c.resume("temps_moins"), c.resume("temps_plus")]
 		+ "Puissance des moteurs (relativité) : %s moins   %s plus\n" % [c.resume("poussee_moins"), c.resume("poussee_plus")]
-		+ "%s : remettre en orbite   %s : recommencer   %s : tests   %s : cacher l'aide\n" % [c.resume("remettre_orbite"), c.resume("recommencer"), c.resume("tests"), c.resume("aide")]
+		+ "%s : remettre en orbite   %s : recommencer (%s)   %s : retour à l'atelier   %s : tests   %s : cacher l'aide\n" % [c.resume("remettre_orbite"), c.resume("recommencer"), "devant le hangar" if depart == Partie.DEPART_HANGAR else "en orbite", c.resume("atelier"), c.resume("tests"), c.resume("aide")]
 		+ "%s : ailes   %s : train d'atterrissage   %s : vol vertical   %s : vue cockpit / extérieure\n" % [c.resume("ailes"), c.resume("train"), c.resume("vol_vertical"), c.resume("vue")]
 		+ "Au sol : le lacet tourne aussi la roue avant   %s (maintenir) : freins des roues (frein de parc automatique à l'arrêt, gaz à zéro)\n" % c.resume("frein")
 		+ "Tourner la tête (ou la caméra) : %s   %s : regarder droit devant   %s (maintenir) : zoom\n" % [_aide_tete(), c.resume("regard_centre"), c.resume("zoom")]
@@ -920,12 +819,20 @@ func _lire_boutons() -> void:
 		aide_visible = not aide_visible
 		aide.visible = aide_visible
 	var recommencer := _appui("recommencer")
-	if _appui("remettre_orbite") or recommencer:
+	var orbite := _appui("remettre_orbite")
+	if orbite or recommencer:
 		ordinateur.activer(PiloteAuto.AUCUN, vaisseau)
 		gaz = 0.0
 		acc_temps = 1
 		reperes.revenir_maison(vaisseau)
-		vaisseau.placer_en_orbite(ALTITUDE_DEPART)
+		if recommencer and depart == Partie.DEPART_HANGAR:
+			_poser_devant_hangar()   # recommencer : on repart d'où on est parti
+		else:
+			vaisseau.placer_en_orbite(ALTITUDE_DEPART)
+	if _appui("atelier"):
+		Partie.aller_atelier(get_tree())   # le jeu est libéré, l'atelier rechargé
+		clics.clear()
+		return
 	clics.clear()
 	if Input.is_action_just_pressed("tests"):
 		get_tree().change_scene_to_file("res://scenes/tests.tscn")
@@ -1579,7 +1486,7 @@ func _mettre_a_jour_message() -> void:
 	elif vaisseau.ecrase:
 		message.text = "ÉCRASÉ (impact à %.0f m/s)\nR pour recommencer" % vaisseau.vitesse_impact
 	elif vaisseau.au_sol:
-		message.text = "Posé (impact à %.1f m/s)" % vaisseau.vitesse_impact
+		message.text = "Posé (impact à %.1f m/s)" % vaisseau.vitesse_impact if vaisseau.vitesse_impact >= 0.05 else "Posé"
 	else:
 		message.text = ""
 

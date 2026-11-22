@@ -1,6 +1,8 @@
 extends Node
 ## Tests de l'atelier, étape 1 : le PLAN du vaisseau (scripts/atelier/plan.gd), son catalogue de pièces
 ## (scripts/atelier/catalogue.gd), et la physique construite à partir du plan.
+## Étape 2 : l'écran de l'atelier (tableau ingénieur, catalogue, fiches, caméra, choix d'une pièce dans la
+## vue 3D), le départ posé au sol devant le hangar, et le passage accueil / atelier / jeu.
 ## Ligne de commande :
 ##   Godot_console.exe --headless --path . res://scenes/tests_atelier.tscn
 ## Les valeurs « d'avant » viennent du code d'avant l'atelier (vaisseau écrit en dur), gardées dans
@@ -11,6 +13,17 @@ const Catalogue = preload("res://scripts/atelier/catalogue.gd")
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
 const Aerodynamique = preload("res://scripts/physique/aerodynamique.gd")
 const ANCIEN := "res://outils/plan/ancien_code_v27.json"
+const Analyse = preload("res://scripts/atelier/analyse.gd")
+const CameraAtelier = preload("res://scripts/atelier/camera_atelier.gd")
+const Partie = preload("res://scripts/partie.gd")
+const Atmosphere = preload("res://scripts/physique/atmosphere.gd")
+const SCENE_ATELIER := "res://scenes/atelier.tscn"
+## Mêmes valeurs que scripts/jeu.gd (le test ne charge pas le jeu, trop lourd)
+const RAYON_PLANETE := 600000.0
+const GRAVITE_SURFACE := 9.81
+const DUREE_JOUR := 7200.0
+const LIEU_HANGAR := Vector3(0.3635219, 0.5054473, 0.7825438)
+const VERS_SOLEIL := Vector3(1.0, 0.25, 0.2)
 
 ## Rôles des 22 petits propulseurs dans l'ancien code (écrits à la main) : [axe, signe]
 const ROLES_ANCIENS := {
@@ -35,6 +48,11 @@ func _ready() -> void:
 	_tests_ensembles()
 	_tests_erreurs()
 	_tests_vaisseau()
+	_tests_pose_au_sol()
+	_tests_analyse()
+	_tests_camera()
+	_tests_partie()
+	await _tests_ecran_atelier()
 	print("=== Atelier : %d / %d réussis ===" % [reussis, reussis + rates])
 	get_tree().quit(0 if rates == 0 else 1)
 
@@ -408,3 +426,337 @@ func _tests_vaisseau() -> void:
 	_resultat(ok, "Rotation avec l'inertie complète",
 		"10 s de rotation libre : moment cinétique %.1f → %.1f kg·m²/s (écart relatif %.8f), énergie %.1f → %.1f J." % [
 			l0.length(), l1.length(), (l1 - l0).length() / l0.length(), e0, e1])
+
+
+# =====================================================================
+# ÉTAPE 2 — A. POSÉ AU SOL (atelier et départ « devant le hangar »)
+# =====================================================================
+## Un vaisseau sur la planète du jeu (sol lisse si relief est vide).
+static func _vaisseau_planete(relief := Callable(), tourne := false):
+	var v = VaisseauPhysique.new()
+	v.gm = GRAVITE_SURFACE * RAYON_PLANETE * RAYON_PLANETE
+	v.rayon_planete = RAYON_PLANETE
+	v.relief = relief
+	if tourne:
+		v.omega_planete = TAU / DUREE_JOUR
+		v.atmosphere = Atmosphere.new(RAYON_PLANETE, v.omega_planete)
+	return v
+
+
+## Position du centre de gravité dans le repère de la planète (qui tourne), en 64 bits.
+static func _pos_planete(v) -> PackedFloat64Array:
+	return v._vers_planete_64(v.px, v.py, v.pz)
+
+
+## Vitesse par rapport au sol (m/s).
+static func _vitesse_par_sol(v) -> float:
+	return (Vector3(v.vx, v.vy, v.vz) - v.vitesse_sol(v.px, v.py, v.pz)).length()
+
+
+## Laisse le vaisseau au repos pendant « secondes » ; renvoie le déplacement par rapport au sol (m).
+static func _attendre_au_sol(v, secondes: float) -> float:
+	var p0 := _pos_planete(v)
+	for i in roundi(secondes * 240.0):
+		v.commander(0.0, 0.0, 0.0, 0.0)
+		v.pas(1.0 / 240.0)
+	var p1 := _pos_planete(v)
+	return sqrt(pow(p1[0] - p0[0], 2) + pow(p1[1] - p0[1], 2) + pow(p1[2] - p0[2], 2))
+
+
+## Plus petit écart entre le bas d'une roue (amortisseur écrasé) et le sol (m) : ≈ 0 quand il est posé.
+static func _ecart_roues_sol(v) -> float:
+	var b := Basis(v.orientation)
+	var e := INF
+	for k in v.roues.size():
+		var bas: Vector3 = (v.roues[k] as Vector3) + Vector3(0.0, v.compression_roues[k], 0.0)
+		var d: Vector3 = b * (bas - v.centre_gravite)
+		# en 64 bits (un Vector3 à 600 km ne voit que des pas de 6 cm)
+		var qx: float = v.px + d.x
+		var qy: float = v.py + d.y
+		var qz: float = v.pz + d.z
+		e = minf(e, sqrt(qx * qx + qy * qy + qz * qz) - (v.rayon_planete + v.hauteur_sol(qx, qy, qz)))
+	return e
+
+
+func _verifier_pose(v, nom: String, endroit: String) -> void:
+	var vit := _vitesse_par_sol(v)
+	var e := _ecart_roues_sol(v)
+	var impact: float = v.vitesse_impact   # le calage n'est pas un atterrissage : 0
+	var comp_ok := true
+	for k in v.roues.size():
+		comp_ok = comp_ok and v.compression_roues[k] > 0.005 and v.compression_roues[k] < float(v.course_train[k])
+	var derive := _attendre_au_sol(v, 5.0)
+	var ok: bool = v.au_sol and not v.ecrase and vit < 0.01 and absf(e) < 0.03 and comp_ok and derive < 0.05 \
+		and v.train == 1.0 and v.ailes == 0.0 and impact == 0.0
+	_resultat(ok, nom, "%s : posé %s, écrasé %s, vitesse %.4f m/s par rapport au sol, roues à %.1f mm du sol, amortisseurs écrasés de %s cm, train sorti, ailes repliées, pas d'« impact » (%.1f) ; 5 s plus tard il a bougé de %.1f mm." % [
+		endroit, v.au_sol, v.ecrase, vit, e * 1000.0, ", ".join(Array(v.compression_roues).map(func(x): return "%.1f" % (x * 100.0))),
+		impact, derive * 1000.0])
+
+
+func _tests_pose_au_sol() -> void:
+	# a. sol lisse (comme dans le hangar de l'atelier)
+	var v = _vaisseau_planete()
+	v.poser_au_sol(Vector3.UP, Vector3.FORWARD, 2.0)
+	_verifier_pose(v, "Posé au sol : sol lisse", "Pôle de la planète, sol plat")
+	# b. sol bosselé et en pente (3°), planète qui tourne, avec l'air
+	var bosses := func(x: float, y: float, z: float) -> float:
+		var r := sqrt(x * x + y * y + z * z)
+		var u := Vector3(x, y, z) / r
+		return 0.35 * sin(u.x * 9000.0) * cos(u.z * 7000.0) + u.z * RAYON_PLANETE * tan(deg_to_rad(3.0))
+	v = _vaisseau_planete(bosses, true)
+	v.poser_au_sol(Vector3(0.2, 1.0, 0.1), Vector3(1.0, 0.0, -0.3), 2.0)
+	_verifier_pose(v, "Posé au sol : bosses et pente", "Sol bosselé (±35 cm) en pente de 3°, planète qui tourne")
+	# c. le vrai endroit du hangar, sur le vrai relief de la planète (partie C++ de la lumière)
+	if not ClassDB.class_exists("ArbreLumiere"):
+		_resultat(false, "Départ devant le hangar", "partie C++ de la planète absente : relief introuvable")
+		return
+	var arbre = ClassDB.instantiate("ArbreLumiere")
+	arbre.configurer(RAYON_PLANETE, 7, 1024)   # même planète que le jeu (lumiere_jeu.gd : GRAINE 7)
+	var relief := func(x: float, y: float, z: float) -> float: return arbre.hauteur_sol(PackedFloat64Array([x, y, z]))
+	v = _vaisseau_planete(relief, true)
+	v.poser_au_sol(LIEU_HANGAR, -VERS_SOLEIL.normalized(), 2.0)
+	var haut := Vector3(v.px, v.py, v.pz).normalized()
+	var n: Vector3 = v.normale_sol(v.px, v.py, v.pz)
+	var pente := rad_to_deg(haut.angle_to(n))
+	var soleil := 90.0 - rad_to_deg(haut.angle_to(VERS_SOLEIL.normalized()))
+	var altitude: float = Vector3(v.px, v.py, v.pz).length() - RAYON_PLANETE
+	var nez: Vector3 = -(Basis(v.orientation).z)
+	var dos_au_soleil := nez.dot(VERS_SOLEIL.normalized()) < 0.0
+	_resultat(pente < 4.0 and soleil > 20.0 and dos_au_soleil, "Départ devant le hangar : l'endroit",
+		"Pente %.1f° sous le vaisseau, altitude %.0f m, Soleil à %.0f° au-dessus de l'horizon (de jour), nez à l'opposé du Soleil : %s." % [
+			pente, altitude, soleil, dos_au_soleil])
+	_verifier_pose(v, "Départ devant le hangar : posé", "Vrai relief de la planète")
+
+
+# =====================================================================
+# ÉTAPE 2 — B. TABLEAU INGÉNIEUR, CATALOGUE, RECHERCHE, FICHES
+# =====================================================================
+func _tests_analyse() -> void:
+	var a = Analyse.new()
+	var v = VaisseauPhysique.new()
+	var t: Dictionary = a.tableau()
+	var ok: bool = absf(float(t["masse"]) - v.masse) < 0.001 and absf(float(t["masse"]) - 8534.6) < 0.1 \
+		and absf(float(t["poussee_avant"]) - 1.0e6) < 1.0 and int(t["moteurs_principaux"]) == 5 \
+		and absf(float(t["poussee_verticale"]) - v.poussee_verticale_max) < 0.001 \
+		and float(t["poussee_verticale"]) > 200000.0 and float(t["poussee_verticale"]) < 220000.0 \
+		and bool(t["peut_decoller"]) and absf(float(t["poussee_poids"]) - 1.0e6 / (v.masse * 9.81)) < 1e-6
+	_resultat(ok, "Tableau ingénieur = physique du jeu",
+		"masse %.1f kg, poussée vers l'avant %.0f kN (5 moteurs), décollage vertical %.1f kN (× %.2f le poids), poussée / poids %.2f." % [
+			t["masse"], float(t["poussee_avant"]) / 1000.0, float(t["poussee_verticale"]) / 1000.0, t["rapport_vertical"], t["poussee_poids"]])
+	var tu: Array = a.tuiles()
+	ok = tu.size() == 7 and String(tu[0][1]) == "8 534,6 kg" and String(tu[1][1]) == "1 000 kN"
+	_resultat(ok, "Tuiles du tableau", " | ".join(tu.map(func(x): return "%s : %s" % [x[0], x[1]])))
+	# couple : la poussée des 5 moteurs passe presque par le centre de gravité, les propulseurs compensent
+	var c: Vector3 = t["couple_moteurs"]
+	ok = float(t["decalage_poussee"]) < 0.05 and bool(t["couple_compense"])
+	_resultat(ok, "Couple des moteurs", "%.0f N·m : poussée à %.1f cm du centre de gravité, compensée par les propulseurs : %s." % [
+		c.length(), float(t["decalage_poussee"]) * 100.0, t["couple_compense"]])
+	# chaque pièce dans une seule catégorie, et les bonnes au bon endroit
+	var pc: Dictionary = a.pieces_par_categorie()
+	var total := 0
+	var vus := {}
+	var doublon := false
+	for k in pc:
+		total += (pc[k] as Array).size()
+		for i in pc[k]:
+			doublon = doublon or vus.has(i)
+			vus[i] = true
+	ok = total == a.plan.pieces.size() and not doublon and (pc["moteurs"] as Array).has("moteur_central") \
+		and (pc["propulseurs"] as Array).filter(func(i): return a.piece(i)["type"] == "propulseur").size() == v.rcs.size() and (pc["ailes"] as Array).has("Aile_haut_gauche") \
+		and (pc["train"] as Array).has("Roue_avant") and (pc["cockpit"] as Array).has("Verriere")
+	_resultat(ok, "Catégories du catalogue", " · ".join(Analyse.CATEGORIES.map(func(x): return "%s %d" % [x[1], (pc[x[0]] as Array).size()])))
+	# recherche : sans accents, plusieurs mots, rien trouvé
+	var trouve := func(r: String) -> Array: return a.plan.pieces.filter(func(p): return a.correspond(p["id"], r)).map(func(p): return p["id"])
+	var r1: Array = trouve.call("tuyere")
+	var r2: Array = trouve.call("Tuyère")
+	var r3: Array = trouve.call("aile haut gauche")
+	var r4: Array = trouve.call("zzzz")
+	var r5: Array = trouve.call("titane")
+	ok = r1.size() > 0 and r1 == r2 and r3.has("Aile_haut_gauche") and not r3.has("Aile_bas_droit") and r4.is_empty() and r5.size() > 0
+	_resultat(ok, "Recherche dans le catalogue", "« tuyere » %d pièces (= « Tuyère »), « aile haut gauche » %d, « titane » %d, « zzzz » %d." % [
+		r1.size(), r3.size(), r5.size(), r4.size()])
+	# fiches
+	var f: Dictionary = a.fiche_piece("moteur_central")
+	var texte := " ".join(f["lignes"].map(func(l): return "%s=%s" % [l[0], l[1]]))
+	ok = String(f["titre"]) == "Poussée du moteur central" and texte.contains("200") and texte.contains("Poussée")
+	_resultat(ok, "Fiche d'un moteur", "%s — %s" % [f["titre"], texte.left(160)])
+	var rcs_id := String(v.rcs[0]["id"])
+	f = a.fiche_piece(rcs_id)
+	texte = " ".join(f["lignes"].map(func(l): return "%s=%s" % [l[0], l[1]]))
+	ok = texte.contains("Rôle") and Analyse.role_propulseur(v.rcs[0]) != ""
+	_resultat(ok, "Fiche d'un propulseur (rôle calculé)", "%s — rôle : %s" % [f["titre"], Analyse.role_propulseur(v.rcs[0])])
+	f = a.fiche_piece("Fuselage")
+	texte = " ".join(f["lignes"].map(func(l): return "%s=%s" % [l[0], l[1]]))
+	ok = texte.contains("kg") and texte.contains("%")
+	_resultat(ok, "Fiche d'une pièce de structure", "%s — %s" % [f["titre"], texte.left(160)])
+	ok = Analyse.nombre(8534.6, 1) == "8 534,6" and Analyse.nombre(-0.5, 2) in ["−0,50", "-0,50"]
+	_resultat(ok, "Nombres à la française", "%s ; %s ; %s" % [Analyse.nombre(8534.6, 1), Analyse.nombre(1.0e6), Analyse.nombre(-0.5, 2)])
+
+
+# =====================================================================
+# ÉTAPE 2 — C. CAMÉRA DE L'ATELIER
+# =====================================================================
+func _tests_camera() -> void:
+	var c = CameraAtelier.new()
+	add_child(c)
+	c.cible = Vector3(0, 1.5, 0)
+	c.distance = 20.0
+	c.vue("face")
+	var face: Vector3 = c.global_position
+	c.vue("droite")
+	var droite: Vector3 = c.global_position
+	c.vue("dessus")
+	var dessus: Vector3 = c.global_position
+	# devant = −Z (le nez) ; vue de droite : caméra du côté +X ; dessus : au-dessus
+	var ok: bool = face.z < -19.0 and absf(face.x) < 0.01 and droite.x > 19.0 and dessus.y > 21.0
+	_resultat(ok, "Caméra : vues toutes faites", "face %s, droite %s, dessus %s" % [face.round(), droite.round(), dessus.round()])
+	# jamais sous le sol, même en tirant vers le haut
+	c.vue("trois_quarts")
+	c.tourner(0.0, -5000.0)
+	var bas: float = c.global_position.y
+	c.vitesse = 4.0
+	var d0: float = c.distance
+	c.zoomer(1.0)
+	var d1: float = c.distance
+	c.vitesse = 0.25
+	c.zoomer(1.0)
+	var d2: float = c.distance
+	ok = bas >= c.sol_min - 0.001 and d1 < d0 and absf(d0 / d1 - pow(1.12, 4.0)) < 1e-3 and absf(d1 / d2 - pow(1.12, 0.25)) < 1e-3
+	_resultat(ok, "Caméra : sol et vitesse", "plus bas : %.2f m (limite %.2f) ; un cran de molette à ×4 : %.1f → %.1f m, à ×0,25 : → %.2f m" % [
+		bas, c.sol_min, d0, d1, d2])
+	# cadrer une boîte : tout est dans le champ
+	c.vitesse = 1.0
+	var boite := AABB(Vector3(-5, 0, -8), Vector3(10, 4, 16))
+	c.cadrer(boite)
+	var dedans := true
+	for i in 8:
+		var coin := boite.get_endpoint(i)
+		var vers: Vector3 = (coin - c.global_position).normalized()
+		dedans = dedans and rad_to_deg(vers.angle_to(c.direction())) < c.fov * 0.5 + 0.5
+	_resultat(dedans, "Caméra : cadrer", "boîte de 10 × 4 × 16 m vue en entier à %.1f m" % c.distance)
+	c.queue_free()
+
+
+# =====================================================================
+# ÉTAPE 2 — D. PASSAGE ENTRE LES ÉCRANS
+# =====================================================================
+## Scripts chargés par un script (preload / load de .gd), de proche en proche.
+static func _scripts_charges(chemin: String, vus: Dictionary) -> void:
+	if vus.has(chemin) or not FileAccess.file_exists(chemin):
+		return
+	vus[chemin] = true
+	var texte := FileAccess.get_file_as_string(chemin)
+	var re := RegEx.new()
+	re.compile("(?:preload|load)\\(\"(res://[^\"]+\\.gd)\"\\)")
+	for m in re.search_all(texte):
+		_scripts_charges(m.get_string(1), vus)
+
+
+func _tests_partie() -> void:
+	var avant = Engine.get_meta("partie") if Engine.has_meta("partie") else null
+	Partie.choisir_depart(Partie.DEPART_HANGAR)
+	var ok := Partie.depart() == Partie.DEPART_HANGAR
+	Partie.choisir_depart("")
+	ok = ok and Partie.depart() == ""
+	var plans: Array = Partie.plans_disponibles()
+	var v27 := plans.filter(func(p): return p["chemin"] == Plan.PLAN_PAR_DEFAUT)
+	ok = ok and v27.size() == 1 and String(v27[0]["nom"]) == "Chasseur v27"
+	_resultat(ok, "Accueil / atelier / jeu : ce qui passe d'un écran à l'autre", "départ gardé, %d plan(s) de vaisseau trouvé(s) : %s" % [
+		plans.size(), ", ".join(plans.map(func(p): return p["nom"]))])
+	if avant != null:
+		Engine.set_meta("partie", avant)
+	# l'atelier et l'accueil ne chargent rien du jeu (planète, lumière, son) : la mémoire reste libre
+	var lourds := ["res://scripts/jeu.gd", "res://scripts/lumiere_jeu.gd", "res://scripts/son/moteur_audio.gd", "res://scripts/droide.gd"]
+	for depart in ["res://scripts/atelier/atelier.gd", "res://scripts/accueil.gd"]:
+		var vus := {}
+		_scripts_charges(depart, vus)
+		var pris := lourds.filter(func(x): return vus.has(x))
+		_resultat(pris.is_empty(), "%s ne charge pas le jeu" % depart.get_file(), "%d scripts chargés, dont du jeu : %s" % [
+			vus.size(), "aucun" if pris.is_empty() else ", ".join(pris)])
+	var scene := String(ProjectSettings.get_setting("application/run/main_scene", ""))
+	_resultat(scene == Partie.SCENE_ACCUEIL, "Le jeu s'ouvre sur l'accueil", "scène de départ : %s" % scene)
+
+
+# =====================================================================
+# ÉTAPE 2 — E. L'ÉCRAN DE L'ATELIER
+# =====================================================================
+func _tests_ecran_atelier() -> void:
+	var at = (load(SCENE_ATELIER) as PackedScene).instantiate()
+	add_child(at)
+	await get_tree().process_frame
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	# le vaisseau est posé sur le sol du hangar (y = 0), sur ses roues
+	var h: float = at.hauteur_roues()
+	var boite: AABB = at.boite_vaisseau()
+	var ok: bool = absf(h) < 0.02 and at.vaisseau_pose.au_sol and boite.position.y > -0.05
+	_resultat(ok, "Atelier : vaisseau posé dans le hangar", "roues à %.1f mm du sol, point le plus bas du dessin à %.2f m, %d pièces dessinées sur %d" % [
+		h * 1000.0, boite.position.y, at.maillages.size(), at.plan.pieces.size()])
+	# toutes les pièces de structure ont leur dessin (on peut les choisir dans la vue 3D)
+	var sans: Array = at.plan.pieces.filter(func(p): return p["type"] == "structure" and not at.maillages.has(p["id"]))
+	_resultat(sans.is_empty(), "Atelier : chaque pièce de structure a son dessin", "sans dessin : %s" % (
+		"aucune" if sans.is_empty() else ", ".join(sans.map(func(p): return p["id"]))))
+	# clic dans la vue 3D : la pièce sous la souris
+	at.camera.vue("face")
+	at.camera.cadrer(boite)
+	await get_tree().process_frame
+	await get_tree().physics_frame
+	var fus: MeshInstance3D = at.maillages["Fuselage"][0]
+	var centre: Vector3 = (fus.global_transform * fus.get_aabb()).get_center()
+	var pos_ecran: Vector2 = at.camera.unproject_position(centre)
+	var sous: String = at.piece_sous(pos_ecran)
+	var a_cote: String = at.piece_sous(Vector2(2, 2))
+	_resultat(sous != "" and a_cote == "", "Atelier : clic sur une pièce", "au centre du fuselage (%s) : « %s » ; dans un coin de l'écran : « %s »" % [
+		pos_ecran.round(), sous, a_cote])
+	# choisir une pièce : fiche ouverte, pièce surlignée, sélectionnée dans la liste
+	at.choisir("piece", "Fuselage")
+	await get_tree().process_frame
+	var surlignee: bool = fus.material_overlay != null
+	var item = at.arbre.get_selected()
+	ok = at.fiche.visible and String(at.fiche_titre.text) == "Fuselage" and surlignee and item != null \
+		and String(item.get_metadata(0)["id"]) == "Fuselage"
+	_resultat(ok, "Atelier : fiche d'une pièce", "fiche « %s » (%d lignes), surlignée : %s, choisie dans la liste : %s" % [
+		at.fiche_titre.text, roundi(at.fiche_grille.get_child_count() * 0.5), surlignee, item != null])
+	# une pièce sans dessin (moteur) : flèche dans la vue
+	at.choisir("piece", "moteur_central")
+	await get_tree().process_frame
+	_resultat(at._repere_selection.get_child_count() == 1, "Atelier : pièce sans dessin montrée par une flèche",
+		"%d repère(s) pour le moteur central" % at._repere_selection.get_child_count())
+	# une catégorie entière
+	at.choisir("categorie", "propulseurs")
+	await get_tree().process_frame
+	_resultat(at._repere_selection.get_child_count() == at.vaisseau_pose.rcs.size(), "Atelier : choisir une catégorie",
+		"%d flèches pour %d petits propulseurs" % [at._repere_selection.get_child_count(), at.vaisseau_pose.rcs.size()])
+	at.deselectionner()
+	_resultat(not at.fiche.visible and fus.material_overlay == null, "Atelier : Échap / rien choisir", "fiche fermée, plus rien de surligné")
+	# recherche : la liste ne garde que ce qui correspond
+	at.recherche.text = "tuyere"
+	at.remplir_catalogue()
+	var feuilles := []
+	_feuilles(at.arbre.get_root(), feuilles)
+	var pieces_trouvees := feuilles.filter(func(m): return m["genre"] == "piece")
+	ok = pieces_trouvees.size() > 0 and pieces_trouvees.all(func(m): return String(m["id"]).to_lower().contains("tuyere"))
+	_resultat(ok, "Atelier : recherche dans la liste", "« tuyere » : %d pièces dans la liste" % pieces_trouvees.size())
+	at.recherche.text = ""
+	at.remplir_catalogue()
+	# fond neutre, centre de gravité, flèches de poussée
+	at.case_neutre.button_pressed = true
+	at.case_poussees.button_pressed = true
+	ok = not at.hangar.decor.visible and at._fleches_poussee.visible and at._fleches_poussee.get_child_count() == 6
+	at.case_neutre.button_pressed = false
+	at.case_poussees.button_pressed = false
+	_resultat(ok and at.hangar.decor.visible, "Atelier : fond neutre et flèches de poussée", "5 moteurs + la résultante : %d flèches" % at._fleches_poussee.get_child_count())
+	at.queue_free()
+	await get_tree().process_frame
+
+
+func _feuilles(it: TreeItem, sortie: Array) -> void:
+	if it == null:
+		return
+	var m = it.get_metadata(0)
+	if m is Dictionary and it.get_child_count() == 0:
+		sortie.append(m)
+	var e := it.get_first_child()
+	while e != null:
+		_feuilles(e, sortie)
+		e = e.get_next()
