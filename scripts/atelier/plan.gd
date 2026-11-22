@@ -209,6 +209,10 @@ func _placer_piece(p: Dictionary, xf: Transform3D, id: String, art: String) -> D
 		if q.has(k) and (q[k] as Vector3).length() > 0.0:
 			q[k] = (q[k] as Vector3).normalized()
 	# masse : centre placé, inertie tournée (B·I·Bᵀ, vrai aussi pour un miroir)
+	# orientation complète de la pièce dans le vaisseau (ensembles compris) : sert à la DESSINER
+	# (scripts/dessin_vaisseau.gd, étape 5) ; « position » est déjà placée, « rotation_deg » reste locale
+	var rot = p.get("rotation_deg", [0.0, 0.0, 0.0])
+	q["base"] = b * (Catalogue.rotation(rot) if rot is Array and (rot as Array).size() == 3 else Basis.IDENTITY)
 	var c: Vector3 = xf * (mp["centre"] as Vector3)
 	var inertie: Array = mp["inertie"]
 	if xf.basis != Basis.IDENTITY:

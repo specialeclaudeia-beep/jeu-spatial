@@ -21,6 +21,13 @@ extends Node3D
 ## (et ce qui est posé dessus) est montrée seule, sur un plateau, avec ses propres chiffres ; on peut y poser
 ## des pièces dessus, puis « Remettre en place » (I) : tout revient, rien n'a bougé dans le plan.
 ##
+## Étape 5 : le CONTRÔLE AVANT LE VOL (scripts/atelier/controle_vol.gd). La 9e tuile du tableau, « AVANT LE
+## VOL », dit si le vaisseau est prêt : vitesse du PC estimée (le jeu dessine désormais chaque pièce du plan,
+## et fusionne les pièces posées de même matière), lumière (couleurs impossibles, vitres, pièce devant la
+## verrière), au sol (il tient sur ses roues ?), en vol, symétrie. « Lancer » refuse ce qui casserait le
+## jeu (pièce qui flotte, vaisseau trop lourd pour le PC) ; pour un simple avertissement, une fenêtre
+## explique et propose « Lancer quand même ».
+##
 ## Visuel PROVISOIRE (hangar, menus, couleurs, dessin des pièces posées). La physique, elle, est la vraie :
 ## après chaque changement, le vaisseau est reconstruit par le même code que le jeu (plan → physique), il se
 ## repose sur ses roues, et le tableau ingénieur est recalculé.
@@ -37,6 +44,7 @@ const Partie = preload("res://scripts/partie.gd")
 const Edition = preload("res://scripts/atelier/edition.gd")
 const Pieces = preload("res://scripts/atelier/pieces_toutes_faites.gd")
 const DessinVaisseau = preload("res://scripts/dessin_vaisseau.gd")
+const ControleVol = preload("res://scripts/atelier/controle_vol.gd")
 
 const MODELE_EXTERIEUR := "res://modeles/vaisseau/vaisseau_exterieur.glb"
 const MODELE_COCKPIT := "res://modeles/vaisseau/cockpit.glb"
@@ -79,6 +87,8 @@ var _corps_salle: Array = []             # formes cliquables du morceau isolé (
 var symetrie := true                     # poser aussi la jumelle de l'autre côté
 var flottantes := {}                     # pièces (ou pièces du chasseur) qui ne touchent rien → vrai
 var nb_flottantes := 0                   # pièces posées et modules qui flottent
+var controle                             # contrôle avant le vol (ControleVol), refait avec le tableau
+var fenetre_controle: Control            # fenêtre « Contrôle avant le vol » (ouverte par Lancer), ou null
 var _corps_v27 := {}                     # maillage du chasseur → [id de sa pièce, forme cliquable]
 var _corps_ajouts := {}                  # pièce posée → [formes cliquables]
 var _surlignes: Array = []
@@ -291,6 +301,13 @@ func _dessiner() -> void:
 			if not maillages.has(id):
 				maillages[id] = []
 			(maillages[id] as Array).append(mi)
+	# pièces écrites dans le plan sans dessin Blender (étape 5) : on les choisit comme les autres pièces,
+	# et une pièce posée peut s'y fixer
+	for id in dessin.maillages_bruts:
+		var liste_b: Array = dessin.maillages_bruts[id]
+		maillages[id] = liste_b.duplicate()
+		for mi in liste_b:
+			_forme_cliquable(mi as MeshInstance3D, id, true)
 	_corps_ajouts.clear()
 	for id in dessin.maillages_ajouts:
 		var liste: Array = dessin.maillages_ajouts[id]
@@ -721,6 +738,10 @@ func choisir(genre: String, id: String, garder_pose := false) -> void:
 					_afficher_fiche(analyse.fiche_poussees())
 				"symetrie":
 					_afficher_fiche(analyse.fiche_symetrie())
+				"controle":
+					if controle == null:
+						controle = controle_vol()
+					_afficher_fiche(controle.fiche())
 	if genre != "analyse":
 		_bouton_salle(ids)
 	_selectionner_dans_liste()
@@ -1074,6 +1095,19 @@ func pieces_choisies() -> Array:
 					return (analyse.symetrie()["sans_jumelle"] as Array).duplicate()
 				"poussees":
 					return plan.pieces.filter(func(p): return p["type"] == "moteur").map(func(p): return p["id"])
+				"controle":
+					# en orange : les pièces de ce qui bloque ou avertit
+					var vus := {}
+					var ids := []
+					if controle != null:
+						for e in controle.a_montrer():
+							var c: Dictionary = e["choix"]
+							for el in (c["elements"] if String(c.get("genre", "")) == "groupe" else ([c] if not c.is_empty() else [])):
+								for i in _pieces_de(el):
+									if not vus.has(i):
+										vus[i] = true
+										ids.append(i)
+					return ids
 			return []
 	return _pieces_de(selection)
 
@@ -1190,6 +1224,11 @@ func _unhandled_input(e: InputEvent) -> void:
 	elif e is InputEventKey and e.pressed and not e.echo:
 		var k := e as InputEventKey
 		var ctrl := k.ctrl_pressed or k.meta_pressed
+		if fenetre_controle != null:
+			if k.keycode == KEY_ESCAPE:   # la fenêtre du contrôle avant le vol est ouverte : Échap la ferme
+				fermer_fenetre_controle()
+			get_viewport().set_input_as_handled()
+			return
 		match k.keycode:
 			KEY_ESCAPE:
 				if not pose.is_empty():
@@ -1696,7 +1735,8 @@ func verifier_flottantes() -> void:
 	var apres: Array = flottantes.keys()
 	apres.sort()
 	if apres != avant:
-		# la liste et la fiche disent aussi ce qui ne touche rien (en rouge)
+		# la liste et la fiche disent aussi ce qui ne touche rien (en rouge), la tuile AVANT LE VOL aussi
+		_remplir_tableau()
 		remplir_catalogue()
 		if not selection.is_empty() and _selection_existe():
 			choisir(String(selection["genre"]), String(selection["id"]), true)
@@ -1756,6 +1796,10 @@ func enregistrer() -> bool:
 		return true
 	if not edition.modifie and edition.chemin == "":
 		return true   # vaisseau du jeu pas changé : rien à écrire
+	# ce que l'atelier voit flotter : l'accueil (« Jouer ») le relit pour son contrôle avant le vol
+	var vues: Array = flottantes.keys()
+	vues.sort()
+	edition.donnees["atelier"] = {"flottantes": vues}
 	var err: Error = edition.enregistrer(dossier_vaisseaux)
 	if err != OK:
 		montrer_avis("Impossible d'enregistrer (%s)." % error_string(err))
@@ -1937,6 +1981,11 @@ func _remplir_tableau() -> void:
 		c.queue_free()
 	var en_salle := not salle.is_empty()
 	var tuiles: Array = analyse.tuiles_groupe(pieces_salle()) if en_salle else analyse.tuiles()
+	var details: Array = [] if en_salle else Analyse.DETAIL_TUILES.duplicate()
+	if not en_salle:
+		controle = controle_vol()
+		tuiles.append(controle.tuile())
+		details.append("controle")
 	for k in tuiles.size():
 		var t: Array = tuiles[k]
 		var p := PanelContainer.new()
@@ -1950,13 +1999,13 @@ func _remplir_tableau() -> void:
 		v.add_theme_constant_override("separation", 1)
 		p.add_child(v)
 		v.add_child(Style.label(t[0], 11, Style.ACCENT if en_salle else Style.TEXTE_DOUX))
-		v.add_child(Style.label(t[1], 19, Color.WHITE))
+		v.add_child(Style.label(t[1], 19, t[3] if t.size() > 3 else Color.WHITE))
 		var d := Style.label(t[2], 11, Style.TEXTE_DOUX)
 		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		d.custom_minimum_size = Vector2(100, 0)
 		v.add_child(d)
 		# un clic ouvre la page d'analyse détaillée (dans la salle à part : la fiche du morceau)
-		var detail: String = Analyse.DETAIL_TUILES[k] if not en_salle and k < Analyse.DETAIL_TUILES.size() else ""
+		var detail: String = details[k] if k < details.size() else ""
 		p.tooltip_text = "%s : %s\n%s\n\nClic : %s" % [t[0], t[1], t[2], "le détail" if not en_salle else "la fiche du morceau"]
 		p.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		p.mouse_entered.connect(func(): p.add_theme_stylebox_override("panel", survol))
@@ -2194,11 +2243,14 @@ func _ligne_cliquable(l: Dictionary) -> Control:
 	var h := HBoxContainer.new()
 	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(h)
-	var a := Style.label(String(l["texte"]), 13, Style.ACCENT if not choix.is_empty() else Style.TEXTE)
+	var a := Style.label(String(l["texte"]), 13, l["couleur"] if l.has("couleur") else (Style.ACCENT if not choix.is_empty() else Style.TEXTE))
 	a.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	a.custom_minimum_size = Vector2(60, 0)
-	a.clip_text = true
-	a.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	if l.has("detail"):
+		a.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART   # contrôle avant le vol : le titre entier
+	else:
+		a.clip_text = true
+		a.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	h.add_child(a)
 	var b := Style.label(String(l["valeur"]), 12, Style.TEXTE_DOUX)
 	b.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -2222,6 +2274,12 @@ func _ligne_cliquable(l: Dictionary) -> Control:
 		barre.add_child(plein)
 		barre.add_child(vide)
 		v.add_child(barre)
+	if l.has("detail"):
+		var d := Style.label(String(l["detail"]), 12, Style.TEXTE_DOUX)
+		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		d.custom_minimum_size = Vector2(200, 0)
+		d.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		v.add_child(d)
 	p.tooltip_text = "%s : %s" % [l["texte"], l["valeur"]]
 	if not choix.is_empty():
 		p.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -2276,6 +2334,12 @@ func _outils_ajout(id: String) -> void:
 			var o := OptionButton.new()
 			o.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			o.focus_mode = Control.FOCUS_NONE
+			# un nom de matière long (« Verre aluminosilicate feuilleté ») ne doit pas élargir la fiche (elle
+			# pousserait le bouton LANCER hors de l'écran) : le texte est coupé, le menu le montre en entier
+			o.fit_to_longest_item = false
+			o.clip_text = true
+			o.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			o.custom_minimum_size = Vector2(150, 0)
 			var choix: Array = d["choix"]
 			for k in choix.size():
 				var c := String(choix[k])
@@ -2647,10 +2711,18 @@ func _sauver_reglages() -> void:
 # =====================================================================
 # LANCER
 # =====================================================================
-## Lance le jeu (refusé si une pièce flotte ou si le plan a des erreurs) ; le vaisseau est enregistré avant.
-func lancer_jeu() -> bool:
+## Le contrôle avant le vol du vaisseau tel qu'il est (avec les pièces que l'atelier voit flotter).
+func controle_vol():
+	return ControleVol.new(plan, analyse if analyse != null and analyse.plan == plan else null, {"flottantes": flottantes.keys()})
+
+
+## Lance le jeu ; le vaisseau est enregistré avant. Le contrôle avant le vol passe d'abord : ce qui casserait
+## le jeu (plan avec des erreurs, pièce qui flotte, vaisseau trop lourd pour le PC) est refusé ; un
+## avertissement ouvre la fenêtre du contrôle, avec « Lancer quand même » (forcer = vrai).
+func lancer_jeu(forcer := false) -> bool:
 	if chargement.visible:
 		return false
+	fermer_fenetre_controle()
 	if not plan.valide():
 		montrer_avis("Impossible de lancer : le plan du vaisseau a des erreurs (voir la fiche).")
 		return false
@@ -2658,9 +2730,14 @@ func lancer_jeu() -> bool:
 		await get_tree().physics_frame
 		await get_tree().physics_frame
 		await get_tree().physics_frame
+	controle = controle_vol()
 	if nb_flottantes > 0:
 		montrer_avis("Impossible de lancer : %d pièce%s ne touche%s rien (en rouge). Pose-les contre le vaisseau (G), ou enlève-les (Suppr)." % [
 			nb_flottantes, "s" if nb_flottantes > 1 else "", "nt" if nb_flottantes > 1 else ""], 8.0)
+		ouvrir_fenetre_controle()
+		return false
+	if controle.bloque() or (controle.avertit() and not forcer):
+		ouvrir_fenetre_controle()
 		return false
 	finir_pose()
 	if not salle.is_empty():
@@ -2673,3 +2750,25 @@ func lancer_jeu() -> bool:
 	await get_tree().process_frame
 	Partie.lancer_jeu(get_tree(), Partie.DEPART_HANGAR)
 	return true
+
+
+## La fenêtre « Contrôle avant le vol », au milieu de l'écran : ce qui bloque (en rouge) ou avertit (en
+## orange), expliqué ; « Lancer quand même » seulement s'il n'y a pas de blocage.
+func ouvrir_fenetre_controle() -> void:
+	fermer_fenetre_controle()
+	if controle == null:
+		controle = controle_vol()
+	var boutons := [["Voir le détail", func():
+			fermer_fenetre_controle()
+			ouvrir_detail("controle"), false],
+		["Revenir à l'atelier", fermer_fenetre_controle, false]]
+	if not controle.bloque():
+		boutons.append(["▶  Lancer quand même", func(): lancer_jeu(true), true])
+	fenetre_controle = controle.fenetre(boutons, "Tout le contrôle : tuile « AVANT LE VOL » du tableau.")
+	ui.add_child(fenetre_controle)
+
+
+func fermer_fenetre_controle() -> void:
+	if fenetre_controle != null and is_instance_valid(fenetre_controle):
+		fenetre_controle.queue_free()
+	fenetre_controle = null
