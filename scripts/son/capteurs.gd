@@ -89,6 +89,18 @@ var dist_etoile := INF                            # m : étoile (ou trou noir) l
 var dist_astre := INF                             # m : centre de la planète ou de la lune la plus proche
 var rayon_astre := 0.0                            # m : son rayon
 
+# --- phase 5 : l'air en détail (scripts/son/air_son.gd), lecture seule ---
+var mach := 0.0                                   # nombre de Mach du vaisseau
+var part_libre := 0.0                             # part « molécules isolées » de l'air (0 = fluide), comme la physique
+var sortie_levage := 0.0                          # 0..1 : sortie des moteurs de levage (leurs trappes s'ouvrent d'abord)
+## Chaque plaque qui porte (12 bandes d'aile, puis les 2 dérives) : angle d'attaque (rad), vitesse de l'air vue (m/s),
+## surface (m²), corde (m), point (repère du vaisseau).
+var plaques_alpha := PackedFloat64Array()
+var plaques_v := PackedFloat64Array()
+var plaques_surface := PackedFloat64Array()
+var plaques_corde := PackedFloat64Array()
+var plaques_point := PackedVector3Array()
+
 const NOMS_AILES := ["haut_gauche", "haut_droit", "bas_gauche", "bas_droit"]
 const GM_ETOILE := 1.0e18                         # m³/s² : au-dessus, c'est une étoile (Soleil : 1,3e20 ; Jupiter : 1,3e17)
 const R_AIR := 287.05
@@ -190,6 +202,14 @@ func _lire_mouvement(v, dt: float) -> void:
 	pression_dehors = densite * R_AIR * temperature if densite > 0.0 else 0.0
 	air_f = v.aero.prise_f.duplicate()
 	air_c = v.aero.prise_c.duplicate()
+	mach = v.aero.mach
+	part_libre = v.aero.part_libre
+	sortie_levage = v.sortie_levage()
+	plaques_alpha = v.aero.prise_alpha.duplicate()
+	plaques_v = v.aero.prise_v.duplicate()
+	plaques_surface = v.aero.prise_surface.duplicate()
+	plaques_corde = v.aero.prise_corde.duplicate()
+	plaques_point = v.aero.prise_point.duplicate()
 	# marée : l'astre qui étire le plus (G·M / r³ le plus grand)
 	maree_k = 0.0
 	if v.gm != 0.0:

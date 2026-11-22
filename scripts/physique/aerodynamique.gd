@@ -62,6 +62,18 @@ var prise_f := PackedVector3Array([Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vec
 var prise_c := PackedVector3Array([Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO,
 	Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO])
 var _surface := 6   # surface en cours (prise du son)
+## Son, phase 5 : « prise » de chaque plaque (12 bandes d'aile, dans l'ordre des ailes ci-dessous, puis les 2 dérives),
+## en LECTURE SEULE : angle d'attaque vu par la plaque (rad, 0 à π/2), vitesse de l'air qu'elle voit (m/s), surface
+## (m²), corde (m), et son point (repère du vaisseau). Le son en tire le décrochage et le tremblement transsonique
+## (scripts/son/air_son.gd). Rien de ce qui est noté ici ne sert à la physique.
+const PRISE_PLAQUES := 14
+var prise_alpha := PackedFloat64Array()
+var prise_v := PackedFloat64Array()
+var prise_surface := PackedFloat64Array()
+var prise_corde := PackedFloat64Array()
+var prise_point := PackedVector3Array()
+var part_libre := 0.0            # part « molécules isolées » de l'air (0 = fluide, 1 = molécules seules), dernier calcul
+var _plaque_n := 0
 
 ## Dernières valeurs (affichage, tests).
 var mach := 0.0
@@ -117,6 +129,14 @@ func forces(vent_corps: Vector3, omega: Vector3, rho: float, son: float, ailes: 
 	_c_cumul = Vector3.ZERO
 	prise_f.fill(Vector3.ZERO)   # prise du son (lecture seule)
 	prise_c.fill(Vector3.ZERO)
+	if prise_alpha.size() != PRISE_PLAQUES:
+		for a in [prise_alpha, prise_v, prise_surface, prise_corde]:
+			a.resize(PRISE_PLAQUES)
+		prise_point.resize(PRISE_PLAQUES)
+	prise_v.fill(0.0)
+	prise_alpha.fill(0.0)
+	_plaque_n = 0
+	part_libre = 0.0
 	var v := vent_corps.length()
 	pression_dyn = 0.5 * rho * v * v
 	mach = v / maxf(son, 1.0)
@@ -129,6 +149,7 @@ func forces(vent_corps: Vector3, omega: Vector3, rho: float, son: float, ailes: 
 	# Régime moléculaire (molécules rares) : de 0 (fluide) à 1 (molécules seules), selon Knudsen
 	var kn := 6.63e-8 * 1.225 / rho / LONGUEUR
 	var libre := clampf((log(kn) / log(10.0) + 1.0) / 2.0, 0.0, 1.0)   # 0 sous Kn = 0,1 ; 1 au-dessus de Kn = 10
+	part_libre = libre   # prise du son (lecture seule)
 
 	# 1. Les 4 ailes, 3 bandes chacune. Ailes repliées l'une sur l'autre, ou très proches : elles se gênent
 	#    (biplan) ; l'écart entre l'aile du haut et celle du bas, rapporté à la corde, dit de combien.
@@ -152,7 +173,7 @@ func forces(vent_corps: Vector3, omega: Vector3, rho: float, son: float, ailes: 
 			var surface: float = corde * float(b[2])
 			var ecart := 2.0 * absf(float(b[0])) * sin(ouverture)
 			var gene := 0.5 + 0.35 * clampf(ecart / corde, 0.0, 1.0)
-			_plaque(p, normale, surface, ALLONGEMENT_AILES, gene, vent_corps, omega, rho, son, libre)
+			_plaque(p, normale, surface, ALLONGEMENT_AILES, gene, vent_corps, omega, rho, son, libre, corde)
 		_surface += 1
 	# 2. Les dérives
 	for d in DERIVES:
@@ -200,16 +221,25 @@ func forces(vent_corps: Vector3, omega: Vector3, rho: float, son: float, ailes: 
 
 ## Une plaque : force normale + frottement, au point p (repère du vaisseau).
 func _plaque(p: Vector3, n: Vector3, surface: float, ar: float, gene: float, vent_corps: Vector3,
-		omega: Vector3, rho: float, son: float, libre: float) -> void:
+		omega: Vector3, rho: float, son: float, libre: float, corde_prise := 0.0) -> void:
 	var r := p - CENTRE_GRAVITE
 	var w := vent_corps - omega.cross(r)   # air vu par la plaque
 	var v := w.length()
+	var k_prise := _plaque_n   # prise du son (lecture seule)
+	_plaque_n += 1
+	if k_prise < PRISE_PLAQUES:
+		prise_point[k_prise] = p
+		prise_surface[k_prise] = surface
+		prise_corde[k_prise] = corde_prise if corde_prise > 0.0 else sqrt(surface / ar)
 	if v < 1e-6:
 		return
 	var q := 0.5 * rho * v * v
 	var m := v / maxf(son, 1.0)
 	var wn := w.dot(n)
 	var alpha := asin(clampf(wn / v, -1.0, 1.0))   # > 0 : l'air frappe la face de dessous et pousse vers +n
+	if k_prise < PRISE_PLAQUES:
+		prise_alpha[k_prise] = absf(alpha)
+		prise_v[k_prise] = v
 	var cn := coef_normal(alpha, ar, m) * gene
 	# écoulement moléculaire : la plaque reçoit la quantité de mouvement des molécules qui la frappent
 	var cn_libre := 2.0 * sin(alpha) * absf(sin(alpha))

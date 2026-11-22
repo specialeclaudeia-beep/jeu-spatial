@@ -1,5 +1,5 @@
 extends Node
-## Tests automatiques du moteur audio (phases 1 à 4). À part des tests de physique.
+## Tests automatiques du moteur audio (phases 1 à 5). À part des tests de physique.
 ## Ligne de commande (dans le cloud ou sur le PC) :
 ##   godot --headless --path . res://scenes/tests_son.tscn
 ## Sans écran, Godot calcule quand même le son (pilote audio « Dummy ») : on peut mesurer ce qui sort.
@@ -18,6 +18,7 @@ const SolSon = preload("res://scripts/son/sol_son.gd")
 const PoussiereSon = preload("res://scripts/son/poussiere_son.gd")
 const CoteSon = preload("res://scripts/son/cote_son.gd")
 const TensionSon = preload("res://scripts/son/tension_son.gd")
+const AirSon = preload("res://scripts/son/air_son.gd")
 const C_LUMIERE := 299792458.0
 const UA := 1.495978707e11
 const TAUX := 48000   # rendu hors ligne de la partie C++ (échantillons par seconde)
@@ -69,7 +70,15 @@ func _ready() -> void:
 			"_test_tics_thermiques",
 			"_test_poussiere",
 			"_test_phase4_en_jeu",
-			"_test_cote_propulseurs"]:
+			"_test_cote_propulseurs",
+			"_test_prises_plaques",
+			"_test_sifflement_train",
+			"_test_trappes_rossiter",
+			"_test_tremblement_transsonique",
+			"_test_decrochage",
+			"_test_choc_verriere",
+			"_test_fondu_moleculaire",
+			"_test_phase5_en_jeu"]:
 		if seul == "" or seul in nom:
 			call(nom)
 	for nom in ["_test_cpp_en_direct", "_test_calibration"]:
@@ -1544,3 +1553,281 @@ func _test_phase4_en_jeu() -> void:
 		"8 s de poussées x1,6 coupées et remises, manche qui bouge : charges sans valeur invalide (%s), au plus %d voix (limite 24), craquements joués dans %d images, chant de la structure jusqu'à %.0f dB. Poussière à 0,9 c : couche à %.1f dB (calculé %.1f dB)." % [
 			_oui(not invalide), voix_max, craq_joues, tension_max, pous, s.poussiere.niveau])
 	_liberer(s)
+
+
+
+# =====================================================================
+# 5. PHASE 5 : L'AIR EN DÉTAIL
+# =====================================================================
+## Vaisseau dans l'air à l'altitude z, à la vitesse u, l'air arrivant d'en dessous avec l'angle alpha (degrés).
+func _vaisseau_angle(z: float, u: float, alpha: float, train := 0.0):
+	var v = _vaisseau_air(z, u)
+	v.vx = -u * sin(deg_to_rad(alpha))
+	v.vz = -u * cos(deg_to_rad(alpha))
+	v.train = train
+	v.train_consigne = train
+	v.pas(1.0 / 240.0)
+	return v
+
+
+## Le son de l'air seul (air_son.gd) pour le vaisseau v : renvoie le calculateur, après n images.
+func _air(v, n := 3, tete := Basis.IDENTITY):
+	var s = _son(v)
+	s.hors_ligne = true
+	s.tete = tete
+	_images(s, n)
+	return s
+
+
+func _test_prises_plaques() -> void:
+	# la prise ne change pas la physique : déjà vérifié par « La physique ne change pas » (le son lit, la physique non)
+	var v = _vaisseau_angle(1000.0, 100.0, 8.0)
+	var s = _air(v, 2)
+	var c = s.capteurs
+	var n: int = c.plaques_v.size()
+	var a_min := INF
+	var a_max := 0.0
+	for i in 12:
+		a_min = minf(a_min, c.plaques_alpha[i])
+		a_max = maxf(a_max, c.plaques_alpha[i])
+	# ailes en X ouvertes de 22° : elles voient l'angle × cos 22° (≈ 7,4°) ; les dérives, verticales, presque 0
+	var ailes_ok := absf(rad_to_deg(a_min) - 8.0 * cos(deg_to_rad(22.249))) < 0.4 and absf(rad_to_deg(a_max) - rad_to_deg(a_min)) < 0.4
+	var derives_ok: bool = rad_to_deg(c.plaques_alpha[12]) < 0.5 and rad_to_deg(c.plaques_alpha[13]) < 0.5
+	var v_ok: bool = absf(c.plaques_v[0] - 100.0) < 0.5
+	var corde_ok: bool = absf(c.plaques_corde[0] - 3.1) < 1e-6 and absf(c.plaques_corde[12] - sqrt(1.2 / 1.4)) < 1e-6
+	var mach_ok: bool = absf(c.mach - v.aero.mach) < 1e-9 and c.part_libre == 0.0
+	_resultat(n == 14 and ailes_ok and derives_ok and v_ok and corde_ok and mach_ok, "Prises de l'air plaque par plaque (lecture seule)",
+		"%d plaques lues (12 bandes d'aile, 2 dérives). Air qui arrive 8° par en dessous : ailes en X à %.2f° à %.2f° (attendu 8° × cos 22° = %.2f°), dérives %.2f° ; vitesse vue %.1f m/s ; cordes lues (3,1 m à l'emplanture, %.2f m pour une dérive) : %s ; Mach et part moléculaire : %s." % [
+			n, rad_to_deg(a_min), rad_to_deg(a_max), 8.0 * cos(deg_to_rad(22.249)), rad_to_deg(c.plaques_alpha[12]), c.plaques_v[0],
+			c.plaques_corde[12], _oui(corde_ok), _oui(mach_ok)])
+	_liberer(s)
+
+
+func _test_sifflement_train() -> void:
+	var res := {}
+	for cas in [["rentré 80", 80.0, 0.0], ["sorti 30", 30.0, 1.0], ["sorti 80", 80.0, 1.0], ["sorti 160", 160.0, 1.0]]:
+		var v = _vaisseau_angle(200.0, cas[1], 0.0, cas[2])
+		var s = _air(v)
+		res[cas[0]] = [float(s.air.niveaux["sifflement"]), s.air.f_jambe_arriere, s.air.raies["sifflement"].duplicate(true)]
+		_liberer(s)
+	var nu := Fluides.viscosite(286.85) / 1.2
+	var re30 := 30.0 * 0.17 / nu
+	var cy: Array = AirSon.cylindre(re30)
+	var st := 0.2 if float(cy[2]) > 0.3 else 0.25
+	var f30: float = res["sorti 30"][1]
+	var f_ok := absf(f30 / (st * 30.0 / 0.17) - 1.0) < 0.02
+	var raie_ok: bool = res["sorti 30"][2].size() == 2 and absf(float(res["sorti 30"][2][1][1]) - f30) < 1e-6
+	var monte: bool = res["sorti 160"][0] > res["sorti 80"][0] and res["sorti 80"][0] > res["sorti 30"][0]
+	# crise de traînée : un cylindre « sous-critique » siffle pur (80 % de son pur), un « supercritique » souffle (20 %)
+	var crise: bool = AirSon.cylindre(1.0e5)[2] == 0.8 and AirSon.cylindre(1.0e6)[2] == 0.2
+	_resultat(res["rentré 80"][0] == -INF and f_ok and raie_ok and monte and crise and res["sorti 80"][0] > 60.0, "Le train sorti siffle (Strouhal)",
+		"Train rentré : %s. Sorti, jambe arrière (17 cm) : à 30 m/s, %.1f Hz (St × U / D = %.1f Hz, Re = %.0f) ; son pur envoyé à cette fréquence : %s. Dans le cockpit : %.0f dB à 30 m/s, %.0f dB à 80 m/s, %.0f dB à 160 m/s. Crise de traînée (Re 100 000 → 1 000 000) : son pur 80 %% → 20 %% : %s." % [
+			"silence" if res["rentré 80"][0] == -INF else "%.0f dB" % res["rentré 80"][0], f30, st * 30.0 / 0.17, re30, _oui(raie_ok),
+			res["sorti 30"][0], res["sorti 80"][0], res["sorti 160"][0], _oui(crise)])
+
+
+func _test_trappes_rossiter() -> void:
+	# l'exemple de l'étude : puits de 1 m à 100 m/s au niveau de la mer (Mach 0,294)
+	var m := 100.0 / 340.3
+	var f1 := AirSon.rossiter(1, 100.0, 1.0, m)
+	var f2 := AirSon.rossiter(2, 100.0, 1.0, m)
+	var etude_ok := absf(f1 - 37.0) < 0.6 and absf(f2 - 85.0) < 1.0
+	# dans le jeu : trappes ouvertes, jambes pas encore descendues (train à 30 %)
+	var v = _vaisseau_angle(200.0, 100.0, 0.0, 0.3)
+	var s = _air(v)
+	var lvl: float = s.air.niveaux["cavites"]
+	var fr: PackedFloat64Array = s.air.f_rossiter.duplicate()
+	var m_jeu: float = s.capteurs.vitesse_air / Fluides.vitesse_son(s.capteurs.temperature)
+	var attendu := AirSon.rossiter(1, s.capteurs.vitesse_air, 1.39, m_jeu)
+	var siffle: float = s.air.niveaux["sifflement"]
+	var nr: int = s.air.raies["cavites"].size()
+	_liberer(s)
+	var v2 = _vaisseau_angle(200.0, 100.0, 0.0, 0.0)
+	var s2 = _air(v2)
+	var ferme: float = s2.air.niveaux["cavites"]
+	_liberer(s2)
+	var v3 = _vaisseau_angle(200.0, 200.0, 0.0, 1.0)
+	var s3 = _air(v3)
+	var vite: float = s3.air.niveaux["cavites"]
+	_liberer(s3)
+	var ok := etude_ok and lvl > 50.0 and ferme == -INF and absf(fr[0] - attendu) < 1e-6 and siffle == -INF and nr == 4 and vite > lvl
+	_resultat(ok, "Les trappes ouvertes grondent (Rossiter)",
+		"Puits de 1 m à 100 m/s : %.1f Hz et %.1f Hz (étude : 37 et 85 Hz). Dans le jeu, trappes ouvertes à 100 m/s, jambes encore rentrées : %.0f dB dans le cockpit, puits arrière (1,39 m) à %.1f Hz et %.1f Hz, %d sons purs (2 par puits de train ouvert) ; jambes rentrées : pas de sifflement (%s). Trappes fermées : %s. À 200 m/s : %.0f dB." % [
+			f1, f2, lvl, fr[0], fr[1], nr, _oui(siffle == -INF), "silence" if ferme == -INF else "%.0f dB" % ferme, vite])
+
+
+func _test_tremblement_transsonique() -> void:
+	var res := {}
+	# à 11 km, l'air est à 216,65 K : vitesse du son 295 m/s
+	var son := Fluides.vitesse_son(216.65)
+	for m in [0.6, 0.8, 0.95, 1.15, 1.5]:
+		var v = _vaisseau_angle(11000.0, m * son, 4.0)
+		var s = _air(v)
+		res[m] = [float(s.air.niveaux["tremblement"]), s.air.f_tremblement, s.capteurs.mach]
+		_liberer(s)
+	# le balancement garde l'énergie moyenne : moyenne du facteur sur 2 minutes = 1
+	var a := AirSon.new()
+	a.f_tremblement = 8.0
+	var somme := 0.0
+	var mini := INF
+	var maxi := 0.0
+	for i in 60 * 120:
+		a._balancer(1.0 / 60.0)
+		somme += a.facteur_tremblement
+		mini = minf(mini, a.facteur_tremblement)
+		maxi = maxf(maxi, a.facteur_tremblement)
+	var moyenne := somme / (60.0 * 120.0)
+	var ok: bool = res[0.6][0] == -INF and res[1.5][0] == -INF and res[0.95][0] > res[0.8][0] and res[0.95][0] > 60.0 \
+		and res[0.95][1] > 3.0 and res[0.95][1] < 15.0 and absf(moyenne - 1.0) < 0.08 and maxi > 2.0 and mini < 0.3
+	_resultat(ok, "Tremblement transsonique (choc qui va et vient)",
+		"À 11 km, ailes qui portent (4°) : Mach 0,6 %s ; 0,8 : %.0f dB ; 0,95 : %.0f dB (le choc bat %.1f fois par seconde : il se sent) ; 1,15 : %.0f dB ; 1,5 : %s. Balancement au hasard : énergie moyenne × %.3f (attendu 1), de × %.2f à × %.2f." % [
+			"silence" if res[0.6][0] == -INF else "%.0f dB" % res[0.6][0], res[0.8][0], res[0.95][0], res[0.95][1], res[1.15][0],
+			"silence" if res[1.5][0] == -INF else "%.0f dB" % res[1.5][0], moyenne, mini, maxi])
+
+
+func _test_decrochage() -> void:
+	var niveaux := {}
+	var decroches := {}
+	for a in [5.0, 14.0, 25.0]:
+		var v = _vaisseau_angle(1000.0, 90.0, a)
+		var s = _air(v)
+		niveaux[a] = float(s.air.niveaux["tremblement"])
+		var d := 0.0
+		for i in 12:
+			d += s.air.decroche[i]
+		decroches[a] = d / 12.0
+		_liberer(s)
+	# à 14° et en roulis vers la gauche (aile gauche qui descend : elle voit plus d'angle), seules les ailes gauches
+	# décrochent : on l'entend de la gauche
+	var v = _vaisseau_angle(1000.0, 90.0, 13.0)
+	v.omega = Vector3(0.0, 0.0, 0.6)
+	v.pas(1.0 / 240.0)
+	var s = _air(v)
+	var g := 0.0
+	var dr := 0.0
+	for i in 12:
+		if i in [0, 1, 2, 6, 7, 8]:
+			g += s.air.decroche[i]
+		else:
+			dr += s.air.decroche[i]
+	var part_g: float = s.air.cote_tremblement[7]   # 4 kHz : ombre de la tête
+	var part_g_grave: float = s.air.cote_tremblement[2]
+	var attendu_gauche := g > dr
+	var cote_ok := (part_g > 0.55) == attendu_gauche and (part_g < 0.45) == (not attendu_gauche) and absf(g - dr) > 0.3
+	_liberer(s)
+	var ok: bool = niveaux[5.0] == -INF and niveaux[25.0] > niveaux[14.0] and decroches[25.0] > 0.95 and decroches[5.0] == 0.0 \
+		and niveaux[25.0] > 60.0 and cote_ok
+	_resultat(ok, "Décrochage, et de quel côté",
+		"À 90 m/s : 5° %s ; 14° : %.0f dB (%.0f %% des bandes d'aile décrochées) ; 25° : %.0f dB (%.0f %%). Roulis à 0,6 rad/s, 13° : ailes %s décrochées (gauche %.1f, droite %.1f bandes) ; le grondement arrive %.0f %% à gauche à 4 kHz, %.0f %% à 125 Hz." % [
+			"silence" if niveaux[5.0] == -INF else "%.0f dB" % niveaux[5.0], niveaux[14.0], decroches[14.0] * 100.0, niveaux[25.0],
+			decroches[25.0] * 100.0, "gauches" if attendu_gauche else "droites", g, dr, part_g * 100.0, part_g_grave * 100.0])
+
+
+func _test_choc_verriere() -> void:
+	var res := {}
+	for cas in [["Mach 0,9 à 11 km", 11000.0, 0.9 * 295.07], ["Mach 2 à 15 km", 15000.0, 2.0 * 295.07],
+			["rentrée 6 km/s à 60 km", 60000.0, 6000.0]]:
+		var v = _vaisseau_angle(cas[1], cas[2], 0.0)
+		var s = _air(v)
+		res[cas[0]] = [float(s.air.niveaux["choc_verriere"]), s.air.longueur_decollement, float(s.souffle["niveau"])]
+		_liberer(s)
+	# coque chaude (rentrée) : couche limite plus épaisse, décollement plus long, grondement plus grave
+	var v = _vaisseau_angle(60000.0, 6000.0, 0.0)
+	v.temperature_nez = 1500.0
+	var s = _air(v)
+	var l_chaud: float = s.air.longueur_decollement
+	_liberer(s)
+	var r0: Array = res["Mach 0,9 à 11 km"]
+	var r2: Array = res["Mach 2 à 15 km"]
+	var r6: Array = res["rentrée 6 km/s à 60 km"]
+	var ok: bool = r0[0] == -INF and r2[0] > 60.0 and r6[0] > 50.0 and l_chaud > r6[1] and r2[1] > 0.05 and r2[1] < 1.0
+	_resultat(ok, "L'onde de choc devant la verrière (rentrée)",
+		"Mach 0,9 : %s. Mach 2 à 15 km : %.0f dB (souffle %.0f dB), décollement de %.0f cm. Rentrée à 6 km/s à 60 km : %.0f dB (souffle %.0f dB), décollement %.0f cm ; coque à 1 500 K : %.0f cm (plus long : plus grave)." % [
+			"silence" if r0[0] == -INF else "%.0f dB" % r0[0], r2[0], r2[2], r2[1] * 100.0, r6[0], r6[2], r6[1] * 100.0, l_chaud * 100.0])
+
+
+func _test_fondu_moleculaire() -> void:
+	# du fluide aux molécules isolées : tout s'efface avec la même part « fluide » que la physique, sans marche
+	var avant := INF
+	var lisse := true
+	var lignes := []
+	var vide_ok := true
+	var meme_loi := true
+	var vu_fondu := false
+	for k in 15:
+		var z := 110000.0 + k * 10000.0
+		var v = _vaisseau_angle(z, 3000.0, 16.0, 0.0)
+		var s = _air(v)
+		var e := 0.0
+		for nom in AirSon.COUCHES:
+			var l: float = s.air.niveaux[nom]
+			if l > -INF:
+				e += pow(10.0, l / 10.0)
+		var lvl := _db(e) if e > 0.0 else -INF
+		meme_loi = meme_loi and absf(s.air.fluide - (1.0 - s.capteurs.part_libre)) < 1e-9
+		if avant < INF and lvl > -INF and avant > -INF and lvl > avant + 0.5:
+			lisse = false
+		if s.air.fluide <= 0.0:
+			vide_ok = vide_ok and lvl == -INF
+		vu_fondu = vu_fondu or (s.air.fluide > 0.05 and s.air.fluide < 0.95)
+		if k % 3 == 0:
+			lignes.append("%d km : %s (fluide %.2f)" % [int(z / 1000.0), "silence" if lvl == -INF else "%.0f dB" % lvl, s.air.fluide])
+		avant = lvl
+		_liberer(s)
+	# molécules isolées à 150 km, 7,8 km/s : bruit de grenaille sur 1 m² de coque, de 0 à 10 kHz
+	var rho := 2.0e-9
+	var m_mol := 4.8e-26
+	var debit := rho / m_mol * 7800.0             # molécules par m² et par s
+	var impulsion := 2.0 * m_mol * 7800.0
+	var f_rms := sqrt(2.0 * debit * impulsion * impulsion * 1.0e4)
+	var expo := floori(log(f_rms) / log(10.0))
+	var f_txt := "%.1f × 10^%d" % [f_rms / pow(10.0, expo), expo]
+	_resultat(lisse and vide_ok and meme_loi and vu_fondu and avant == -INF and f_rms < 1.0e-6, "Fondu vers le silence (molécules isolées)",
+		"Montée de 110 à 250 km à 3 km/s : %s. Toujours la même part « fluide » que la physique : %s ; aucune remontée en route : %s. Molécules isolées à 150 km et 7,8 km/s : elles secouent 1 m² de coque de %s N (bruit de grenaille), bien trop peu pour s'entendre." % [
+			", ".join(lignes), _oui(meme_loi), _oui(lisse), f_txt])
+
+
+func _test_phase5_en_jeu() -> void:
+	var titre := "Phase 5 dans le chef d'orchestre : ce qui sort = ce qui est calculé"
+	if not _cpp(titre):
+		return
+	# 1. train sorti à 90 m/s : sifflement et trappes (sons purs de la voix air) avec le souffle
+	var v = _vaisseau_angle(300.0, 90.0, 0.0, 1.0)
+	var s = _son(v)
+	s.hors_ligne = true
+	_images(s, 20)
+	var vd_air: Dictionary = s.voix_directes["air"]
+	var e_air := 0.0
+	for nom in vd_air["couches"]:
+		e_air += float(s.couches[nom]["energie"])
+	var raies_ok: bool = vd_air.get("raies_utilisees", false)
+	var l_siffle := _niveau(s, "sifflement")
+	var l_trappes := _niveau(s, "cavites")
+	var l_souffle := _niveau(s, "souffle")
+	var flux = vd_air["flux"]
+	flux.taux = TAUX
+	var pb = flux.instantiate_playback()
+	pb.start(0.0)
+	_mixer(pb, TAUX / 2)
+	var a = ClassDB.instantiate("AnalyseSon")
+	_mixer(pb, TAUX * 2, a)
+	var r: Dictionary = a.resultat()
+	var sortie := (float(r["gauche"]["energie"]) + float(r["droite"]["energie"])) / 2.0
+	var ecart := _db(sortie / e_air) if e_air > 0.0 and sortie > 0.0 else NAN
+	_liberer(s)
+	# 2. ailes décrochées : le tremblement passe par la voix structure, avec son côté
+	var v2 = _vaisseau_angle(300.0, 90.0, 22.0, 0.0)
+	var s2 = _son(v2)
+	s2.hors_ligne = true
+	_images(s2, 20)
+	var trem: float = s2.couches["tremblement"]["energie"]
+	var l_trem := _niveau(s2, "tremblement")
+	var invalide := false
+	for nom in AirSon.COUCHES:
+		invalide = invalide or is_nan(float(s2.couches[nom]["lisse"]))
+	_liberer(s2)
+	var ok: bool = raies_ok and trem > 0.0 and not invalide and absf(ecart) < 1.0 and int(r["craquements"]) == 0 \
+		and int(r["non_finis"]) == 0 and l_siffle > -INF and l_trappes > -INF
+	_resultat(ok, titre,
+		"Train sorti à 90 m/s : sifflement %.0f dB, trappes %.0f dB, souffle %.0f dB dans le cockpit ; sons purs envoyés à la voix air : %s ; ce qui sort de la voix air : %+.2f dB de ce qui est calculé (tolérance 1), %d craquement, %d valeur invalide. Ailes décrochées (22°) : tremblement %.0f dB, joué par la voix structure (%s)." % [
+			l_siffle, l_trappes, l_souffle, _oui(raies_ok), ecart, r["craquements"], r["non_finis"], l_trem, _oui(trem > 0.0)])

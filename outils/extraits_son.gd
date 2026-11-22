@@ -13,8 +13,12 @@ extends SceneTree
 ## poussés à x10 : la structure, surchargée, craque), 16 (atterrissage dur à 3,2 m/s : le train craque).
 ## Chaque extrait est une petite scène jouée en vrai (la physique du vaisseau tourne, le moteur audio
 ## l'écoute) ; ce qui sort du bus Master est enregistré dans un fichier .wav.
+## Phase 5 (l'air en détail) : 17 (train qui sort dans l'air : trappes qui grondent, puis jambes qui sifflent, de 60 à
+## 140 m/s), 18 (de Mach 0,7 à 1,3 : le tremblement transsonique), 19 (ailes qui décrochent, puis l'aile gauche seule
+## en roulis : on l'entend à gauche), 20 (de Mach 1 à 2,2 : l'onde de choc bat devant la verrière), 21 (rentrée de 70 à
+## 40 km, coque chaude, puis montée hors de l'air : tout s'efface). Le script force la vitesse et l'angle de l'air.
 ## `--seul=14` après le dossier : n'enregistre que les extraits dont le nom commence par « 14 ».
-## Les commandes (gaz, manche) sont rejouées par le script ; seul l'extrait « souffle » force la vitesse.
+## Les commandes (gaz, manche) sont rejouées par le script ; les extraits 4 et 17 à 21 forcent la vitesse.
 
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
 const Atmosphere = preload("res://scripts/physique/atmosphere.gd")
@@ -42,6 +46,12 @@ const EXTRAITS := [
 	["14-espace-propulseur-gauche-puis-droite", 12.0, "vide"],
 	["15-espace-poussee-x10-la-structure-craque", 10.0, "vide"],
 	["16-sol-atterrissage-dur", 8.0, "sol_dur"],
+	# phase 5 : l'air en détail
+	["17-air-train-trappes-et-sifflement", 13.0, "air_train"],
+	["18-air-tremblement-transsonique", 12.0, "air_11km"],
+	["19-air-decrochage-puis-aile-gauche", 13.0, "air_train"],
+	["20-air-choc-sur-la-verriere-mach-2", 12.0, "air_15km"],
+	["21-rentree-puis-fondu-vers-le-silence", 14.0, "rentree"],
 ]
 
 var dossier := "res://extraits"
@@ -119,16 +129,53 @@ class Pilotage extends Node:
 				if t < 0.1: v.regler_poussee(10.0)
 				if t > 1.0 and t < 4.0: gaz = clampf((t - 1.0) / 2.0, 0.0, 1.0)
 				elif t > 5.5 and t < 8.5: gaz = 1.0
+			"17-air-train-trappes-et-sifflement":
+				# 1 000 m : de 60 à 140 m/s ; le train sort à 1 s (trappes d'abord), rentre à 10 s
+				_vent(60.0 + 80.0 * clampf((t - 0.5) / 11.0, 0.0, 1.0), 1.0)
+				if t > 1.0 and t < 1.1: v.sortir_train(true)
+				if t > 10.0 and t < 10.1: v.sortir_train(false)
+			"18-air-tremblement-transsonique":
+				# 11 km, ailes qui portent (4°) : de Mach 0,7 à 1,3 (vitesse du son 295 m/s)
+				_vent(295.07 * (0.7 + 0.6 * clampf((t - 0.5) / 10.5, 0.0, 1.0)), 4.0)
+			"19-air-decrochage-puis-aile-gauche":
+				# 90 m/s : l'angle monte de 2° à 25° (décrochage), redescend ; puis 16° en roulis : les ailes gauches décrochent seules
+				if t < 7.0:
+					var a := 2.0 + 23.0 * clampf((t - 0.5) / 3.0, 0.0, 1.0) - 23.0 * clampf((t - 5.0) / 1.5, 0.0, 1.0)
+					_vent(90.0, a)
+				else:
+					_vent(90.0, 16.0)
+					v.omega = Vector3(0.0, 0.0, 1.0 if t > 8.0 and t < 11.5 else 0.0)
+			"20-air-choc-sur-la-verriere-mach-2":
+				# 15 km : de Mach 1 à 2,2
+				_vent(295.07 * (1.0 + 1.2 * clampf((t - 0.5) / 10.5, 0.0, 1.0)), 1.0)
+			"21-rentree-puis-fondu-vers-le-silence":
+				# de 70 à 40 km en freinant de 6 à 2,5 km/s, puis remontée à 200 km : tout s'efface
+				var k := clampf((t - 0.5) / 7.0, 0.0, 1.0)
+				var h := 70000.0 - 30000.0 * k
+				if t > 8.5:
+					h = 40000.0 + 160000.0 * clampf((t - 8.5) / 4.5, 0.0, 1.0)
+				v.px = R + h
+				_vent(6000.0 - 3500.0 * k, 2.0)
 			"12-espace-0-5-c":
 				v.vz = -0.5 * 299792458.0
 			"13-espace-0-9-c":
 				v.vz = -0.9 * 299792458.0
+		if nom.begins_with("19") or nom.begins_with("17") or nom.begins_with("18") or nom.begins_with("20") or nom.begins_with("21"):
+			v.orientation = Quaternion(Vector3.BACK, deg_to_rad(-90.0))   # le vaisseau reste face au vent
+			if not nom.begins_with("19") or t < 7.0:
+				v.omega = Vector3.ZERO
 		v.commander(gaz, tangage, lacet, roulis, cote)
 		if seul != "":
 			for r in v.rcs:
 				if r["nom"] == seul:
 					r["actuel"] = 1.0
 		v.pas(delta)
+
+	## L'air arrive de face à la vitesse u, avec l'angle a (degrés) par en dessous (le haut du vaisseau vers le ciel, +x).
+	func _vent(u: float, a: float) -> void:
+		v.vx = -u * sin(deg_to_rad(a))
+		v.vy = 0.0
+		v.vz = -u * cos(deg_to_rad(a))
 
 
 func _initialize() -> void:
@@ -166,6 +213,14 @@ func _tout() -> void:
 				v.px = R + (3000.0 if e[2] == "air_haut" else 2000.0)
 				v.vz = -220.0 if e[2] == "air_haut" else 0.0
 				v.orientation = Quaternion(Vector3.BACK, deg_to_rad(-90.0))
+			"air_train", "air_11km", "air_15km", "rentree":
+				v.gm = 0.0
+				v.rayon_planete = R
+				v.atmosphere = Atmosphere.new(R, 0.0)
+				v.px = R + {"air_train": 1000.0, "air_11km": 11000.0, "air_15km": 15000.0, "rentree": 70000.0}[e[2]]
+				v.orientation = Quaternion(Vector3.BACK, deg_to_rad(-90.0))
+				if e[2] == "rentree":
+					v.temperature_nez = 1200.0
 			"vide_chaud":
 				v.temperature_nez = 1100.0   # juste après une rentrée dans l'air
 			"orbite":
@@ -204,6 +259,10 @@ func _tout() -> void:
 		print("%s : %.1f s, son %.2f ms par image, %d sons brefs (craquements %d, relâchements %d, tics %d, grains %d)" % [chemin,
 			w.get_length(), s.ms_par_image, s.joues, s.tension.craquements, s.tension.relachements, s.tension.tics,
 			s.poussiere.grains_joues])
+		if int(String(e[0]).get_slice("-", 0)) >= 17:
+			print("   air : sifflement %.0f dB, trappes %.0f dB, tremblement %.0f dB, choc verrière %.0f dB, souffle %.0f dB (fin de l'extrait)" % [
+				float(s.couches["sifflement"]["lisse"]), float(s.couches["cavites"]["lisse"]), float(s.couches["tremblement"]["lisse"]),
+				float(s.couches["choc_verriere"]["lisse"]), float(s.couches["souffle"]["lisse"])])
 		s.queue_free()
 		pil.queue_free()
 		p.queue_free()
