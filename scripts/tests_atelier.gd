@@ -7,6 +7,9 @@ extends Node
 ## (scripts/atelier/edition.gd : poser, symétrie, régler, enlever, annuler / refaire, enregistrer), dessin
 ## partagé atelier / jeu (scripts/dessin_vaisseau.gd), et dans l'écran : poser à la souris, pièces qui
 ## flottent, « Lancer » refusé.
+## Étape 4 : l'analyse ingénieur (scripts/atelier/analyse.gd : répartition des masses, poussées et couple
+## axe par axe, défauts de symétrie, analyse d'une sélection et « le vaisseau sans elle »), et dans l'écran :
+## plusieurs pièces à la fois (Ctrl + clic), tuiles cliquables, flèche du couple, salle à part.
 ## Ligne de commande :
 ##   Godot_console.exe --headless --path . res://scenes/tests_atelier.tscn
 ## Les valeurs « d'avant » viennent du code d'avant l'atelier (vaisseau écrit en dur), gardées dans
@@ -68,6 +71,7 @@ func _ready() -> void:
 	_tests_dessin()
 	_tests_vaisseaux_limites()
 	_tests_pose_calcul()
+	_tests_analyse_etape4()
 	# l'écran de l'atelier s'ouvre sur le chasseur de départ, et ce que les tests enregistrent ne touche pas
 	# aux vaisseaux ni au dernier vaisseau ouvert du joueur
 	var partie_avant = Engine.get_meta("partie") if Engine.has_meta("partie") else null
@@ -75,6 +79,7 @@ func _ready() -> void:
 	Engine.set_meta("partie", {"plan": Plan.PLAN_PAR_DEFAUT, "depart": "", "plan_lu": true})
 	await _tests_ecran_atelier()
 	await _tests_ecran_etape3()
+	await _tests_ecran_etape4()
 	if partie_avant != null:
 		Engine.set_meta("partie", partie_avant)
 	else:
@@ -577,7 +582,7 @@ func _tests_analyse() -> void:
 		"masse %.1f kg, poussée vers l'avant %.0f kN (5 moteurs), décollage vertical %.1f kN (× %.2f le poids), poussée / poids %.2f." % [
 			t["masse"], float(t["poussee_avant"]) / 1000.0, float(t["poussee_verticale"]) / 1000.0, t["rapport_vertical"], t["poussee_poids"]])
 	var tu: Array = a.tuiles()
-	ok = tu.size() == 7 and String(tu[0][1]) == "8 534,6 kg" and String(tu[1][1]) == "1 000 kN"
+	ok = tu.size() == 8 and String(tu[0][1]) == "8 534,6 kg" and String(tu[1][1]) == "1 000 kN"
 	_resultat(ok, "Tuiles du tableau", " | ".join(tu.map(func(x): return "%s : %s" % [x[0], x[1]])))
 	# couple : la poussée des 5 moteurs passe presque par le centre de gravité, les propulseurs compensent
 	var c: Vector3 = t["couple_moteurs"]
@@ -1083,7 +1088,7 @@ func _tests_vaisseaux_limites() -> void:
 	for i in 120:
 		v.pas(1.0 / 120.0)
 	finis = finis and is_finite(v.py) and is_finite(v.omega.length())
-	var ok: bool = p.valide() and finis and v.moteurs.is_empty() and v.masse > 0.0 and a.tuiles().size() == 7
+	var ok: bool = p.valide() and finis and v.moteurs.is_empty() and v.masse > 0.0 and a.tuiles().size() == 8
 	_resultat(ok, "Vaisseau limite : rien que le cockpit", "%d pièces, %.0f kg, aucun moteur ; posé, 1 s de vol à fond : tout reste fini (%s)" % [
 		p.pieces.size(), v.masse, "oui" if finis else "NON"])
 	# un seul moteur, loin du centre : le tableau le dit (couple trop fort pour les propulseurs ?)
@@ -1269,5 +1274,282 @@ func _tests_ecran_etape3() -> void:
 	ok = enregistre and FileAccess.file_exists(chemin) and Partie.plan_choisi() == chemin and not at.edition.modifie \
 		and chemin.begins_with(DOSSIER_ESSAI)
 	_resultat(ok, "Écran : enregistrer", "%s (le jeu prendra ce vaisseau)" % chemin.get_file())
+	at.queue_free()
+	await get_tree().process_frame
+
+
+# =====================================================================
+# ÉTAPE 4 : L'ANALYSE INGÉNIEUR
+# =====================================================================
+func _tests_analyse_etape4() -> void:
+	var a = Analyse.new(Plan.par_defaut())
+	var v = a.v
+	var tous: Array = a.plan.pieces.map(func(p): return p["id"])
+	# 1. tout le vaisseau choisi = le vaisseau (masse, centre de gravité, inertie : la physique du jeu)
+	var g: Dictionary = a.analyse_groupe(tous)
+	var ib: Basis = g["inertie"]
+	var ok: bool = absf(float(g["masse"]) - v.masse) < 1e-6 and ((g["centre"] as Vector3) - v.centre_gravite).length() < 1e-6 \
+		and float(g["masse_sans"]) == 0.0 and absf(float(g["part"]) - 1.0) < 1e-9 \
+		and Vector3(ib.x.x, ib.y.y, ib.z.z).distance_to(v.inertie) < 1e-6 * v.inertie.length()
+	_resultat(ok, "Analyse : tout choisir = le vaisseau", "%.1f kg, centre %s, inertie %.0f / %.0f / %.0f kg·m² (physique : %.0f / %.0f / %.0f)" % [
+		g["masse"], Analyse.vecteur_txt(g["centre"]), ib.x.x, ib.y.y, ib.z.z, v.inertie.x, v.inertie.y, v.inertie.z])
+	# 2. « le vaisseau sans elle » = ce que donne la physique quand on l'enlève vraiment
+	var ga: Dictionary = a.analyse_groupe(a.pieces_module("aile_haut_droit"))
+	var ed = _ed_depart()
+	ed.supprimer(["module:aile_haut_droit"])
+	var v2 = VaisseauPhysique.new(ed.plan())
+	ok = absf(v2.masse - float(ga["masse_sans"])) < 1e-6 and (v2.centre_gravite - (ga["centre_sans"] as Vector3)).length() < 1e-6 \
+		and absf(float(ga["masse"]) + float(ga["masse_sans"]) - v.masse) < 1e-6 and (ga["deplacement"] as Vector3).x < -0.1
+	_resultat(ok, "Analyse : le vaisseau sans une aile", "aile %.1f kg ; sans elle %.1f kg (physique %.1f), centre de gravité qui %s (physique : %s)" % [
+		ga["masse"], ga["masse_sans"], v2.masse, Analyse.deplacement_txt(ga["deplacement"]), Analyse.deplacement_txt(v2.centre_gravite - v.centre_gravite)])
+	# 3. répartition des masses : catégories et matières font chacune 100 %, les plus lourdes en premier
+	var r: Dictionary = a.repartition_masses()
+	var somme_cat := 0.0
+	for c in r["par_categorie"]:
+		somme_cat += float(c["masse"])
+	var somme_mat := 0.0
+	for c in r["par_matiere"]:
+		somme_mat += float(c["masse"])
+	var lourdes: Array = r["lourdes"]
+	var range_ok := true
+	for k in range(1, lourdes.size()):
+		range_ok = range_ok and float(lourdes[k - 1]["masse"]) >= float(lourdes[k]["masse"])
+	var f: Dictionary = a.fiche_masses()
+	ok = absf(somme_cat - v.masse) < 1e-6 and absf(somme_mat - v.masse) < 1e-3 and range_ok and lourdes.size() == 15 \
+		and (f["sections"] as Array).size() == 3 and String(f["sections"][0]["liste"][0]["choix"]["genre"]) == "categorie"
+	_resultat(ok, "Analyse : répartition des masses", "catégories %.1f kg, matières %.1f kg (vaisseau %.1f) ; la plus lourde : %s (%s)" % [
+		somme_cat, somme_mat, v.masse, lourdes[0]["nom"], Analyse._kg_part(lourdes[0])])
+	# 4. poussées : 5 moteurs principaux, leurs couples font le couple du tableau ; chaque petit propulseur a un rôle
+	var po: Dictionary = a.poussees()
+	var somme_c := Vector3.ZERO
+	for d in po["principaux"]:
+		somme_c += d["couple"] as Vector3
+	var n_roles := 0
+	for g2 in po["roles"]:
+		n_roles += (g2["ids"] as Array).size()
+	var fp: Dictionary = a.fiche_poussees()
+	var section_moteurs: Array = (fp["sections"] as Array).filter(func(x): return String(x["titre"]).begins_with("MOTEURS PRINCIPAUX"))
+	ok = (po["principaux"] as Array).size() == 5 and absf(float(po["total"]) - 1.0e6) < 1.0 and somme_c.distance_to(po["couple"]) < 1.0 \
+		and n_roles == v.rcs.size() and (po["axes"] as Array).size() == 3 and section_moteurs.size() == 1 \
+		and (section_moteurs[0]["liste"] as Array).size() == 5 and bool(po["compense"])
+	_resultat(ok, "Analyse : poussées et couple, moteur par moteur", "%d moteurs, %.0f kN ; couple %.0f N·m (somme des moteurs %.0f) ; %d propulseurs en %d rôles ; tangage %.0f %%, lacet %.0f %%, roulis %.0f %% de ce que les propulseurs compensent" % [
+		(po["principaux"] as Array).size(), float(po["total"]) / 1000.0, (po["couple"] as Vector3).length(), somme_c.length(), n_roles,
+		(po["roles"] as Array).size(), 100.0 * float(po["axes"][0]["part"]), 100.0 * float(po["axes"][1]["part"]), 100.0 * float(po["axes"][2]["part"])])
+	# 5. symétrie du chasseur : centré ; seules quelques pièces du cockpit (manche, levier) et des buses sans jumelle
+	var s: Dictionary = a.symetrie()
+	var sans: Array = s["sans_jumelle"]
+	var t8: Array = a.tuiles()[7]
+	ok = absf(float(s["cg_x"])) < 0.001 and sans.has("Manche_piece") and sans.has("Levier_gaz_piece") and sans.size() <= 4 \
+		and String(t8[0]) == "SYMÉTRIE" and String(t8[1]) == "centrée" and absf(float(s["poussee_gauche"]) - float(s["poussee_droite"])) < 1.0
+	_resultat(ok, "Analyse : symétrie du chasseur", "centre de gravité à %.2f mm du milieu ; sans jumelle : %s ; tuile « %s »" % [
+		float(s["cg_x"]) * 1000.0, ", ".join(sans), t8[1]])
+	# 6. un moteur posé d'un seul côté : défaut de symétrie, et le vaisseau tourne vers la gauche (couple de
+	#    lacet positif : moteur à droite qui pousse vers l'avant), plus que les propulseurs ne compensent.
+	#    Le couple est moins que 200 kN × 3 m : le centre de gravité part aussi à droite, et les 5 moteurs du
+	#    milieu, maintenant à sa gauche, tournent un peu dans l'autre sens.
+	var ed3 = _ed_depart()
+	var ids3: Array = ed3.ajouter("moteur_ionique", {"poussee_kn": 200.0}, Transform3D(Basis.IDENTITY, Vector3(3.0, 0.0, 2.0)), "Fuselage")
+	var a3 = Analyse.new(ed3.plan())
+	var s3: Dictionary = a3.symetrie()
+	var t3: Dictionary = a3.tableau()
+	var c3: Vector3 = t3["couple_moteurs"]
+	var dans_liste: bool = (s3["elements"] as Array).any(func(e): return e["genre"] == "ajout" and e["id"] == ids3[0])
+	ok = ids3.size() == 1 and float(s3["cg_x"]) > 0.01 and dans_liste and String(a3.tuiles()[7][1]).ends_with("à droite") \
+		and absf(float(s3["poussee_droite"]) - float(s3["poussee_gauche"]) - 2.0e5) < 1.0 and c3.y > 1.0e5 and not bool(t3["couple_compense"]) \
+		and float(a3.poussees()["axes"][1]["part"]) > 1.0
+	_resultat(ok, "Analyse : un moteur d'un seul côté", "centre de gravité %s à droite ; tuile « %s » ; poussée droite − gauche %.0f kN ; couple de lacet %.0f kN·m (vers la gauche), compensé : %s" % [
+		Analyse.longueur_txt(float(s3["cg_x"])), a3.tuiles()[7][1], (float(s3["poussee_droite"]) - float(s3["poussee_gauche"])) / 1000.0, c3.y / 1000.0, t3["couple_compense"]])
+	# 7. la flèche courbe du couple tourne dans le bon sens (règle de la main droite), plus grande pour un plus gros couple
+	var bons := 0
+	for c in [Vector3(0, 0, 8000.0), Vector3(0, -2.0e5, 0), Vector3(3.0e4, 1.0e4, -5.0e3)]:
+		var fc: Node3D = AtelierScript.fleche_couple(Vector3(1, 2, 3), c, Color.RED)
+		var mp: Node3D = fc.get_child(1)
+		var tangente: Vector3 = mp.transform.basis.y.normalized()
+		var radial: Vector3 = (mp.position - tangente * 0.21 - Vector3(1, 2, 3)).normalized()
+		if c.normalized().cross(radial).dot(tangente) > 0.99 and absf(radial.dot(c.normalized())) < 1e-3:
+			bons += 1
+		fc.free()
+	ok = bons == 3 and AtelierScript.rayon_couple(1.0e3) < AtelierScript.rayon_couple(1.0e5) and AtelierScript.rayon_couple(1.0e5) < AtelierScript.rayon_couple(1.0e7)
+	_resultat(ok, "Analyse : flèche du couple", "%d / 3 flèches dans le sens de rotation ; rayon %.2f / %.2f / %.2f m pour 1 kN·m / 100 kN·m / 10 MN·m" % [
+		bons, AtelierScript.rayon_couple(1.0e3), AtelierScript.rayon_couple(1.0e5), AtelierScript.rayon_couple(1.0e7)])
+	# 8. l'analyse de la symétrie reste rapide sur un gros vaisseau (300 pièces posées en plus)
+	var ed4 = _ed_depart()
+	for k in 150:
+		ed4.ajouter("boite", {}, Transform3D(Basis.IDENTITY, Vector3(0.5 + 0.05 * k, -0.5, 4.0 - 0.05 * k)), "Fuselage", "", true)
+	var a4 = Analyse.new(ed4.plan())
+	var t0 := Time.get_ticks_usec()
+	var s4: Dictionary = a4.symetrie()
+	var ms := (Time.get_ticks_usec() - t0) / 1000.0
+	ok = a4.plan.pieces.size() > 400 and ms < 250.0 and absf(float(s4["cg_x"])) < 0.001
+	_resultat(ok, "Analyse : symétrie d'un gros vaisseau", "%d pièces analysées en %.0f ms ; centre de gravité à %.2f mm du milieu" % [a4.plan.pieces.size(), ms, float(s4["cg_x"]) * 1000.0])
+
+
+static func _clic_gauche() -> InputEventMouseButton:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = true
+	return ev
+
+
+static func _touche(code: Key) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = code
+	ev.pressed = true
+	return ev
+
+
+static func _textes_tuile(t: Control) -> Array:
+	return t.find_children("*", "Label", true, false).map(func(l): return String((l as Label).text))
+
+
+func _tests_ecran_etape4() -> void:
+	_vider_dossier(DOSSIER_ESSAI)
+	var at = (load(SCENE_ATELIER) as PackedScene).instantiate()
+	at.dossier_vaisseaux = DOSSIER_ESSAI
+	add_child(at)
+	await _attendre_atelier()
+	at.case_symetrie.button_pressed = true
+	# 1. Ctrl + clic : les deux ailes du haut ensemble ; leur centre de gravité (boule bleue) est au milieu
+	at.choisir("piece", "Aile_haut_droit")
+	at.basculer_dans_selection("piece", "Aile_haut_gauche")
+	var ids: Array = at.pieces_choisies()
+	var orange: bool = (at.maillages["Aile_haut_droit"][0] as MeshInstance3D).material_overlay == at._materiau_surligne \
+		and (at.maillages["Aile_haut_gauche"][0] as MeshInstance3D).material_overlay == at._materiau_surligne
+	var ok: bool = String(at.selection.get("genre", "")) == "groupe" and ids.size() == 2 and at.fiche_titre.text.begins_with("Sélection : 2") \
+		and orange and at._cg_selection.visible and absf(at._cg_selection.position.x) < 0.01 and at.fiche_sections.get_child_count() >= 3
+	_resultat(ok, "Écran : choisir plusieurs pièces (Ctrl + clic)", "« %s » ; deux ailes en orange : %s ; leur centre de gravité à %.1f cm du milieu" % [
+		at.fiche_titre.text, orange, at._cg_selection.position.x * 100.0])
+	# un vrai Ctrl + clic dans la vue ajoute la pièce sous la souris ; un second Ctrl + clic l'enlève
+	at.camera.vue("dessus")
+	await _attendre_atelier()
+	var fus: MeshInstance3D = at.maillages["Fuselage"][0]
+	var pos: Vector2 = at.camera.unproject_position((fus.global_transform * fus.get_aabb()).get_center())
+	var sous: String = at.piece_sous(pos)
+	at._demande_clic = pos
+	at._demande_clic_ctrl = true
+	await _attendre_atelier()
+	var avec: bool = at.selection.get("genre", "") == "groupe" and (at.selection["elements"] as Array).size() == 3
+	at._demande_clic = pos
+	at._demande_clic_ctrl = true
+	await _attendre_atelier()
+	var sans: bool = at.selection.get("genre", "") == "groupe" and (at.selection["elements"] as Array).size() == 2
+	_resultat(sous != "" and avec and sans, "Écran : Ctrl + clic dans la vue", "sous la souris : « %s » ; ajoutée : %s, retirée : %s" % [sous, avec, sans])
+	at.camera.vue("trois_quarts")
+	# 2. un clic sur une tuile ouvre sa page détaillée
+	var tuiles_ok: bool = at.tableau.get_child_count() == 8
+	(at.tableau.get_child(7) as Control).gui_input.emit(_clic_gauche())
+	var page_sym: bool = at.selection == {"genre": "analyse", "id": "symetrie"} and at.fiche.visible and at.fiche_titre.text == "Symétrie gauche-droite"
+	var manche_orange: bool = not at.maillages.has("Manche_piece") or (at.maillages["Manche_piece"][0] as MeshInstance3D).material_overlay == at._materiau_surligne
+	(at.tableau.get_child(0) as Control).gui_input.emit(_clic_gauche())
+	var page_masses: bool = at.fiche_titre.text == "Répartition des masses" and at.fiche_sections.get_child_count() > 20
+	_resultat(tuiles_ok and page_sym and manche_orange and page_masses, "Écran : tuiles cliquables", "8 tuiles : %s ; « Symétrie » ouvre « %s » (manche en orange : %s) ; « Masse » ouvre « %s » (%d lignes)" % [
+		tuiles_ok, "Symétrie gauche-droite" if page_sym else at.fiche_titre.text, manche_orange, at.fiche_titre.text, at.fiche_sections.get_child_count()])
+	# un clic sur une ligne de la page choisit ces pièces dans le vaisseau
+	var lignes: Array = at.fiche_sections.get_children().filter(func(c): return c is PanelContainer and (c as Control).mouse_filter == Control.MOUSE_FILTER_STOP)
+	var derniere: Control = lignes[-1] if not lignes.is_empty() else null
+	if derniere != null:
+		derniere.gui_input.emit(_clic_gauche())
+	ok = derniere != null and String(at.selection.get("genre", "")) in ["piece", "ajout", "module"] and at.fiche_titre.text != "Répartition des masses"
+	_resultat(ok, "Écran : une ligne de la page choisit ses pièces", "%d lignes cliquables ; la dernière ouvre « %s »" % [lignes.size(), at.fiche_titre.text])
+	# 3. « Poussées » : flèches de chaque moteur, et la flèche courbe du couple (violette : compensé)
+	(at.tableau.get_child(1) as Control).gui_input.emit(_clic_gauche())
+	var fl_c: Node3D = at._fleche_couple
+	var couleur_avant := Color.BLACK
+	if fl_c.get_child_count() > 0:
+		couleur_avant = ((fl_c.get_child(0).get_child(0) as MeshInstance3D).material_override as StandardMaterial3D).albedo_color
+	ok = at.fiche_titre.text == "Poussées et couple" and at.case_poussees.button_pressed and at._fleches_poussee.visible and fl_c.visible \
+		and fl_c.get_child_count() == 1 and couleur_avant.b > 0.9 and at._fleches_poussee.get_child_count() == 6
+	_resultat(ok, "Écran : page des poussées et flèche du couple", "« %s » ; %d flèches de poussée ; flèche du couple : %d, couleur %s" % [
+		at.fiche_titre.text, at._fleches_poussee.get_child_count(), fl_c.get_child_count(), couleur_avant])
+	# un gros moteur d'un seul côté : la flèche du couple devient rouge, la tuile Symétrie le dit
+	at.case_symetrie.button_pressed = false
+	at.edition.ajouter("moteur_ionique", {"poussee_kn": 400.0}, Transform3D(Basis.IDENTITY, Vector3(1.0, -0.2, 2.6)), "Fuselage")
+	await _attendre_atelier()
+	var couleur_apres := Color.BLACK
+	if fl_c.get_child_count() > 0:
+		couleur_apres = ((fl_c.get_child(0).get_child(0) as MeshInstance3D).material_override as StandardMaterial3D).albedo_color
+	var t_sym: Array = _textes_tuile(at.tableau.get_child(7))
+	ok = couleur_apres.r > 0.9 and couleur_apres.g < 0.4 and String(t_sym[1]).ends_with("à droite") and at._fleches_poussee.get_child_count() == 7
+	_resultat(ok, "Écran : un moteur d'un seul côté", "flèche du couple %s ; tuile Symétrie « %s » ; %d flèches" % [couleur_apres, t_sym[1], at._fleches_poussee.get_child_count()])
+	at.annuler()
+	await _attendre_atelier()
+	at.case_symetrie.button_pressed = true
+	# 4. la salle à part : l'aile haute droite seule, le reste du vaisseau et le hangar disparaissent
+	at.choisir("module", "aile_haut_droit")
+	var masse_aile: float = float(at.analyse._masse_de(at.analyse.pieces_module("aile_haut_droit"))[0])
+	var aile: MeshInstance3D = at.maillages["Aile_haut_droit"][0]
+	var calques_fus: int = fus.layers
+	var calques_aile: int = aile.layers
+	var cam_avant: Vector3 = at.camera.global_position
+	at.entrer_salle()
+	await _attendre_atelier()
+	var t0: Array = _textes_tuile(at.tableau.get_child(0))
+	var r_fus: Array = _rayon_vers(fus, Vector3.DOWN)
+	var touche_fus: Dictionary = at._rayon_monde(r_fus[0], r_fus[1])
+	var r_aile: Array = _rayon_vers(aile, Vector3.DOWN)
+	var touche_aile: Dictionary = at._rayon_monde(r_aile[0], r_aile[1])
+	var aile_touchee: bool = not touche_aile.is_empty() and String(touche_aile["collider"].get_meta("piece", "")) == "Aile_haut_droit"
+	var cible_ok: bool = at.camera.cible.distance_to((aile.global_transform * aile.get_aabb()).get_center()) < 2.0
+	ok = not at.salle.is_empty() and at.hangar.en_salle and not at.hangar.sol.visible and at.hangar.salle.visible and at.bandeau_salle.visible \
+		and fus.layers == 1 << (AtelierScript.CALQUE_CACHE - 1) and aile.layers == calques_aile and touche_fus.is_empty() and aile_touchee \
+		and String(t0[0]) == "MASSE DU MORCEAU" and String(t0[1]) == "%s kg" % Analyse.nombre(masse_aile, 1) and cible_ok \
+		and at._centre_gravite.position.length() > 0.5
+	_resultat(ok, "Écran : la salle à part", "« %s » ; fuselage caché : %s, aile visible : %s ; la souris ne touche que l'aile : %s ; tuile « %s : %s » ; caméra sur l'aile : %s" % [
+		at.texte_salle.text, fus.layers != calques_fus, aile.layers == calques_aile, touche_fus.is_empty() and aile_touchee, t0[0], t0[1], cible_ok])
+	# poser une pièce dans la salle : elle y entre (sa jumelle, sur l'autre aile, reste cachée avec le vaisseau)
+	at.commencer_pose("propulseur", {})
+	at.calculer_pose_rayon(r_aile[0], r_aile[1])
+	var sur := String(at.pose.get("fixe_a", ""))
+	at.valider_pose()
+	await _attendre_atelier()
+	var ici := ""
+	var la_bas := ""
+	for e in at.edition.ajouts():
+		if String(e.get("fixe_a", "")) == "Aile_haut_droit":
+			ici = String(e["id"])
+		elif String(e.get("fixe_a", "")) == "Aile_haut_gauche":
+			la_bas = String(e["id"])
+	var m_ici: MeshInstance3D = at.maillages[ici][0] if at.maillages.has(ici) else null
+	var m_la: MeshInstance3D = at.maillages[la_bas][0] if at.maillages.has(la_bas) else null
+	var t0b: Array = _textes_tuile(at.tableau.get_child(0))
+	ok = sur == "Aile_haut_droit" and m_ici != null and m_la != null and (at.salle["cles"] as Dictionary).has(ici) \
+		and m_ici.layers != 1 << (AtelierScript.CALQUE_CACHE - 1) and m_la.layers == 1 << (AtelierScript.CALQUE_CACHE - 1) \
+		and String(t0b[1]) == "%s kg" % Analyse.nombre(masse_aile + at.analyse.masse_ajout(ici), 1)
+	_resultat(ok, "Écran : poser une pièce dans la salle à part", "posée sur %s, dans la salle : %s ; jumelle cachée : %s ; masse du morceau %s" % [
+		sur, (at.salle.get("cles", {}) as Dictionary).has(ici), m_la != null and m_la.layers == 1 << (AtelierScript.CALQUE_CACHE - 1), t0b[1]])
+	# un clic sur une tuile de la salle : la fiche du morceau
+	(at.tableau.get_child(0) as Control).gui_input.emit(_clic_gauche())
+	var fiche_morceau: bool = at.selection == {"genre": "module", "id": "aile_haut_droit"}
+	# 5. I : remettre en place ; tout revient, la pièce posée reste sur l'aile
+	at._unhandled_input(_touche(KEY_I))
+	await _attendre_atelier()
+	var t0c: Array = _textes_tuile(at.tableau.get_child(0))
+	ok = fiche_morceau and at.salle.is_empty() and not at.hangar.en_salle and at.hangar.sol.visible and not at.bandeau_salle.visible \
+		and fus.layers == calques_fus and m_la.layers != 1 << (AtelierScript.CALQUE_CACHE - 1) and at.camera.global_position.distance_to(cam_avant) < 0.01 \
+		and String(t0c[0]) == "MASSE" and at.edition.ajouts().size() == 2 and at._centre_gravite.position.length() < 1e-6 and at.nb_flottantes == 0
+	_resultat(ok, "Écran : remettre en place (I)", "fiche du morceau : %s ; vaisseau et hangar revenus : %s ; caméra revenue : %s ; pièces posées : %d, rien ne flotte : %s" % [
+		fiche_morceau, fus.layers == calques_fus and at.hangar.sol.visible, at.camera.global_position.distance_to(cam_avant) < 0.01,
+		at.edition.ajouts().size(), at.nb_flottantes == 0])
+	# Échap : d'abord on ne choisit plus rien, puis on sort de la salle
+	at.choisir("module", "canons")
+	at.entrer_salle()
+	at._unhandled_input(_touche(KEY_ESCAPE))
+	var encore_dedans: bool = not at.salle.is_empty() and at.selection.is_empty()
+	at._unhandled_input(_touche(KEY_ESCAPE))
+	_resultat(encore_dedans and at.salle.is_empty(), "Écran : Échap sort de la salle à part", "1er Échap : rien de choisi, toujours dans la salle (%s) ; 2e : dehors (%s)" % [encore_dedans, at.salle.is_empty()])
+	# 6. enlever une sélection d'un coup (Suppr) : pièce posée + module ; la pièce du chasseur reste ; un Ctrl + Z remet tout
+	await _attendre_atelier()
+	at.choisir("ajout", ici)
+	at.basculer_dans_selection("module", "canons")
+	at.basculer_dans_selection("piece", "Fuselage")
+	var n_avant: int = at.plan.pieces.size()
+	at.supprimer_selection()
+	await _attendre_atelier()
+	var enleve: bool = at.edition.ajouts().is_empty() and at.analyse.pieces_module("canons").is_empty() and at.analyse.a_piece("Fuselage")
+	var texte_avis: String = at.texte_avis.text
+	at.annuler()
+	await _attendre_atelier()
+	ok = enleve and at.plan.pieces.size() == n_avant and at.edition.ajouts().size() == 2 and not at.analyse.pieces_module("canons").is_empty()
+	_resultat(ok, "Écran : enlever une sélection d'un coup", "« %s » ; un Ctrl + Z : %d pièces (avant : %d)" % [texte_avis, at.plan.pieces.size(), n_avant])
 	at.queue_free()
 	await get_tree().process_frame

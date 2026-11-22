@@ -16,7 +16,7 @@ choses qui ne sont pas dans le dépôt (trop lourdes) : l'extension `addons/nobo
 Le jeu s'ouvre sur l'**écran d'accueil** (provisoire) : **Atelier**, **Jouer** (le dernier vaisseau,
 posé au sol devant le hangar) et **Charger un vaisseau**.
 
-## Atelier (étapes 2 et 3)
+## Atelier (étapes 2 à 4)
 L'atelier est un écran à part : le jeu (planète, lumière, son) n'est chargé qu'au clic sur **Lancer**,
 et il est libéré quand on revient (F3 dans le jeu). Le vaisseau est posé dans un hangar, sur ses roues
 (même physique que le jeu : ses amortisseurs s'écrasent sous son poids), ailes repliées.
@@ -63,6 +63,32 @@ et il est libéré quand on revient (F3 dans le jeu). Le vaisseau est posé dans
   cabrer le vaisseau (« TROP pour les propulseurs » : la poussée est au-dessus du centre de gravité).
 - Dans le jeu, les pièces posées sont dessinées comme dans l'atelier, et leurs moteurs ont leur ligne au
   tableau (MOTEURS).
+
+### Analyse ingénieur et salle à part (étape 4)
+- **Ctrl + clic** (dans la vue ou dans la liste) : choisir **plusieurs pièces** à la fois (Ctrl + clic
+  encore : en retirer une). La fiche analyse toute la sélection : masse et part du vaisseau, son centre de
+  gravité (**boule bleue**), son écart au centre du vaisseau, son inertie propre, sa poussée, sa surface
+  d'air, et **le vaisseau sans elle** (masse, et de combien son centre de gravité bougerait). Suppr enlève
+  d'un coup ce qui peut l'être (un seul Ctrl + Z remet tout).
+- Le **tableau ingénieur** a une 8e tuile, **SYMÉTRIE** (centre de gravité sur le côté, pièces sans
+  jumelle), et **chaque tuile se clique** : elle ouvre sa page détaillée.
+  - **Répartition des masses** : par catégorie, par matière, et les 15 pièces les plus lourdes, avec leur
+    part du vaisseau (une barre par ligne ; un clic sur une ligne choisit ces pièces).
+  - **Poussées et couple** : chaque moteur (poussée, couple autour du centre de gravité), le couple axe par
+    axe (tangage, lacet, roulis) comparé à ce que les petits propulseurs peuvent compenser (barre rouge
+    au-delà de 100 %), les moteurs de levage, les petits propulseurs rangés par rôle. Si la poussée est
+    décalée, la poussée « vers l'avant, sans tourner » (celle que le pilotage garde) est donnée aussi. Avec
+    la case **Poussées** : une flèche par moteur, la résultante (verte) et une **flèche courbe** du couple
+    autour du centre de gravité, dans le sens où il fait tourner le vaisseau (violette : les propulseurs
+    compensent ; rouge : trop).
+  - **Symétrie gauche-droite** : centre de gravité sur le côté, masses et poussées de chaque côté, et les
+    pièces **sans jumelle** en miroir (en orange). Sur le chasseur : le manche et le levier des gaz (c'est
+    voulu), et les deux buses de montée, qui ne sont pas tout à fait en miroir (environ 8°).
+- **Salle à part** (touche **I**, ou le bouton de la fiche) : ce qui est choisi reste seul, avec ce qui est
+  posé dessus ; le reste du vaisseau et le hangar disparaissent, un plateau s'allume dessous. Le tableau
+  donne alors les chiffres du morceau seul (masse, centre de gravité, inertie, poussée, surface d'air, le
+  vaisseau sans lui). On peut y **poser des pièces** (elles restent dans la salle) et tout analyser.
+  **↩ Remettre en place** (I, ou Échap quand rien n'est choisi) : tout revient, avec ce qui a été posé.
 Le visuel (hangar, menus, couleurs, formes des pièces) est provisoire ; la physique est la vraie.
 
 ## Commandes
@@ -394,11 +420,12 @@ façon Star Wars (jet de 3 000 m/s), qui suit de vraies lois là où elles exist
   centre de gravité, inertie) et le catalogue des matières et des types de pièces (`catalogue.gd`).
   `vaisseaux/` : les plans (celui du chasseur de départ). `outils/plan/` : comment refaire le plan à
   partir du modèle Blender. `scripts/tests_atelier.gd` : ses tests (`res://scenes/tests_atelier.tscn`).
-  L'écran de l'atelier : `atelier.gd` (scène `scenes/atelier.tscn`), `analyse.gd` (tableau ingénieur,
-  catégories, recherche, fiches), `camera_atelier.gd`, `hangar.gd` et `style.gd` (visuel provisoire).
+  L'écran de l'atelier : `atelier.gd` (scène `scenes/atelier.tscn`, avec la salle à part), `analyse.gd`
+  (tableau ingénieur, catégories, recherche, fiches, pages d'analyse : masses, poussées, symétrie), `camera_atelier.gd`, `hangar.gd` et `style.gd` (visuel provisoire).
   `pieces_toutes_faites.gd` : les pièces à poser (réglages, masse, dessin) ; `edition.gd` : les changements
   du plan (poser, symétrie, régler, enlever, annuler / refaire, enregistrer).
-  `outils/captures_atelier.gd` et `captures_atelier_etape3.gd` : captures d'écran de l'atelier et du départ.
+  `outils/captures_atelier.gd`, `captures_atelier_etape3.gd` et `captures_atelier_etape4.gd` : captures
+  d'écran de l'atelier et du départ.
 - `scripts/dessin_vaisseau.gd` : le dessin du vaisseau d'après son plan (modules enlevés cachés, pièces
   posées dessinées) ; le même dans l'atelier et dans le jeu.
 - `scripts/accueil.gd` (scène `scenes/accueil.tscn`, scène de départ) : l'écran d'accueil.

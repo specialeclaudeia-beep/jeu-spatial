@@ -13,6 +13,14 @@ extends Node3D
 ## « Lancer » est refusé tant qu'il y en a. Plusieurs vaisseaux, chacun son nom, enregistrés dans
 ## user://vaisseaux/ (Ctrl + S, et tout seul toutes les 2 minutes, au lancement et en quittant).
 ##
+## Étape 4 : l'ANALYSE INGÉNIEUR. Ctrl + clic choisit plusieurs pièces à la fois : la fiche analyse la
+## sélection (masse, part, centre, inertie propre, ce que devient le vaisseau sans elle) et une petite boule
+## bleue montre son centre de gravité. Un clic sur une tuile du tableau ouvre sa page détaillée : répartition
+## des masses, poussées et couple (moteur par moteur et axe par axe, flèche violette du couple), symétrie
+## gauche-droite (pièces sans jumelle en orange). La SALLE À PART (touche I, ou « / » du pavé) : la sélection
+## (et ce qui est posé dessus) est montrée seule, sur un plateau, avec ses propres chiffres ; on peut y poser
+## des pièces dessus, puis « Remettre en place » (I) : tout revient, rien n'a bougé dans le plan.
+##
 ## Visuel PROVISOIRE (hangar, menus, couleurs, dessin des pièces posées). La physique, elle, est la vraie :
 ## après chaque changement, le vaisseau est reconstruit par le même code que le jeu (plan → physique), il se
 ## repose sur ses roues, et le tableau ingénieur est recalculé.
@@ -35,13 +43,15 @@ const MODELE_COCKPIT := "res://modeles/vaisseau/cockpit.glb"
 const MODELE_DROIDE := "res://modeles/vaisseau/droide.glb"
 const REGLAGES := "user://atelier.cfg"
 const COUCHE_PIECES := 2                 # couche des formes cliquables (une par maillage du vaisseau)
+const COUCHE_SALLE := 3                  # en plus, celles de la salle à part (les seules qu'on touche alors)
+const CALQUE_CACHE := 20                 # calque d'affichage des maillages cachés par la salle à part
 const RAYON_PLANETE := 600000.0          # comme le jeu : le hangar est sur la planète
 const GRAVITE_SURFACE := 9.81
 const GRILLE := 0.1                      # m : pas de la grille de pose (Ctrl : pose libre)
 const PAS_ROTATION := 15.0               # degrés
 const MARGE_CONTACT := 0.04              # m : une pièce à moins de 4 cm d'une autre la touche
 const SAUVEGARDE_AUTO_S := 120.0
-const AIDE := "Molette (ou Alt + clic) : tourner   ·   Maj + molette : déplacer   ·   Roulette : zoom   ·   Clic : choisir   ·   G : déplacer la pièce   ·   Maj + D : dupliquer   ·   Suppr : enlever   ·   Ctrl + Z / Ctrl + Y : annuler / refaire   ·   M : symétrie   ·   Ctrl + S : enregistrer"
+const AIDE := "Molette (ou Alt + clic) : tourner   ·   Maj + molette : déplacer   ·   Roulette : zoom   ·   Clic : choisir (Ctrl : plusieurs)   ·   I : salle à part   ·   G : déplacer la pièce   ·   Maj + D : dupliquer   ·   Suppr : enlever   ·   Ctrl + Z / Ctrl + Y : annuler / refaire   ·   M : symétrie   ·   Ctrl + S : enregistrer"
 const AIDE_POSE := "Clic : poser (Maj + clic : en poser d'autres)   ·   R / T / E : tourner de 15° (Maj : dans l'autre sens)   ·   Ctrl : sans la grille de 10 cm   ·   M : symétrie   ·   Échap ou clic droit : annuler"
 
 var plan
@@ -59,7 +69,13 @@ var cockpit: Node3D
 var droide: Node3D
 var modele
 var maillages := {}                      # id de pièce (ou de pièce posée) → [MeshInstance3D]
-var selection := {}                      # {"genre": piece / ajout / module / categorie / type / matiere, "id": …}
+## Ce qui est choisi : {"genre": piece / ajout / module / categorie / type / matiere, "id": …},
+## ou {"genre": "groupe", "id": "groupe", "elements": [{genre, id}…]} (Ctrl + clic : plusieurs à la fois),
+## ou {"genre": "analyse", "id": masses / poussees / symetrie} (clic sur une tuile du tableau).
+var selection := {}
+var salle := {}                          # salle à part : {elements, ids, cles, nom, camera} ; vide = hangar
+var _caches_salle := {}                  # maillage caché par la salle à part → [calques, ombre] d'avant
+var _corps_salle: Array = []             # formes cliquables du morceau isolé (couche COUCHE_SALLE en plus)
 var symetrie := true                     # poser aussi la jumelle de l'autre côté
 var flottantes := {}                     # pièces (ou pièces du chasseur) qui ne touchent rien → vrai
 var nb_flottantes := 0                   # pièces posées et modules qui flottent
@@ -68,7 +84,9 @@ var _corps_ajouts := {}                  # pièce posée → [formes cliquables]
 var _surlignes: Array = []
 var _repere_selection: Node3D            # flèches et points des pièces sans dessin (moteurs, roues…)
 var _centre_gravite: Node3D
+var _cg_selection: Node3D                # boule bleue : centre de gravité de la sélection (ou du morceau isolé)
 var _fleches_poussee: Node3D
+var _fleche_couple: Node3D               # flèche courbe violette : couple des moteurs autour du centre de gravité
 var _materiau_surligne: StandardMaterial3D
 var _materiau_survol: StandardMaterial3D
 var _materiau_flotte: StandardMaterial3D
@@ -78,6 +96,7 @@ var _survol_maillages: Array = []
 var _survol_id := ""
 var _clic_depart := Vector2(-1, -1)
 var _demande_clic := Vector2(-1, -1)
+var _demande_clic_ctrl := false          # Ctrl + clic : ajouter à la sélection (ou en retirer)
 var _demande_survol := Vector2(-1, -1)
 var _souris := Vector2(-1, -1)
 var _verifier_dans := -1                 # images de physique avant de chercher les pièces qui flottent
@@ -97,6 +116,9 @@ var fiche_sous_titre: Label
 var fiche_outils: VBoxContainer
 var fiche_grille: GridContainer
 var fiche_note: Label
+var fiche_sections: VBoxContainer        # listes de la fiche (pages d'analyse, sélection) : lignes cliquables
+var bandeau_salle: PanelContainer
+var texte_salle: Label
 var bulle: Label
 var chargement: ColorRect
 var tableau: HBoxContainer
@@ -130,6 +152,7 @@ func _ready() -> void:
 	_creer_vaisseau()
 	camera = CameraAtelier.new()
 	add_child(camera)
+	camera.cull_mask &= ~(1 << (CALQUE_CACHE - 1))   # ce que la salle à part cache
 	camera.make_current()
 	camera.cadrer(boite_vaisseau())
 	camera.vue("trois_quarts")
@@ -221,10 +244,18 @@ func _creer_vaisseau() -> void:
 	_repere_selection = Node3D.new()
 	corps.add_child(_repere_selection)
 	_creer_centre_gravite()
+	_cg_selection = _boule_cg(0.2, Color(0.35, 0.75, 1.0))
+	_cg_selection.name = "Centre_gravite_selection"
+	_cg_selection.visible = false
+	corps.add_child(_cg_selection)
 	_fleches_poussee = Node3D.new()
 	_fleches_poussee.name = "Fleches_poussee"
 	_fleches_poussee.visible = false
 	corps.add_child(_fleches_poussee)
+	_fleche_couple = Node3D.new()
+	_fleche_couple.name = "Fleche_couple"
+	_fleche_couple.visible = false
+	corps.add_child(_fleche_couple)
 	_dessiner()
 	_refaire_fleches_poussee()
 
@@ -353,22 +384,44 @@ func _rafraichir() -> void:
 	analyse = Analyse.new(plan)
 	_poser_physique()
 	_dessiner()
+	if not salle.is_empty():
+		_appliquer_salle()
 	_refaire_fleches_poussee()
 	_remplir_tableau()
 	_maj_barre_haut()
 	remplir_catalogue()
-	if _selection_existe():
-		choisir(String(selection["genre"]), String(selection["id"]), true)
-	else:
-		deselectionner()
+	_rechoisir()
 	if not pose.is_empty():
 		_maj_pose_exclusions()
 	_verifier_dans = 2
 
 
+## Après un changement : la même sélection si elle existe encore (un groupe garde ce qui en reste).
+func _rechoisir() -> void:
+	if String(selection.get("genre", "")) == "groupe":
+		var reste: Array = (selection.get("elements", []) as Array).filter(func(e): return _element_existe(e))
+		if reste.size() > 1:
+			choisir_groupe(reste, true)
+			return
+		if reste.size() == 1:
+			choisir(String(reste[0]["genre"]), String(reste[0]["id"]), true)
+			return
+		deselectionner()
+	elif _selection_existe():
+		choisir(String(selection["genre"]), String(selection["id"]), true)
+	else:
+		deselectionner()
+
+
 func _selection_existe() -> bool:
-	var id := String(selection.get("id", ""))
-	match String(selection.get("genre", "")):
+	if String(selection.get("genre", "")) == "groupe":
+		return (selection.get("elements", []) as Array).any(func(e): return _element_existe(e))
+	return _element_existe(selection)
+
+
+func _element_existe(e: Dictionary) -> bool:
+	var id := String(e.get("id", ""))
+	match String(e.get("genre", "")):
 		"piece":
 			return analyse.a_piece(id)
 		"ajout":
@@ -377,6 +430,8 @@ func _selection_existe() -> bool:
 			return not analyse.pieces_module(id).is_empty()
 		"categorie", "type", "matiere":
 			return true
+		"analyse":
+			return id in ["masses", "poussees", "symetrie"]
 	return false
 
 
@@ -384,12 +439,17 @@ func _selection_existe() -> bool:
 # REPÈRES 3D : centre de gravité, flèches de poussée, pièces sans dessin
 # =====================================================================
 func _creer_centre_gravite() -> void:
-	_centre_gravite = Node3D.new()
+	_centre_gravite = _boule_cg(0.32, Color(0.95, 0.85, 0.2))
 	_centre_gravite.name = "Centre_gravite"
 	pilote.add_child(_centre_gravite)
+
+
+## La boule à damier des plans d'avion (noir et couleur), visible à travers la coque.
+static func _boule_cg(rayon: float, couleur: Color) -> Node3D:
+	var n := Node3D.new()
 	var s := SphereMesh.new()
-	s.radius = 0.32
-	s.height = 0.64
+	s.radius = rayon
+	s.height = rayon * 2.0
 	s.radial_segments = 24
 	s.rings = 12
 	var mi := MeshInstance3D.new()
@@ -399,37 +459,114 @@ func _creer_centre_gravite() -> void:
 	# la boule à damier des plans d'avion, visible à travers la coque
 	sh.code = """shader_type spatial;
 render_mode unshaded, depth_test_disabled, cull_back;
+uniform vec3 couleur = vec3(0.95, 0.85, 0.2);
 varying vec3 p;
 void vertex() { p = VERTEX; }
 void fragment() {
 	float d = step(0.0, p.x) == step(0.0, p.y) ? 1.0 : 0.0;
 	d = step(0.0, p.z) > 0.5 ? d : 1.0 - d;
-	ALBEDO = mix(vec3(0.05), vec3(0.95, 0.85, 0.2), d);
+	ALBEDO = mix(vec3(0.05), couleur, d);
 }"""
 	m.shader = sh
+	m.set_shader_parameter("couleur", Vector3(couleur.r, couleur.g, couleur.b))
 	m.render_priority = 3
 	mi.material_override = m
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_centre_gravite.add_child(mi)
+	n.add_child(mi)
+	return n
 
 
 func _refaire_fleches_poussee() -> void:
 	for c in _fleches_poussee.get_children():
 		_fleches_poussee.remove_child(c)
 		c.queue_free()
+	for c in _fleche_couple.get_children():
+		_fleche_couple.remove_child(c)
+		c.queue_free()
 	var v = analyse.v
 	var somme := Vector3.ZERO
+	var dans_salle: Dictionary = salle.get("ids", {})
 	for m in v.moteurs:
 		if m["role"] == "levage":
 			continue
+		if not salle.is_empty() and not dans_salle.has(String(m["id"])):
+			continue   # salle à part : seulement les moteurs du morceau isolé
 		var f: Vector3 = (m["dir_ref"] as Vector3) * float(m["poussee_n"])
 		somme += f
 		var depart: Vector3 = vaisseau_pose.transformation_articulation(String(m["articulation"])) * (m["pos_ref"] as Vector3)
 		var dir: Vector3 = vaisseau_pose.transformation_articulation(String(m["articulation"])).basis * (m["dir_ref"] as Vector3)
 		_fleches_poussee.add_child(fleche(depart, dir, longueur_force(float(m["poussee_n"])), Color(1.0, 0.55, 0.15), 1.0, true))
-	# la résultante, au centre de gravité
+	# la résultante, au centre de gravité (du vaisseau ; dans la salle à part : du morceau)
+	var cg: Vector3 = v.centre_gravite if salle.is_empty() else centre_affiche(pieces_salle())
 	if somme.length() > 0.0:
-		_fleches_poussee.add_child(fleche(v.centre_gravite, somme.normalized(), longueur_force(somme.length()), Color(0.3, 1.0, 0.45), 1.6))
+		_fleches_poussee.add_child(fleche(cg, somme.normalized(), longueur_force(somme.length()), Color(0.3, 1.0, 0.45), 1.6))
+	# le couple des moteurs : une flèche courbe autour de son axe (sens de la main droite), au centre de gravité
+	if salle.is_empty():
+		var t: Dictionary = analyse.tableau()
+		var c: Vector3 = t["couple_moteurs"]
+		if c.length() > 100.0:
+			var couleur := Color(0.78, 0.45, 1.0) if bool(t["couple_compense"]) else Color(1.0, 0.3, 0.3)
+			_fleche_couple.add_child(fleche_couple(v.centre_gravite, c, couleur))
+
+
+## Rayon de la flèche courbe d'un couple (m) : 1 kN·m → 0,9 m, 100 kN·m → 1,5 m, 10 MN·m → 2,1 m.
+static func rayon_couple(nm: float) -> float:
+	return clampf(0.9 + 0.3 * log(maxf(nm, 1000.0) / 1000.0) / log(10.0), 0.9, 2.4)
+
+
+## Flèche courbe (trois quarts de tour et une pointe) autour de l'axe du couple c, centrée sur « centre » :
+## elle tourne dans le sens où le couple fait tourner le vaisseau (règle de la main droite).
+static func fleche_couple(centre: Vector3, c: Vector3, couleur: Color) -> Node3D:
+	var n := Node3D.new()
+	var axe := c.normalized()
+	var u := (Vector3.UP if absf(axe.dot(Vector3.UP)) < 0.9 else Vector3.RIGHT).cross(axe).normalized()
+	var w := axe.cross(u)
+	var r := rayon_couple(c.length())
+	var tube := 0.05
+	var fin := TAU * 0.75
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var pas := 40
+	var cotes := 8
+	for i in pas:
+		for k in cotes:
+			var quad := []
+			for di in [0, 1]:
+				var a: float = fin * float(i + di) / pas
+				var cc: Vector3 = (u * cos(a) + w * sin(a)) * r
+				var radial: Vector3 = (u * cos(a) + w * sin(a))
+				for dk in [0, 1]:
+					var b := TAU * float(k + dk) / cotes
+					quad.append(centre + cc + (radial * cos(b) + axe * sin(b)) * tube)
+			for j in [0, 2, 1, 1, 2, 3]:
+				st.add_vertex(quad[j])
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.albedo_color = couleur
+	m.no_depth_test = true
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.render_priority = 2
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	n.add_child(mi)
+	# la pointe, au bout de l'arc, dans le sens de la rotation
+	var bout: Vector3 = centre + (u * cos(fin) + w * sin(fin)) * r
+	var tangente: Vector3 = (-u * sin(fin) + w * cos(fin)).normalized()
+	var pointe := CylinderMesh.new()
+	pointe.top_radius = 0.0
+	pointe.bottom_radius = 0.16
+	pointe.height = 0.42
+	pointe.radial_segments = 12
+	var mp := MeshInstance3D.new()
+	mp.mesh = pointe
+	var x := tangente.cross(axe).normalized()
+	mp.transform = Transform3D(Basis(x, tangente, x.cross(tangente)), bout + tangente * 0.21)
+	mp.material_override = m
+	mp.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	n.add_child(mp)
+	return n
 
 
 ## Longueur d'une flèche de force (m) : 6 kN → 1 m, 200 kN → 3,3 m, 1 000 kN → 4,7 m.
@@ -554,6 +691,98 @@ func choisir(genre: String, id: String, garder_pose := false) -> void:
 	if not garder_pose and not pose.is_empty():
 		finir_pose()
 	selection = {"genre": genre, "id": id}
+	var ids := _montrer_choix()
+	match genre:
+		"piece":
+			_afficher_fiche(_avec_analyse(analyse.fiche_piece(id), ids))
+			var p: Dictionary = analyse.piece(id)
+			if p.has("module") and not p.has("ajout"):
+				var cle := String(p["module"])
+				_bouton_fiche("Choisir tout le module « %s »" % analyse.nom_module(cle), func(): choisir("module", cle))
+		"ajout":
+			_afficher_fiche(_avec_analyse(analyse.fiche_ajout(id), ids))
+			_outils_ajout(id)
+		"module":
+			var enlevable := not Edition.MODULES_INDISPENSABLES.has(id)
+			_afficher_fiche(_avec_analyse(analyse.fiche_module(id, enlevable), ids))
+			var b := _bouton_fiche("Enlever le module   (Suppr)", func(): supprimer_selection())
+			b.disabled = not enlevable
+		"type":
+			_afficher_fiche(_avec_analyse(analyse.fiche_type(id), ids))
+		"matiere":
+			_afficher_fiche(_avec_analyse(analyse.fiche_matiere(id), ids))
+		"categorie":
+			_afficher_fiche(_avec_analyse(fiche_categorie(id), ids))
+		"analyse":
+			match id:
+				"masses":
+					_afficher_fiche(analyse.fiche_masses())
+				"poussees":
+					_afficher_fiche(analyse.fiche_poussees())
+				"symetrie":
+					_afficher_fiche(analyse.fiche_symetrie())
+	if genre != "analyse":
+		_bouton_salle(ids)
+	_selectionner_dans_liste()
+
+
+## Choisir plusieurs choses à la fois (Ctrl + clic) : la fiche analyse la sélection entière.
+func choisir_groupe(elements: Array, garder_pose := false) -> void:
+	if not garder_pose and not pose.is_empty():
+		finir_pose()
+	var propres := []
+	var vus := {}
+	for e in elements:
+		var cle := "%s:%s" % [e["genre"], e["id"]]
+		if not vus.has(cle):
+			vus[cle] = true
+			propres.append({"genre": String(e["genre"]), "id": String(e["id"])})
+	selection = {"genre": "groupe", "id": "groupe", "elements": propres}
+	var ids := _montrer_choix()
+	var liste := []
+	for e in propres:
+		var ids_e := _pieces_de(e)
+		var m := float(analyse._masse_de(ids_e)[0])
+		liste.append(Analyse.ligne_liste(nom_choix(e), ("%s kg" % Analyse.nombre(m, 1)) if m > 0.0 else "%d pièce%s" % [ids_e.size(), "s" if ids_e.size() > 1 else ""],
+			m / maxf(analyse.masse_totale, 1e-9) if m > 0.0 else -1.0, e))
+	_afficher_fiche({"titre": "Sélection : %d éléments" % propres.size(), "sous_titre": "%d pièces du plan · Ctrl + clic pour en ajouter ou en retirer" % ids.size(),
+		"lignes": analyse.lignes_groupe(ids), "sections": [{"titre": "DANS LA SÉLECTION (clic : choisir celui-là seul)", "liste": liste}],
+		"note": "Les chiffres sont ceux de toute la sélection, calculés comme pour le vaisseau entier (pose de référence, ailes ouvertes). La boule bleue est son centre de gravité."})
+	var b := _bouton_fiche("Enlever ce qui peut l'être   (Suppr)", supprimer_selection)
+	b.disabled = not propres.any(func(e): return e["genre"] == "ajout" or (e["genre"] == "module" and not Edition.MODULES_INDISPENSABLES.has(e["id"])))
+	_bouton_salle(ids)
+	if arbre != null:
+		arbre.deselect_all()
+
+
+## Ctrl + clic : ajoute à la sélection, ou en retire ce qui y est déjà.
+func basculer_dans_selection(genre: String, id: String) -> void:
+	var elements := []
+	match String(selection.get("genre", "")):
+		"groupe":
+			elements = (selection["elements"] as Array).duplicate()
+		"piece", "ajout", "module", "categorie", "type", "matiere":
+			elements = [{"genre": String(selection["genre"]), "id": String(selection["id"])}]
+	var cle := "%s:%s" % [genre, id]
+	var trouve := -1
+	for k in elements.size():
+		if "%s:%s" % [elements[k]["genre"], elements[k]["id"]] == cle:
+			trouve = k
+	if trouve >= 0:
+		elements.remove_at(trouve)
+	else:
+		elements.append({"genre": genre, "id": id})
+	if elements.is_empty():
+		deselectionner()
+	elif elements.size() == 1:
+		choisir(String(elements[0]["genre"]), String(elements[0]["id"]))
+	else:
+		choisir_groupe(elements)
+
+
+## Surligne ce qui est choisi, montre les repères des pièces sans dessin et la boule bleue de son centre
+## de gravité. Renvoie les pièces choisies.
+func _montrer_choix() -> Array:
 	var ids := pieces_choisies()
 	_surligner(ids)
 	for c in _repere_selection.get_children():
@@ -565,28 +794,252 @@ func choisir(genre: String, id: String, garder_pose := false) -> void:
 			var r := _repere_piece(p)
 			if r != null:
 				_repere_selection.add_child(r)
-	match genre:
+	var genre := String(selection.get("genre", ""))
+	var m := float(analyse._masse_de(ids)[0])
+	_cg_selection.visible = genre != "analyse" and m > 0.0 and (ids.size() > 1 or genre != "piece") and salle.is_empty()
+	if _cg_selection.visible:
+		_cg_selection.position = centre_affiche(ids)
+	return ids
+
+
+## Le centre de gravité de ces pièces tel qu'on le voit dans l'atelier (repère du plan) : chaque pièce
+## d'une aile repliée est déplacée avec son aile (le plan, lui, compte les ailes ouvertes).
+func centre_affiche(ids: Array) -> Vector3:
+	var m := 0.0
+	var c := Vector3.ZERO
+	for i in ids:
+		var p: Dictionary = analyse.piece(i)
+		var mp: Dictionary = p.get("masse_calculee", {})
+		if mp.is_empty() or float(mp["masse"]) <= 0.0:
+			continue
+		var xf: Transform3D = vaisseau_pose.transformation_articulation(String(p.get("articulation", "")))
+		m += float(mp["masse"])
+		c += (xf * (mp["centre"] as Vector3)) * float(mp["masse"])
+	return c / m if m > 0.0 else analyse.v.centre_gravite
+
+
+## La fiche, avec en plus l'analyse de la sélection : son inertie propre, et le vaisseau sans elle.
+func _avec_analyse(f: Dictionary, ids: Array) -> Dictionary:
+	if ids.is_empty():
+		return f
+	var plus: Array = analyse.lignes_groupe(ids).filter(func(l): return String(l[0]).begins_with("Inertie") or l[0] == "Sans elle")
+	var lignes: Array = (f.get("lignes", []) as Array).duplicate()
+	lignes.append_array(plus)
+	f["lignes"] = lignes
+	return f
+
+
+## Le bouton de la salle à part, dans la fiche (Remettre en place, si on y est déjà).
+func _bouton_salle(ids: Array) -> void:
+	if not salle.is_empty():
+		_bouton_fiche("↩  Remettre en place   (I)", sortir_salle)
+	elif not ids.is_empty():
+		_bouton_fiche("Emmener seule dans la salle à part   (I)", entrer_salle)
+
+
+# =====================================================================
+# LA SALLE À PART : un morceau seul, pour l'analyser (et le compléter) sans le reste du vaisseau
+# =====================================================================
+## Emmène ce qui est choisi seul dans la salle à part, avec ce qui est posé dessus. Il ne bouge pas :
+## c'est le reste du vaisseau et le hangar qui disparaissent, et un plateau s'allume dessous.
+func entrer_salle() -> void:
+	if not salle.is_empty():
+		return
+	var elements := []
+	match String(selection.get("genre", "")):
+		"groupe":
+			elements = (selection["elements"] as Array).duplicate(true)
+		"piece", "ajout", "module", "categorie", "type", "matiere":
+			elements = [{"genre": String(selection["genre"]), "id": String(selection["id"])}]
+	if elements.is_empty() or pieces_choisies().is_empty():
+		montrer_avis("Choisis d'abord ce que tu veux emmener dans la salle à part (une pièce, une aile, plusieurs avec Ctrl + clic…), puis I.")
+		return
+	finir_pose()
+	salle = {"elements": elements, "nom": nom_choix(elements[0]) if elements.size() == 1 else "%d éléments" % elements.size(),
+		"ids": {}, "cles": {}, "camera": [camera.cible, camera.lacet, camera.tangage, camera.distance]}
+	_appliquer_salle()
+	if salle.is_empty():
+		return
+	camera.cadrer(boite_visible())
+	_refaire_fleches_poussee()
+	_remplir_tableau()
+	_rechoisir()
+
+
+## Remet le morceau à sa place : le vaisseau entier et le hangar reviennent, la caméra aussi.
+func sortir_salle() -> void:
+	if salle.is_empty():
+		return
+	finir_pose()
+	var cam: Array = salle["camera"]
+	salle = {}
+	_restaurer_salle()
+	hangar.salle_a_part(false)
+	_centre_gravite.position = Vector3.ZERO
+	camera.cible = cam[0]
+	camera.lacet = cam[1]
+	camera.tangage = cam[2]
+	camera.distance = cam[3]
+	camera.appliquer()
+	_maj_bandeau_salle()
+	_refaire_fleches_poussee()
+	_remplir_tableau()
+	_rechoisir()
+
+
+## Cache tout ce qui n'est pas dans la salle à part (refait après chaque changement : une pièce posée sur
+## le morceau isolé y entre aussi).
+func _appliquer_salle() -> void:
+	_restaurer_salle()
+	if salle.is_empty():
+		return
+	salle["elements"] = (salle["elements"] as Array).filter(func(e): return _element_existe(e))
+	var ids := {}
+	var cles := {}
+	for e in salle["elements"]:
+		for i in _pieces_de(e):
+			ids[i] = true
+			cles[String(analyse.piece(i).get("ajout", i))] = true
+	# ce qui est posé sur le morceau (et sur ce qui est posé dessus…)
+	var encore := true
+	while encore:
+		encore = false
+		for a in analyse.ajouts:
+			var sur := String(analyse.ajouts[a].get("fixe_a", ""))
+			if not cles.has(a) and sur != "" and cles.has(sur):
+				cles[a] = true
+				for i in _pieces_de({"genre": "ajout", "id": a}):
+					ids[i] = true
+				encore = true
+	if ids.is_empty():
+		sortir_salle()   # le morceau a été enlevé
+		return
+	salle["ids"] = ids
+	salle["cles"] = cles
+	var gardes := {}
+	for cle in cles:
+		for mi in maillages.get(cle, []):
+			gardes[mi] = true
+	var tous: Array = exterieur.find_children("*", "MeshInstance3D", true, false)
+	tous.append_array(cockpit.find_children("*", "MeshInstance3D", true, false))
+	for cle in maillages:
+		tous.append_array(maillages[cle])
+	for mi in tous:
+		var m := mi as MeshInstance3D
+		if gardes.has(m) or _caches_salle.has(m):
+			continue
+		_caches_salle[m] = [m.layers, m.cast_shadow]
+		m.layers = 1 << (CALQUE_CACHE - 1)
+		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# les formes cliquables du morceau : sur la couche de la salle (les seules que la souris touche alors)
+	for mi in _corps_v27:
+		if gardes.has(mi) and _corps_v27[mi][1] != null:
+			_corps_salle.append(_corps_v27[mi][1])
+	for a in cles:
+		_corps_salle.append_array(_corps_ajouts.get(a, []))
+	for b in _corps_salle:
+		if is_instance_valid(b) and (b as StaticBody3D).collision_layer != 0:
+			(b as StaticBody3D).collision_layer |= 1 << (COUCHE_SALLE - 1)
+	# la boule jaune : le centre de gravité du morceau
+	_centre_gravite.position = corps.transform * centre_affiche(pieces_salle())
+	var bo := boite_visible()
+	hangar.salle_a_part(true, bo.get_center(), bo.position.y - 0.25, maxf(bo.size.x, bo.size.z) * 0.62 + 1.0)
+	_maj_bandeau_salle()
+
+
+func _restaurer_salle() -> void:
+	for mi in _caches_salle:
+		if is_instance_valid(mi):
+			(mi as MeshInstance3D).layers = _caches_salle[mi][0]
+			(mi as MeshInstance3D).cast_shadow = _caches_salle[mi][1]
+	_caches_salle.clear()
+	for b in _corps_salle:
+		if is_instance_valid(b):
+			(b as StaticBody3D).collision_layer &= ~(1 << (COUCHE_SALLE - 1))
+	_corps_salle.clear()
+
+
+## Les pièces du plan qui sont dans la salle à part (vide : on est dans le hangar).
+func pieces_salle() -> Array:
+	return (salle.get("ids", {}) as Dictionary).keys()
+
+
+## Ce qu'on voit (repère du monde) : le vaisseau entier, ou le morceau de la salle à part.
+func boite_visible() -> AABB:
+	if salle.is_empty():
+		return boite_vaisseau()
+	var b := AABB()
+	var premiere := true
+	for cle in salle["cles"]:
+		for mi in maillages.get(cle, []):
+			var m := mi as MeshInstance3D
+			if not is_instance_valid(m) or not m.is_visible_in_tree() or m.mesh == null:
+				continue
+			var bm: AABB = m.global_transform * m.get_aabb()
+			b = bm if premiere else b.merge(bm)
+			premiere = false
+	# les pièces sans dessin (moteurs, roues…) : leur point
+	for i in salle["ids"]:
+		var p: Dictionary = analyse.piece(i)
+		if p.is_empty() or maillages.has(String(p.get("ajout", i))):
+			continue
+		var pt: Vector3 = p.get("point", p["masse_calculee"]["centre"])
+		pt = vaisseau_pose.transformation_articulation(String(p.get("articulation", ""))) * pt
+		var bp := AABB(corps.global_transform * pt - Vector3.ONE * 0.4, Vector3.ONE * 0.8)
+		b = bp if premiere else b.merge(bp)
+		premiere = false
+	if premiere:
+		return AABB(corps.global_transform * centre_affiche(pieces_salle()) - Vector3.ONE, Vector3.ONE * 2.0)
+	return b
+
+
+## Bandeau du haut de la vue : on est dans la salle à part (et comment en sortir).
+func _bandeau_salle() -> Control:
+	bandeau_salle = PanelContainer.new()
+	bandeau_salle.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	bandeau_salle.add_theme_stylebox_override("panel", Style.boite(Color(0.05, 0.1, 0.16, 0.92), Style.ACCENT, 6, 8.0))
+	bandeau_salle.visible = false
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 14)
+	bandeau_salle.add_child(h)
+	texte_salle = Style.label("", 15, Color.WHITE)
+	texte_salle.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	h.add_child(texte_salle)
+	var b := Style.bouton("↩  Remettre en place   (I)", 14)
+	b.tooltip_text = "Le morceau retourne sur le vaisseau (ce que tu as posé dessus aussi). Échap marche aussi."
+	b.pressed.connect(sortir_salle)
+	h.add_child(b)
+	return bandeau_salle
+
+
+func _maj_bandeau_salle() -> void:
+	if bandeau_salle == null:
+		return
+	bandeau_salle.visible = not salle.is_empty()
+	if salle.is_empty():
+		return
+	var ids := pieces_salle()
+	var m := float(analyse._masse_de(ids)[0])
+	texte_salle.text = "SALLE À PART  ·  %s  ·  %s kg  ·  %d pièce%s" % [String(salle["nom"]), Analyse.nombre(m, 1), ids.size(), "s" if ids.size() > 1 else ""]
+
+
+## Nom affiché de ce qu'on peut choisir ({genre, id}).
+func nom_choix(e: Dictionary) -> String:
+	var id := String(e["id"])
+	match String(e["genre"]):
 		"piece":
-			_afficher_fiche(analyse.fiche_piece(id))
-			var p: Dictionary = analyse.piece(id)
-			if p.has("module") and not p.has("ajout"):
-				var cle := String(p["module"])
-				_bouton_fiche("Choisir tout le module « %s »" % analyse.nom_module(cle), func(): choisir("module", cle))
+			return Analyse.nom_lisible(analyse.piece(id))
 		"ajout":
-			_afficher_fiche(analyse.fiche_ajout(id))
-			_outils_ajout(id)
+			return analyse.nom_element(id)
 		"module":
-			var enlevable := not Edition.MODULES_INDISPENSABLES.has(id)
-			_afficher_fiche(analyse.fiche_module(id, enlevable))
-			var b := _bouton_fiche("Enlever le module   (Suppr)", func(): supprimer_selection())
-			b.disabled = not enlevable
-		"type":
-			_afficher_fiche(analyse.fiche_type(id))
-		"matiere":
-			_afficher_fiche(analyse.fiche_matiere(id))
+			return "Module " + analyse.nom_module(id)
 		"categorie":
-			_afficher_fiche(fiche_categorie(id))
-	_selectionner_dans_liste()
+			return Analyse.titre_categorie(id)
+		"type":
+			return Analyse._majuscule(String(Catalogue.TYPES[id]["nom"])) if Catalogue.TYPES.has(id) else id
+		"matiere":
+			return Analyse._majuscule(String(Catalogue.MATIERES[id]["nom"])) if Catalogue.MATIERES.has(id) else id
+	return id
 
 
 func deselectionner() -> void:
@@ -595,6 +1048,8 @@ func deselectionner() -> void:
 	for c in _repere_selection.get_children():
 		_repere_selection.remove_child(c)
 		c.queue_free()
+	if _cg_selection != null:
+		_cg_selection.visible = false
 	if fiche != null:
 		fiche.visible = false
 	if arbre != null:
@@ -603,8 +1058,30 @@ func deselectionner() -> void:
 
 ## Les pièces du plan concernées par la sélection actuelle.
 func pieces_choisies() -> Array:
-	var genre := String(selection.get("genre", ""))
-	var id := String(selection.get("id", ""))
+	match String(selection.get("genre", "")):
+		"groupe":
+			var vus := {}
+			var ids := []
+			for e in selection.get("elements", []):
+				for i in _pieces_de(e):
+					if not vus.has(i):
+						vus[i] = true
+						ids.append(i)
+			return ids
+		"analyse":
+			match String(selection.get("id", "")):
+				"symetrie":
+					return (analyse.symetrie()["sans_jumelle"] as Array).duplicate()
+				"poussees":
+					return plan.pieces.filter(func(p): return p["type"] == "moteur").map(func(p): return p["id"])
+			return []
+	return _pieces_de(selection)
+
+
+## Les pièces du plan d'un élément qu'on peut choisir ({genre, id}).
+func _pieces_de(e: Dictionary) -> Array:
+	var genre := String(e.get("genre", ""))
+	var id := String(e.get("id", ""))
 	var ids := []
 	for p in plan.pieces:
 		var ok := false
@@ -667,7 +1144,9 @@ func _rayon(pos_ecran: Vector2, exclure: Array = []) -> Dictionary:
 
 
 func _rayon_monde(depart: Vector3, dir: Vector3, exclure: Array = []) -> Dictionary:
-	var q := PhysicsRayQueryParameters3D.create(depart, depart + dir.normalized() * 500.0, 1 << (COUCHE_PIECES - 1), exclure)
+	# dans la salle à part, on ne touche que le morceau isolé
+	var couche := COUCHE_PIECES if salle.is_empty() else COUCHE_SALLE
+	var q := PhysicsRayQueryParameters3D.create(depart, depart + dir.normalized() * 500.0, 1 << (couche - 1), exclure)
 	q.collide_with_areas = false
 	return get_world_3d().direct_space_state.intersect_ray(q)
 
@@ -699,6 +1178,7 @@ func _unhandled_input(e: InputEvent) -> void:
 				_clic_depart = b.position
 			elif _clic_depart.x >= 0.0 and b.position.distance_to(_clic_depart) < 5.0:
 				_demande_clic = b.position
+				_demande_clic_ctrl = b.ctrl_pressed or b.meta_pressed
 				_clic_depart = Vector2(-1, -1)
 			get_viewport().set_input_as_handled()
 		elif b.button_index == MOUSE_BUTTON_RIGHT and b.pressed and not pose.is_empty():
@@ -714,12 +1194,19 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_ESCAPE:
 				if not pose.is_empty():
 					finir_pose()
+				elif selection.is_empty() and not salle.is_empty():
+					sortir_salle()
 				else:
 					deselectionner()
+			KEY_I, KEY_KP_DIVIDE, KEY_SLASH:
+				if not salle.is_empty():
+					sortir_salle()
+				else:
+					entrer_salle()
 			KEY_KP_PERIOD, KEY_F:
 				cadrer_selection()
 			KEY_HOME:
-				camera.cadrer(boite_vaisseau())
+				camera.cadrer(boite_visible())
 			KEY_Z:
 				if ctrl:
 					if k.shift_pressed:
@@ -769,12 +1256,14 @@ func _physics_process(_delta: float) -> void:
 			valider_pose()
 		else:
 			var id := piece_sous(pos)
+			var genre := "ajout" if analyse.ajouts.has(id) else "piece"
 			if id == "":
-				deselectionner()
-			elif analyse.ajouts.has(id):
-				choisir("ajout", id)
+				if not _demande_clic_ctrl:
+					deselectionner()
+			elif _demande_clic_ctrl:
+				basculer_dans_selection(genre, id)
 			else:
-				choisir("piece", id)
+				choisir(genre, id)
 	if _demande_survol.x >= 0.0:
 		var pos := _demande_survol
 		_demande_survol = Vector2(-1, -1)
@@ -1081,6 +1570,26 @@ func supprimer_selection() -> void:
 	var genre := String(selection.get("genre", ""))
 	var id := String(selection.get("id", ""))
 	match genre:
+		"groupe":
+			# tout ce qui peut s'enlever d'un coup (pièces posées, modules du chasseur sauf le cockpit) ; un seul
+			# Ctrl + Z remet tout
+			var a_enlever := []
+			var gardes := 0
+			for e in selection["elements"]:
+				if e["genre"] == "ajout":
+					a_enlever.append(String(e["id"]))
+				elif e["genre"] == "module" and not Edition.MODULES_INDISPENSABLES.has(e["id"]):
+					a_enlever.append("module:" + String(e["id"]))
+				else:
+					gardes += 1
+			if a_enlever.is_empty():
+				montrer_avis("Rien à enlever : choisis des pièces posées ou des modules du chasseur (le cockpit reste).")
+				return
+			finir_pose()
+			edition.supprimer(a_enlever)
+			selection = {}
+			montrer_avis("%d élément%s enlevé%s (Ctrl + Z pour tout remettre)%s." % [a_enlever.size(), "s" if a_enlever.size() > 1 else "",
+				"s" if a_enlever.size() > 1 else "", (" ; %d gardé%s (pièce du chasseur ou cockpit)" % [gardes, "s" if gardes > 1 else ""]) if gardes > 0 else ""])
 		"ajout":
 			finir_pose()
 			edition.supprimer([id])
@@ -1309,6 +1818,7 @@ func _creer_interface() -> void:
 	centre.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	milieu.add_child(centre)
+	centre.add_child(_bandeau_salle())
 	centre.add_child(_barre_vue())
 	centre.add_child(_avis())
 	milieu.add_child(_panneau_fiche())
@@ -1425,22 +1935,52 @@ func _remplir_tableau() -> void:
 	for c in tableau.get_children():
 		tableau.remove_child(c)
 		c.queue_free()
-	for t in analyse.tuiles():
+	var en_salle := not salle.is_empty()
+	var tuiles: Array = analyse.tuiles_groupe(pieces_salle()) if en_salle else analyse.tuiles()
+	for k in tuiles.size():
+		var t: Array = tuiles[k]
 		var p := PanelContainer.new()
 		p.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		p.custom_minimum_size = Vector2(120, 0)
-		p.add_theme_stylebox_override("panel", Style.boite(Style.FOND, Style.BORD, 6, 9.0))
+		var bord := Style.ACCENT.darkened(0.45) if en_salle else Style.BORD
+		var normal := Style.boite(Style.FOND, bord, 6, 9.0)
+		var survol := Style.boite(Style.FOND_CLAIR, Style.ACCENT.darkened(0.2), 6, 9.0)
+		p.add_theme_stylebox_override("panel", normal)
 		var v := VBoxContainer.new()
 		v.add_theme_constant_override("separation", 1)
 		p.add_child(v)
-		v.add_child(Style.label(t[0], 11, Style.TEXTE_DOUX))
+		v.add_child(Style.label(t[0], 11, Style.ACCENT if en_salle else Style.TEXTE_DOUX))
 		v.add_child(Style.label(t[1], 19, Color.WHITE))
 		var d := Style.label(t[2], 11, Style.TEXTE_DOUX)
 		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		d.custom_minimum_size = Vector2(100, 0)
 		v.add_child(d)
-		p.tooltip_text = "%s : %s\n%s" % [t[0], t[1], t[2]]
+		# un clic ouvre la page d'analyse détaillée (dans la salle à part : la fiche du morceau)
+		var detail: String = Analyse.DETAIL_TUILES[k] if not en_salle and k < Analyse.DETAIL_TUILES.size() else ""
+		p.tooltip_text = "%s : %s\n%s\n\nClic : %s" % [t[0], t[1], t[2], "le détail" if not en_salle else "la fiche du morceau"]
+		p.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		p.mouse_entered.connect(func(): p.add_theme_stylebox_override("panel", survol))
+		p.mouse_exited.connect(func(): p.add_theme_stylebox_override("panel", normal))
+		p.gui_input.connect(func(e):
+			if e is InputEventMouseButton and (e as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT and (e as InputEventMouseButton).pressed:
+				ouvrir_detail(detail))
 		tableau.add_child(p)
+
+
+## La page d'analyse détaillée d'une tuile : masses, poussees, symetrie ("" : la fiche du morceau isolé).
+func ouvrir_detail(detail: String) -> void:
+	if detail == "":
+		if not salle.is_empty():
+			var e: Array = salle["elements"]
+			if e.size() == 1:
+				choisir(String(e[0]["genre"]), String(e[0]["id"]))
+			else:
+				choisir_groupe(e)
+		return
+	finir_pose()
+	choisir("analyse", detail)
+	if detail == "poussees" and case_poussees != null:
+		case_poussees.button_pressed = true
 
 
 func _panneau_catalogue() -> Control:
@@ -1485,7 +2025,7 @@ func _barre_vue() -> Control:
 		h.add_child(bt)
 	var tout := Style.bouton("Tout voir", 13)
 	tout.tooltip_text = "Origine (Home)"
-	tout.pressed.connect(func(): camera.cadrer(boite_vaisseau()))
+	tout.pressed.connect(func(): camera.cadrer(boite_visible()))
 	h.add_child(tout)
 	var sel := Style.bouton("Cadrer le choix", 13)
 	sel.tooltip_text = "pavé numérique , ou F"
@@ -1495,7 +2035,7 @@ func _barre_vue() -> Control:
 	h.add_child(sep)
 	case_cg = _case("Centre de gravité", true, func(on): _centre_gravite.visible = on; _sauver_reglages())
 	h.add_child(case_cg)
-	case_poussees = _case("Poussées", false, func(on): _fleches_poussee.visible = on; _sauver_reglages())
+	case_poussees = _case("Poussées", false, func(on): _fleches_poussee.visible = on; _fleche_couple.visible = on; _sauver_reglages())
 	h.add_child(case_poussees)
 	case_neutre = _case("Fond neutre", false, func(on): hangar.vue_technique(on); _sauver_reglages())
 	h.add_child(case_neutre)
@@ -1578,6 +2118,10 @@ func _panneau_fiche() -> Control:
 	fiche_grille.add_theme_constant_override("v_separation", 7)
 	fiche_grille.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	interieur.add_child(fiche_grille)
+	fiche_sections = VBoxContainer.new()
+	fiche_sections.add_theme_constant_override("separation", 2)
+	fiche_sections.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	interieur.add_child(fiche_sections)
 	fiche_note = Style.label("", 13, Style.TEXTE_DOUX)
 	fiche_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	fiche_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1619,8 +2163,84 @@ func _afficher_fiche(f: Dictionary) -> void:
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		b.custom_minimum_size = Vector2(160, 0)
 		fiche_grille.add_child(b)
+	for c in fiche_sections.get_children():
+		fiche_sections.remove_child(c)
+		c.queue_free()
+	for sec in f.get("sections", []):
+		var t := Style.label(String(sec["titre"]), 11, Style.TEXTE_DOUX)
+		t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		t.custom_minimum_size = Vector2(200, 0)
+		fiche_sections.add_child(HSeparator.new())
+		fiche_sections.add_child(t)
+		for l in sec["liste"]:
+			fiche_sections.add_child(_ligne_cliquable(l))
+	fiche_sections.visible = fiche_sections.get_child_count() > 0
 	fiche_note.text = String(f["note"])
 	fiche_note.visible = fiche_note.text != ""
+
+
+## Une ligne d'une liste de la fiche : texte, valeur, petite barre (part), et un clic qui choisit.
+func _ligne_cliquable(l: Dictionary) -> Control:
+	var choix: Dictionary = l.get("choix", {})
+	var p := PanelContainer.new()
+	var normal := Style.boite(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 4, 6.0, 0)
+	var survol := Style.boite(Color(1, 1, 1, 0.07), Color(0, 0, 0, 0), 4, 6.0, 0)
+	p.add_theme_stylebox_override("panel", normal)
+	p.mouse_filter = Control.MOUSE_FILTER_STOP if not choix.is_empty() else Control.MOUSE_FILTER_IGNORE
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 3)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_child(v)
+	var h := HBoxContainer.new()
+	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(h)
+	var a := Style.label(String(l["texte"]), 13, Style.ACCENT if not choix.is_empty() else Style.TEXTE)
+	a.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	a.custom_minimum_size = Vector2(60, 0)
+	a.clip_text = true
+	a.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	h.add_child(a)
+	var b := Style.label(String(l["valeur"]), 12, Style.TEXTE_DOUX)
+	b.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	h.add_child(b)
+	var part := float(l.get("part", -1.0))
+	if part >= 0.0:
+		var barre := HBoxContainer.new()
+		barre.add_theme_constant_override("separation", 0)
+		barre.custom_minimum_size = Vector2(0, 4)
+		barre.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var plein := ColorRect.new()
+		plein.color = Style.ROUGE if bool(l.get("alerte", false)) else Style.ACCENT.darkened(0.15)
+		plein.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		plein.size_flags_stretch_ratio = maxf(part, 0.002)
+		plein.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var vide := ColorRect.new()
+		vide.color = Color(1, 1, 1, 0.06)
+		vide.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		vide.size_flags_stretch_ratio = maxf(1.0 - part, 0.002)
+		vide.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		barre.add_child(plein)
+		barre.add_child(vide)
+		v.add_child(barre)
+	p.tooltip_text = "%s : %s" % [l["texte"], l["valeur"]]
+	if not choix.is_empty():
+		p.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		p.mouse_entered.connect(func(): p.add_theme_stylebox_override("panel", survol))
+		p.mouse_exited.connect(func(): p.add_theme_stylebox_override("panel", normal))
+		p.gui_input.connect(func(e):
+			if e is InputEventMouseButton and (e as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT and (e as InputEventMouseButton).pressed:
+				choisir_ligne(choix))
+	return p
+
+
+## Ce que fait un clic sur une ligne de liste (Ctrl : ajouter à la sélection).
+func choisir_ligne(choix: Dictionary) -> void:
+	if String(choix.get("genre", "")) == "groupe":
+		choisir_groupe(choix["elements"])
+	elif Input.is_key_pressed(KEY_CTRL) and String(choix["genre"]) in ["piece", "ajout", "module"]:
+		basculer_dans_selection(String(choix["genre"]), String(choix["id"]))
+	else:
+		choisir(String(choix["genre"]), String(choix["id"]))
 
 
 func _bouton_fiche(texte: String, quand: Callable, parent: Control = null) -> Button:
@@ -1902,6 +2522,9 @@ func _choix_dans_liste() -> void:
 		var pr: Array = Pieces.PROPOSITIONS[int(m["id"])]
 		commencer_pose(String(pr[2]), pr[3])
 		return
+	if Input.is_key_pressed(KEY_CTRL) and String(m["genre"]) in ["piece", "ajout", "module"]:
+		basculer_dans_selection(String(m["genre"]), String(m["id"]))
+		return
 	if selection.get("genre", "") == m["genre"] and selection.get("id", "") == m["id"]:
 		return
 	choisir(String(m["genre"]), String(m["id"]))
@@ -2040,6 +2663,8 @@ func lancer_jeu() -> bool:
 			nb_flottantes, "s" if nb_flottantes > 1 else "", "nt" if nb_flottantes > 1 else ""], 8.0)
 		return false
 	finir_pose()
+	if not salle.is_empty():
+		sortir_salle()
 	if edition.modifie and not enregistrer():
 		return false
 	chargement.visible = true
