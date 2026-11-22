@@ -91,11 +91,14 @@ func _lancer() -> void:
 	var vit: float = v.vitesse()
 	var f2: float = v.moteurs[4]["poussee_max"]
 	var att2: float = f2 / v.masse * 1.0
-	var c2: Vector3 = ((v.moteurs[4]["position"] as Vector3) - v.CENTRE_GRAVITE).cross(Vector3(0, 0, -f2))
-	var att2w: float = c2.x / v.inertie.x * 1.0
-	_resultat(absf(vit - att2) < 0.002 * att2 and absf(v.omega.x - att2w) < 0.02 * absf(att2w) and absf(v.omega.y) < 1e-9,
+	var c2: Vector3 = ((v.moteurs[4]["position"] as Vector3) - v.centre_gravite).cross(Vector3(0, 0, -f2))
+	# rotation attendue : inertie complète (le vaisseau réel n'est pas parfaitement symétrique : son centre de
+	# gravité est à 0,04 mm à gauche de l'axe, à cause des détails du cockpit, d'où un très léger lacet)
+	var att2w: Vector3 = v.tenseur_inertie_inverse * c2 * 1.0
+	_resultat(absf(vit - att2) < 0.002 * att2 and absf(v.omega.x - att2w.x) < 0.02 * absf(att2w.x)
+			and absf(v.omega.y - att2w.y) < 0.02 * absf(att2w.y) + 1e-9 and absf(v.omega.y) < 0.01 * absf(v.omega.x),
 		"Poussée du moteur central",
-		"%.0f kN sur %.2f t pendant 1 s : %.3f m/s (attendu %.3f). Tangage %.5f rad/s (attendu %.5f : centre de gravité 2 cm au-dessus du moteur), lacet %.9f (attendu 0)." % [f2 / 1000.0, v.masse / 1000.0, vit, att2, v.omega.x, att2w, v.omega.y])
+		"%.0f kN sur %.2f t pendant 1 s : %.3f m/s (attendu %.3f). Tangage %.5f rad/s (attendu %.5f : centre de gravité 2 cm au-dessus du moteur), lacet %.7f (attendu %.7f : presque rien)." % [f2 / 1000.0, v.masse / 1000.0, vit, att2, v.omega.x, att2w.x, v.omega.y, att2w.y])
 
 	# 3. Poussée décentrée : le moteur haut droit fait aussi tourner (couple = position × force)
 	v = _nouveau(false)
@@ -104,7 +107,7 @@ func _lancer() -> void:
 		v.pas(1.0 / 120.0)
 	# couple = position × force : bras de levier = hauteur et largeur du moteur, pendant 0,2 s
 	var f3: float = v.moteurs[1]["poussee_max"]
-	var pos3: Vector3 = (v.moteurs[1]["position"] as Vector3) - v.CENTRE_GRAVITE   # bras de levier vu du centre de gravité
+	var pos3: Vector3 = (v.moteurs[1]["position"] as Vector3) - v.centre_gravite   # bras de levier vu du centre de gravité
 	var attendu_x: float = -pos3.y * f3 * 0.2 / v.inertie.x
 	var attendu_y: float = pos3.x * f3 * 0.2 / v.inertie.y
 	var att3v: float = f3 / v.masse * 0.2
@@ -218,9 +221,18 @@ func _lancer() -> void:
 	v.orientation = Quaternion(base_nadir) * Quaternion(Vector3.RIGHT, PI / 4.0)
 	var c45: Vector3 = v.couple_gravite()
 	var att11: float = 3.0 * GM / (r11 * r11 * r11) * (v.inertie.y - v.inertie.z) * 0.5
-	var ok11: bool = c_aligne.length() < 1e-6 * att11 and absf(absf(c45.x) - att11) < 1e-4 * att11 and absf(c45.y) < 1e-4 * att11 and absf(c45.z) < 1e-4 * att11
+	# valeur exacte avec l'inertie complète : les axes principaux du vaisseau réel sont tournés d'environ
+	# 0,01° par rapport à ses axes (il n'est pas parfaitement symétrique haut/bas), d'où un couple minuscule
+	# même nez vers la planète
+	var n_al: Vector3 = Basis(Quaternion(base_nadir)).inverse() * Vector3(-1, 0, 0)
+	var n_45: Vector3 = Basis(Quaternion(base_nadir) * Quaternion(Vector3.RIGHT, PI / 4.0)).inverse() * Vector3(-1, 0, 0)
+	var k11: float = 3.0 * GM / (r11 * r11 * r11)
+	var e_al: Vector3 = n_al.cross(v.tenseur_inertie * n_al) * k11
+	var e_45: Vector3 = n_45.cross(v.tenseur_inertie * n_45) * k11
+	var ok11: bool = c_aligne.length() < 1e-3 * att11 and (c_aligne - e_al).length() < 1e-6 * att11 \
+		and absf(absf(c45.x) - att11) < 1e-3 * att11 and (c45 - e_45).length() < 1e-4 * att11
 	_resultat(ok11, "Gradient de gravité (valeur du couple)",
-		"Nez vers la planète : %.9f N·m (attendu 0). Penché de 45° : %.4f N·m (attendu %.4f), soit environ 8 000 fois moins que les propulseurs de tangage." % [c_aligne.length(), absf(c45.x), att11])
+		"Nez vers la planète : %.6f N·m (attendu presque 0 : %.6f). Penché de 45° : %.4f N·m (attendu %.4f), soit environ 8 000 fois moins que les propulseurs de tangage." % [c_aligne.length(), e_al.length(), absf(c45.x), att11])
 
 	# 12. Balancement en orbite : penché de 5°, le vaisseau oscille autour de la direction de la planète
 	v = _nouveau(true)
@@ -252,7 +264,7 @@ func _lancer() -> void:
 	var e13: Array = v.effet_propulseurs()
 	var f13: Vector3 = e13[0]
 	var c13: Vector3 = e13[1]
-	var ok13: bool = absf(c13.x - v.couple_max.x) < 0.01 * v.couple_max.x and absf(c13.y) < 0.01 * v.couple_max.x and absf(c13.z) < 0.01 * v.couple_max.x and f13.length() < 0.001 * v.POUSSEE_RCS
+	var ok13: bool = absf(c13.x - v.couple_max.x) < 0.01 * v.couple_max.x and absf(c13.y) < 0.01 * v.couple_max.x and absf(c13.z) < 0.01 * v.couple_max.x and f13.length() < 0.001 * float(v.rcs[0]["poussee_n"])
 	_resultat(ok13, "Calcul automatique : tangage seul",
 		"Couple %.0f N·m (demandé %.0f), couples parasites %.1f et %.1f N·m, force restante %.3f N (attendu 0 : rotation sans déplacement)." % [c13.x, v.couple_max.x, c13.y, c13.z, f13.length()])
 
@@ -419,7 +431,7 @@ func _tests_modele_v12() -> void:
 	for k in 4:
 		hauteur_moteurs = maxf(hauteur_moteurs, absf((v.moteurs[k]["position"] as Vector3).y))
 	var bout: Vector3 = v.rcs[8]["position"]
-	var att24: float = 1.0 - 1.0 / v.DUREE_AILES
+	var att24: float = 1.0 - 1.0 / v.duree_ailes
 	var ok24: bool = absf(a1 - att24) < 0.01 and v.ailes == 0.0 and hauteur_moteurs < 1e-6 and absf(bout.x - 5.95) < 0.005 and absf(bout.y - 0.24) < 0.005
 	_resultat(ok24, "Ailes qui se replient",
 		"Ouverture après 1 s : %.2f (attendu %.2f), après 3 s : %.2f (attendu 0). Ailes repliées : moteurs d'aile à %.6f m de hauteur (attendu 0), bout d'aile en (%.2f ; %.2f)." % [a1, att24, v.ailes, hauteur_moteurs, bout.x, bout.y])
@@ -574,7 +586,7 @@ func _test_vol_vertical() -> void:
 
 func _energie_rotation(v) -> float:
 	var w: Vector3 = v.omega
-	return 0.5 * (v.inertie.x * w.x * w.x + v.inertie.y * w.y * w.y + v.inertie.z * w.z * w.z)
+	return 0.5 * w.dot(v.tenseur_inertie * w)
 
 
 # =====================================================================
@@ -1351,7 +1363,7 @@ func _pose_sur_pente(angle_deg: float, sens: String, duree: float, omega_p := 0.
 	v.train = 1.0
 	v.px = R + 1.75
 	if v_descente > 0.0:
-		var demi_voie: float = absf(v.ROUES[2].x)
+		var demi_voie: float = absf((v.roues[2] as Vector3).x)
 		v.px = R + 1.6 + demi_voie * tan(deg_to_rad(angle_deg)) + 0.05
 		v.vx = -v_descente
 	if omega_p != 0.0:
@@ -1597,7 +1609,10 @@ func _tests_roulage() -> void:
 # =====================================================================
 func _tests_v25() -> void:
 	var v = _nouveau(false)
-	# a. masse, centre de gravité et inertie = ceux calculés dans Blender (masses_godot.json)
+	# a. masse, centre de gravité et inertie : calculés à partir des pièces du plan (atelier, étape 1), proches
+	#    de l'ancien calcul de Blender (masses_godot.json). L'ancien calcul de l'inertie avait été fait « par
+	#    différence » (v26, v27 : pièces nouvelles en masses ponctuelles) : le plan, qui compte la forme de
+	#    chaque pièce, donne un peu plus (roulis +10 %). Masse et centre de gravité : presque identiques.
 	var f := FileAccess.open("res://modeles/vaisseau/masses_godot.json", FileAccess.READ)
 	var j = JSON.parse_string(f.get_as_text()) if f != null else null
 	var ok_a := false
@@ -1605,11 +1620,16 @@ func _tests_v25() -> void:
 	if j is Dictionary:
 		var cg: Array = j["centre_gravite_godot_m"]
 		var ip: Dictionary = j["inertie_principale_godot_kg_m2"]
-		var e_cg: float = (v.CENTRE_GRAVITE - Vector3(cg[0], cg[1], cg[2])).length()
-		var e_i: float = (v.inertie - Vector3(ip["x_tangage"], ip["y_lacet"], ip["z_roulis"])).length()
-		ok_a = absf(v.masse - float(j["masse_totale_kg"])) < 1.0 and e_cg < 0.005 and e_i < 10.0
-		det_a = "Masse %.1f kg (modèle %.1f), centre de gravité à %.3f m derrière l'origine (écart %.4f m), inertie écart %.1f kg·m²." % [v.masse, float(j["masse_totale_kg"]), v.CENTRE_GRAVITE.z, e_cg, e_i]
-	_resultat(ok_a, "Vraies masses du modèle", det_a)
+		var e_cg: float = (v.centre_gravite - Vector3(cg[0], cg[1], cg[2])).length()
+		var ancien := Vector3(ip["x_tangage"], ip["y_lacet"], ip["z_roulis"])
+		var e_i := Vector3(v.inertie.x / ancien.x - 1.0, v.inertie.y / ancien.y - 1.0, v.inertie.z / ancien.z - 1.0)
+		var mp: Dictionary = v.plan.proprietes_masse()
+		ok_a = absf(v.masse - float(j["masse_totale_kg"])) < 1.0 and e_cg < 0.01 and absf(e_i.x) < 0.15 and absf(e_i.y) < 0.15 \
+			and absf(e_i.z) < 0.15 and v.masse == float(mp["masse"]) and v.centre_gravite == mp["centre"]
+		det_a = "Masse %.1f kg (Blender %.1f), centre de gravité à %.4f m derrière l'origine (écart %.4f m), inertie %.0f / %.0f / %.0f kg·m² (écarts %+.1f %%, %+.1f %%, %+.1f %%)." % [
+			v.masse, float(j["masse_totale_kg"]), v.centre_gravite.z, e_cg, v.inertie.x, v.inertie.y, v.inertie.z,
+			100.0 * e_i.x, 100.0 * e_i.y, 100.0 * e_i.z]
+	_resultat(ok_a, "Vraies masses du modèle (calculées par le plan)", det_a)
 
 	# b. plein gaz vers l'avant : les moteurs sont alignés avec le centre de gravité, aucune rotation
 	v = _nouveau(false)
@@ -1741,7 +1761,7 @@ func _tests_relativite() -> void:
 	var a5: float = v.acceleration_ressentie.length() / VaisseauPhysique.G0
 	v.regler_poussee(1.0)
 	var ok5: bool = absf(p1000 / p1 - 1000.0) < 5.0 and w5 < 1e-3 and absf(v.poussee_avant_max - p1) < 1e-6 * p1 \
-		and absf(v.poussee_moteur() - VaisseauPhysique.POUSSEE_MOTEUR) < 1e-6
+		and absf(v.poussee_moteur() - v.poussee_moteur_nominale) < 1e-6
 	_resultat(ok5, "Puissance des moteurs modifiable",
 		"x1 : %.0f kN ; x1000 : %.0f MN (%.0f g ressentis), rotation après 2 s plein gaz %.6f rad/s (attendu ≈ 0) ; retour à x1 : %.0f kN." % [p1 / 1000.0, p1000 / 1e6, a5, w5, v.poussee_avant_max / 1000.0])
 
@@ -2707,7 +2727,7 @@ func _tests_lune() -> void:
 	v.train = 1.0
 	v.train_consigne = 1.0
 	v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)   # le haut du vaisseau vers +X
-	v.px = LumiereJeu.RAYON_LUNE + VaisseauPhysique.HAUTEUR_TRAIN + 1.5
+	v.px = LumiereJeu.RAYON_LUNE + v.hauteur_train + 1.5
 	v.py = 0.0
 	v.pz = 0.0
 	var vs: Vector3 = v.vitesse_sol(v.px, v.py, v.pz)
@@ -2853,7 +2873,7 @@ func _tests_atmosphere() -> void:
 	#     refroidit dans le vide en rayonnant
 	v = _dans_air(60000.0)
 	var rho60: float = v.atmosphere.densite(60000.0)
-	var q_att: float = VaisseauPhysique.SUTTON_GRAVES * sqrt(rho60 / VaisseauPhysique.RAYON_NEZ) * pow(7000.0, 3.0)
+	var q_att: float = VaisseauPhysique.SUTTON_GRAVES * sqrt(rho60 / v.rayon_nez) * pow(7000.0, 3.0)
 	var q0 := 0.0
 	for i in 60 * 10:
 		v.px = R + 60000.0

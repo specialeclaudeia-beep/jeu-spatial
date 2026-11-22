@@ -135,7 +135,7 @@ func _son(v, auto := false):
 	_pilotes.append(p)
 	var s = MoteurAudio.new()
 	add_child(s)
-	s.installer(v, p, null, Jeu.OEIL_PILOTE_DEFAUT - VaisseauPhysique.CENTRE_GRAVITE)
+	s.installer(v, p, null, Jeu.OEIL_PILOTE_DEFAUT - v.centre_gravite)
 	s.set_process(auto)
 	s.set_physics_process(auto)
 	return s

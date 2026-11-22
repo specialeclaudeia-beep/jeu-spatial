@@ -20,20 +20,36 @@ const G0 := 9.80665  # pour exprimer les accélérations en « g »
 const C := 299792458.0  # m/s, vitesse de la lumière : rien ne peut l'atteindre (relativité restreinte)
 
 # =====================================================================
-# CARACTÉRISTIQUES DU VAISSEAU (modifiables)
+# CARACTÉRISTIQUES DU VAISSEAU : lues dans son PLAN
 # =====================================================================
-## Masse, centre de gravité et inertie calculés dans Blender à partir des vraies matières de chaque
-## pièce (modele3d/v27_roues_arriere/masses_godot.json) : ailes ouvertes, train rentré, droïde à
-## bord, sans carburant (le jeu n'en a pas, la masse ne change donc jamais).
-var masse := 8534.1                                    # kg
-var inertie := Vector3(67901.5, 81291.3, 19295.1)      # kg·m² autour du centre de gravité : tangage (X), lacet (Y), roulis (Z)
-## Centre de gravité dans le repère du modèle 3D : 1,43 m derrière son origine (moteurs lourds à l'arrière).
-## Le vaisseau tourne autour de ce point : tous les couples (propulseurs, sol) sont calculés par rapport à lui.
-## px, py, pz = position du centre de gravité.
-const CENTRE_GRAVITE := Vector3(0.0, 0.0147, 1.431)
-var reactivite_moteurs := 0.3                          # secondes pour que la poussée suive la consigne
-const POUSSEE_MOTEUR := 200000.0   # N, chacun des 5 moteurs arrière (seul, il pousse 2 fois le poids de 10 t)
-const POUSSEE_RCS := 6000.0        # N, chacun des 12 propulseurs d'orientation et des 10 buses encastrées
+## Atelier, étape 1 : la physique ne connaît plus aucun vaisseau « en dur ». Tout ce qui DÉCRIT le vaisseau
+## (pièces, masses, moteurs, propulseurs, ailes, train, plaques d'air, coque) vient de son plan
+## (scripts/atelier/plan.gd ; celui du départ : vaisseaux/chasseur_v27.plan.json). Ce fichier ne garde
+## que les LOIS (gravité, Einstein, forces, sol, air, chaleur), les mêmes pour tous les vaisseaux.
+const Plan = preload("res://scripts/atelier/plan.gd")
+var plan = null
+
+## Masse, centre de gravité et inertie : calculés à partir des pièces du plan (pose de référence : ailes
+## ouvertes, train rentré, droïde à bord). Pas de carburant : la masse ne change jamais.
+var masse := 0.0                                  # kg
+## Centre de gravité dans le repère du modèle 3D (environ 1,44 m derrière son origine : moteurs lourds à
+## l'arrière). Le vaisseau tourne autour de ce point : tous les couples (propulseurs, sol, air) sont
+## calculés par rapport à lui. px, py, pz = position du centre de gravité.
+var centre_gravite := Vector3.ZERO
+## Inertie complète (tableau 3×3, kg·m²) autour du centre de gravité, dans le repère du vaisseau : c'est
+## elle que suit la rotation. « inertie » n'en garde que la diagonale (tangage X, lacet Y, roulis Z), pour
+## les estimations (pilote automatique, stabilisateur, affichage).
+var tenseur_inertie := Basis.IDENTITY
+var tenseur_inertie_inverse := Basis.IDENTITY
+var inertie := Vector3.ONE
+## Les mêmes en double précision (9 nombres, ligne par ligne) : la rotation passe à chaque pas de la vitesse
+## de rotation au moment cinétique et retour ; en simple précision, l'arrondi de l'inverse ferait grandir
+## le moment cinétique d'un dix-millième toutes les 10 s.
+var _i64 := PackedFloat64Array([1, 0, 0, 0, 1, 0, 0, 0, 1])
+var _inv64 := PackedFloat64Array([1, 0, 0, 0, 1, 0, 0, 0, 1])
+var reactivite_moteurs := 0.3                     # secondes pour que la poussée suive la consigne
+var poussee_moteur_nominale := 0.0                # N, le plus puissant des moteurs principaux
+var poussee_levage_nominale := 0.0                # N, le plus puissant des moteurs de levage
 
 # =====================================================================
 # ÉTAT
@@ -99,50 +115,28 @@ var moteurs: Array = []
 var rcs: Array = []        # petits propulseurs : en plus { axe (0,1,2 ; -1 = buse de déplacement), signe (+1/-1) }
 
 # =====================================================================
-# CRÉATION
+# CRÉATION : le vaisseau est construit à partir de son plan
 # =====================================================================
-## Les 4 ailes, comme dans le modèle 3D (modele3d/v12, nœuds Charniere_*). Chaque aile tourne autour
-## d'une charnière parallèle à l'axe avant-arrière, placée à 0,6 m du centre. L'angle (en degrés,
-## autour de l'axe Z du vaisseau) va de « replie » (ailes à plat, l'une sur l'autre) à « ouvert » (en X).
-## Les propulseurs posés sur une aile tournent avec elle : leur position est recalculée.
-const AILES := {
-	"haut_gauche": {"charniere": Vector3(-0.6, 0, 0), "ouvert": -22.249, "replie": 0.0},
-	"haut_droit": {"charniere": Vector3(0.6, 0, 0), "ouvert": 22.249, "replie": 0.0},
-	"bas_gauche": {"charniere": Vector3(-0.6, 0, 0), "ouvert": -157.751, "replie": -180.0},
-	"bas_droit": {"charniere": Vector3(0.6, 0, 0), "ouvert": 157.751, "replie": 180.0},
-}
-## Buses encastrées : [nom, position, direction de la poussée] lues dans les extras du modèle (poussee_godot).
-const BUSES := [
-	["freinage gauche", Vector3(-0.10, 0.0, -6.0), Vector3(0.0, 0.0, 1.0)],
-	["freinage droit", Vector3(0.10, 0.0, -6.0), Vector3(0.0, 0.0, 1.0)],
-	["poussee fine gauche", Vector3(-0.70, 0.0, 4.3), Vector3(0.0, 0.0, -1.0)],
-	["poussee fine droit", Vector3(0.70, 0.0, 4.3), Vector3(0.0, 0.0, -1.0)],
-	["lateral gauche", Vector3(-0.75, 0.0, 0.0), Vector3(0.997, 0.0, 0.083)],
-	["lateral droit", Vector3(0.75, 0.0, 0.0), Vector3(-0.997, 0.0, 0.083)],
-	["montee gauche", Vector3(-0.5622, -0.4635, 0.0), Vector3(0.847, 0.529, 0.052)],
-	["montee droit", Vector3(0.5622, -0.4635, 0.0), Vector3(-0.833, 0.521, 0.187)],
-	["descente gauche", Vector3(-0.5667, 0.6163, 0.0), Vector3(0.842, -0.526, 0.119)],
-	["descente droit", Vector3(0.5667, 0.6163, 0.0), Vector3(-0.84, -0.526, 0.135)],
-]
-const DUREE_AILES := 2.5     # s pour ouvrir ou replier complètement les ailes (vérins)
-const DUREE_TRAIN := 3.0     # s pour sortir ou rentrer complètement le train
-const HAUTEUR_TRAIN := 1.6   # m entre le centre du vaisseau et le sol, train sorti (modèle 3D)
-const HAUTEUR_VENTRE := 1.0  # m entre le centre et le dessous de la coque, train rentré
+## Pièces mobiles du plan (charnières des ailes, tuyère orientable, vérins des moteurs de levage), dans
+## le repère du vaisseau. Chacune suit une commande : ailes (0 = repliées, 1 = ouvertes), train
+## (0 = rentré, 1 = sorti), vertical (0 = vol normal, 1 = vol vertical complet).
+## Les propulseurs posés sur une pièce mobile bougent avec elle : leur position est recalculée.
+var articulations := {}
+## Les ailes : les charnières de la commande « ailes », par leur nom court (haut_gauche, haut_droit,
+## bas_gauche, bas_droit), qui est aussi celui du modèle 3D (nœud Charniere_<nom>) et du son.
+## {nom: {charniere (point de l'axe), ouvert, replie (degrés autour de l'axe Z du vaisseau)}}.
+var ailes_def := {}
+var duree_ailes := 1.0       # s pour ouvrir ou replier complètement les ailes (vérins)
+var duree_train := 1.0       # s pour sortir ou rentrer complètement le train
+var duree_vertical := 1.0    # s pour passer complètement en vol vertical
+var hauteur_train := 0.0     # m entre le centre du modèle et le sol, train sorti (la roue la plus basse)
+var hauteur_ventre := 0.0    # m entre le centre du modèle et le dessous de la coque, train rentré
+var pivot_tuyere := Vector3.ZERO   # pivot de la tuyère orientable (son, affichage)
 
 ## Vol vertical (modèle v17) : deux moteurs de levage à l'avant sortent du ventre (trappes puis vérin),
 ## puis la tuyère du moteur central tourne de 0° (poussée vers l'avant) à 90° (poussée vers le haut).
 ## En vol vertical, les gaz poussent vers le haut : c'est la poussée réelle des moteurs, répartie entre
 ## l'avant (moteurs de levage) et l'arrière (tuyère) pour ne pas faire basculer le vaisseau.
-const POUSSEE_LEVAGE := 37500.0                      # N, chacun des 2 moteurs de levage
-const PIVOT_TUYERE := Vector3(0.0, 0.0, 4.25)        # premier anneau de la tuyère centrale (modèle v18)
-const SORTIE_TUYERE := Vector3(0.0, 0.0, 0.8)        # sortie de la tuyère, vue du pivot, à 0°
-const ANNEAUX_TUYERE := [0.26, 0.26, 0.28]           # 3 anneaux qui tournent chacun d'un tiers de l'angle
-const PIVOT_LEVAGE := 0.27                           # m de part et d'autre de l'axe
-const LEVAGE_HAUT := Vector3(0.0, -0.03, -3.0)       # haut du vérin d'un moteur de levage (x = ±0,27)
-const LEVAGE_SORTIE := -0.37                         # sortie du moteur sous son vérin (m)
-const COURSE_LEVAGE := -0.32                         # descente du vérin (m)
-const DUREE_VERTICAL := 4.0                          # s pour passer complètement en vol vertical
-const PART_LEVAGE := 0.4                             # part de la séquence : sortie des moteurs de levage
 var vertical := 0.0          # 0 = vol normal, 1 = vol vertical complet (levage sorti, tuyère à 90°)
 var vertical_consigne := 0.0
 
@@ -151,57 +145,142 @@ var ailes_consigne := 1.0
 var train := 0.0             # train d'atterrissage : 0 = rentré, 1 = sorti
 var train_consigne := 0.0
 
+var _tuyere := {}            # l'articulation tuyère du plan (vide s'il n'y en a pas)
+var _verin_vertical := {}    # le premier vérin de la commande « vertical » (sortie des moteurs de levage)
 
-func _init() -> void:
-	# 5 moteurs arrière : 4 sur les ailes + 1 central. Ils poussent tous vers l'avant (-Z).
-	# Positions prises sur le modèle 3D (points Point_moteur_*), mesurées dans le repère de la charnière.
-	var avant := Vector3(0, 0, -1)
-	_ajouter_moteur("haut gauche", Vector3(-1.12, 0, 4.0), avant, POUSSEE_MOTEUR, "haut_gauche")
-	_ajouter_moteur("haut droit", Vector3(1.12, 0, 4.0), avant, POUSSEE_MOTEUR, "haut_droit")
-	_ajouter_moteur("bas gauche", Vector3(1.12, 0, 4.0), avant, POUSSEE_MOTEUR, "bas_gauche")
-	_ajouter_moteur("bas droit", Vector3(-1.12, 0, 4.0), avant, POUSSEE_MOTEUR, "bas_droit")
-	_ajouter_moteur("central", PIVOT_TUYERE + SORTIE_TUYERE, avant, POUSSEE_MOTEUR, "")
-	# moteurs de levage : ils poussent vers le haut, seulement une fois complètement sortis
-	_ajouter_moteur("levage gauche", Vector3.ZERO, Vector3.UP, 0.0, "")
-	_ajouter_moteur("levage droit", Vector3.ZERO, Vector3.UP, 0.0, "")
 
-	# Propulseurs d'orientation (points Point_rcs_* du modèle), par paires opposées : ils font tourner
-	# sans faire avancer. Un propulseur placé en haut du nez souffle vers le haut, donc il pousse
-	# le nez vers le BAS (action-réaction).
-	var p := POUSSEE_RCS
-	var nez_haut := Vector3(0, 0.2, -5.2)
-	var nez_bas := Vector3(0, -0.26, -5.2)
-	var nez_gauche := Vector3(-0.29, 0, -5.2)
-	var nez_droit := Vector3(0.29, 0, -5.2)
-	var queue_haut := Vector3(0, 1.01, 4.0)
-	var queue_bas := Vector3(0, -1.01, 4.0)
-	var queue_gauche := Vector3(-0.91, 0, 4.0)
-	var queue_droit := Vector3(0.91, 0, 4.0)
-	# tangage + = nez vers le haut
-	_ajouter_rcs("nez bas", nez_bas, Vector3.UP, p, 0, 1)
-	_ajouter_rcs("queue haut", queue_haut, Vector3.DOWN, p, 0, 1)
-	_ajouter_rcs("nez haut", nez_haut, Vector3.DOWN, p, 0, -1)
-	_ajouter_rcs("queue bas", queue_bas, Vector3.UP, p, 0, -1)
-	# lacet + = nez vers la gauche
-	_ajouter_rcs("nez droit", nez_droit, Vector3.LEFT, p, 1, 1)
-	_ajouter_rcs("queue gauche", queue_gauche, Vector3.RIGHT, p, 1, 1)
-	_ajouter_rcs("nez gauche", nez_gauche, Vector3.RIGHT, p, 1, -1)
-	_ajouter_rcs("queue droit", queue_droit, Vector3.LEFT, p, 1, -1)
-	# roulis + = vers la gauche : un propulseur au bout de chaque aile, qui pousse perpendiculairement
-	# à l'aile. Les deux ailes opposées (haut droit + bas gauche) forment une paire.
-	var bout := Vector3(5.35, 0.24, 1.475)
-	var bout_m := Vector3(-5.35, 0.24, 1.475)
-	_ajouter_rcs("bout aile haut droit", bout, Vector3.UP, p, 2, 1, "haut_droit")
-	_ajouter_rcs("bout aile bas gauche", bout, Vector3.UP, p, 2, 1, "bas_gauche")
-	_ajouter_rcs("bout aile haut gauche", bout_m, Vector3.UP, p, 2, -1, "haut_gauche")
-	_ajouter_rcs("bout aile bas droit", bout_m, Vector3.UP, p, 2, -1, "bas_droit")
-	# Buses encastrées dans la coque (modèle v21, points Point_rcs_<nom>) : chacune souffle
-	# perpendiculairement à la coque, la force est l'opposé du souffle. Par paires gauche/droite, elles
-	# déplacent le vaisseau sans le faire tourner (freiner, avancer doucement, glisser, monter, descendre).
-	for b in BUSES:
-		_ajouter_rcs(b[0], b[1], (b[2] as Vector3).normalized(), p, -1, 0)
-	_placer_propulseurs_ailes()
+## plan_vaisseau : un plan (scripts/atelier/plan.gd) déjà lu ; sans plan, celui du chasseur de départ.
+func _init(plan_vaisseau = null) -> void:
+	plan = plan_vaisseau if plan_vaisseau != null else Plan.par_defaut()
+	if not plan.valide():
+		push_error("Plan du vaisseau invalide : " + "; ".join(plan.erreurs))
+	_construire()
+
+
+func _construire() -> void:
+	var mp: Dictionary = plan.proprietes_masse()
+	masse = float(mp["masse"])
+	centre_gravite = mp["centre"]
+	var i6: Array = mp["inertie_liste"]
+	_i64 = PackedFloat64Array([i6[0], i6[3], i6[4], i6[3], i6[1], i6[5], i6[4], i6[5], i6[2]])
+	_inv64 = _inverse_3x3(_i64)
+	tenseur_inertie = mp["inertie"]
+	tenseur_inertie_inverse = Basis(Vector3(_inv64[0], _inv64[3], _inv64[6]), Vector3(_inv64[1], _inv64[4], _inv64[7]),
+		Vector3(_inv64[2], _inv64[5], _inv64[8]))
+	inertie = Vector3(tenseur_inertie.x.x, tenseur_inertie.y.y, tenseur_inertie.z.z)
+	duree_ailes = plan.duree_commande("ailes")
+	duree_train = plan.duree_commande("train")
+	duree_vertical = plan.duree_commande("vertical")
+	ailes = plan.valeur_depart("ailes")
+	ailes_consigne = ailes
+	train = plan.valeur_depart("train")
+	train_consigne = train
+	vertical = plan.valeur_depart("vertical")
+	vertical_consigne = vertical
+	# pièces mobiles : on retient leur position dans la pose de référence du plan
+	articulations = {}
+	ailes_def = {}
+	_tuyere = {}
+	_verin_vertical = {}
+	for id in plan.articulations:
+		var a: Dictionary = (plan.articulations[id] as Dictionary).duplicate()
+		var c := String(a["commande"])
+		a["progression_ref"] = Plan.progression(a, plan.valeur_reference(c))
+		match String(a["type"]):
+			"charniere":
+				a["angle_ref"] = lerpf(float(a["angle_0_deg"]), float(a["angle_1_deg"]), float(a["progression_ref"]))
+				if c == "ailes" and String(id).begins_with("aile_"):
+					ailes_def[String(id).trim_prefix("aile_")] = {"charniere": a["point"], "ouvert": float(a["angle_1_deg"]),
+						"replie": float(a["angle_0_deg"]), "articulation": id}
+			"tuyere_anneaux":
+				if _tuyere.is_empty():
+					_tuyere = a
+					pivot_tuyere = a["pivot"]
+			"verin":
+				if c == "vertical" and _verin_vertical.is_empty():
+					_verin_vertical = a
+		articulations[id] = a
+	# moteurs et petits propulseurs, dans l'ordre du plan
+	moteurs = []
+	rcs = []
+	poussee_moteur_nominale = 0.0
+	poussee_levage_nominale = 0.0
+	for p in plan.pieces:
+		var t := String(p["type"])
+		if t != "moteur" and t != "propulseur":
+			continue
+		var art := String(p.get("articulation", ""))
+		var aile := ""
+		if art != "" and articulations.has(art):
+			for nom in ailes_def:
+				if ailes_def[nom]["articulation"] == art:
+					aile = nom
+		var e := {"id": p["id"], "nom": String(p.get("nom", p["id"])), "position": p["point"], "direction": p["direction"],
+			"poussee_n": float(p["poussee_n"]), "poussee_max": float(p["poussee_n"]), "actuel": 0.0, "aile": aile,
+			"articulation": art if articulations.has(art) else "", "pos_ref": p["point"], "dir_ref": p["direction"],
+			"seulement_sorti": bool(p.get("seulement_sorti", false))}
+		if t == "moteur":
+			e["consigne"] = 0.0
+			e["role"] = String(p.get("role", "principal"))
+			if e["role"] == "levage":
+				poussee_levage_nominale = maxf(poussee_levage_nominale, float(e["poussee_n"]))
+			else:
+				poussee_moteur_nominale = maxf(poussee_moteur_nominale, float(e["poussee_n"]))
+			moteurs.append(e)
+		else:
+			e["encastre"] = bool(p.get("encastre", false))
+			rcs.append(e)
+	_construire_sol()
+	_construire_coque()
+	aero.configurer(plan, centre_gravite)
+	_placer_propulseurs()
+	_trouver_roles()
 	_calculer_poussees()
+
+
+## Inverse d'un tableau 3×3 (ligne par ligne), en double précision.
+static func _inverse_3x3(m: PackedFloat64Array) -> PackedFloat64Array:
+	var c00 := m[4] * m[8] - m[5] * m[7]
+	var c01 := m[5] * m[6] - m[3] * m[8]
+	var c02 := m[3] * m[7] - m[4] * m[6]
+	var det := m[0] * c00 + m[1] * c01 + m[2] * c02
+	return PackedFloat64Array([c00 / det, (m[2] * m[7] - m[1] * m[8]) / det, (m[1] * m[5] - m[2] * m[4]) / det,
+		c01 / det, (m[0] * m[8] - m[2] * m[6]) / det, (m[2] * m[3] - m[0] * m[5]) / det,
+		c02 / det, (m[1] * m[6] - m[0] * m[7]) / det, (m[0] * m[4] - m[1] * m[3]) / det])
+
+
+## Tableau 3×3 (double précision) × vecteur.
+static func _fois(m: PackedFloat64Array, v: Vector3) -> Vector3:
+	return Vector3(m[0] * v.x + m[1] * v.y + m[2] * v.z, m[3] * v.x + m[4] * v.y + m[5] * v.z,
+		m[6] * v.x + m[7] * v.y + m[8] * v.z)
+
+
+## Rôle de chaque petit propulseur, trouvé par le calcul de son couple autour du centre de gravité (rien
+## n'est écrit dans le plan) : à pleine poussée, un propulseur fait à la fois avancer le vaisseau (force)
+## et le faire tourner (couple = bras de levier × force). On compare les deux : l'accélération de rotation
+## qu'il donne, multipliée par le « rayon de giration » du vaisseau sur cet axe (√(inertie / masse) : la
+## distance où la masse « semble » être), divisée par l'accélération qu'il donne en ligne droite. Cela
+## revient à son bras de levier divisé par le rayon de giration. S'il dépasse SEUIL_ROTATION sur un axe,
+## le propulseur sert à tourner sur cet axe (axe 0 = tangage, 1 = lacet, 2 = roulis ; signe = sens) ;
+## sinon c'est une buse de déplacement (axe −1) : il fait glisser le vaisseau, et le calcul des poussées
+## compense son petit couple avec les autres. Pour le chasseur : propulseurs du nez, de la queue et du bout
+## des ailes 0,8 à 3,7 ; buses encastrées 0,4 au plus.
+const SEUIL_ROTATION := 0.6
+
+
+func _trouver_roles() -> void:
+	var giration := Vector3(sqrt(inertie.x / masse), sqrt(inertie.y / masse), sqrt(inertie.z / masse))
+	for t in rcs:
+		var bras: Vector3 = ((t["pos_ref"] as Vector3) - centre_gravite).cross(t["dir_ref"])   # couple par newton (m)
+		var effet := Vector3(absf(bras.x) / giration.x, absf(bras.y) / giration.y, absf(bras.z) / giration.z)
+		var k := 0 if effet.x >= effet.y and effet.x >= effet.z else (1 if effet.y >= effet.z else 2)
+		if effet[k] >= SEUIL_ROTATION:
+			t["axe"] = k
+			t["signe"] = 1 if bras[k] > 0.0 else -1
+		else:
+			t["axe"] = -1
+			t["signe"] = 0
+		t["effet_rotation"] = effet[k]
 
 
 ## Poussée vers le haut possible en vol vertical complet (sert au pilote automatique pour savoir s'il
@@ -209,18 +288,18 @@ func _init() -> void:
 func _calculer_poussees() -> void:
 	var garde := vertical
 	vertical = 1.0
-	_placer_propulseurs_vertical()
+	_placer_propulseurs()
 	_preparer_repartition()
 	_calculer_poussee_max()
 	var verticale := _poussee_avant_vraie
 	vertical = garde
-	_placer_propulseurs_vertical()
+	_placer_propulseurs()
 	_preparer_repartition()
 	_calculer_poussee_max()
 	poussee_verticale_max = verticale * facteur_poussee
 
 
-## Change la puissance des moteurs principaux (1 = vraie poussée de 200 kN par moteur).
+## Change la puissance des moteurs principaux (1 = vraie poussée de chaque moteur, donnée par le plan).
 ## Le calcul des poussées (quel moteur, quel propulseur) se fait toujours avec les vrais moteurs ;
 ## la poussée en plus des « moteurs imaginaires » passe par le centre de gravité, comme si leurs
 ## tuyères s'orientaient pour ne pas faire tourner le vaisseau (sinon 2 cm d'écart × des milliards
@@ -230,67 +309,91 @@ func regler_poussee(facteur: float) -> void:
 	_calculer_poussees()
 
 
-## Poussée maximale d'un moteur arrière (N), avec le réglage de puissance.
+## Poussée maximale d'un moteur principal (N), avec le réglage de puissance.
 func poussee_moteur() -> float:
-	return POUSSEE_MOTEUR * facteur_poussee
+	return poussee_moteur_nominale * facteur_poussee
 
 
-## Pour un propulseur posé sur une aile, pos et dir sont donnés dans le repère de la charnière.
-func _ajouter_moteur(nom: String, pos: Vector3, dir: Vector3, poussee: float, aile: String) -> void:
-	moteurs.append({"nom": nom, "position": pos, "direction": dir, "poussee_max": poussee, "consigne": 0.0, "actuel": 0.0,
-		"aile": aile, "pos_aile": pos, "dir_aile": dir})
+## Poussée de tous les moteurs principaux ensemble (N), avec le réglage de puissance.
+func poussee_principale() -> float:
+	var s := 0.0
+	for m in moteurs:
+		if m["role"] != "levage":
+			s += float(m["poussee_n"])
+	return s * facteur_poussee
 
 
-func _ajouter_rcs(nom: String, pos: Vector3, dir: Vector3, poussee: float, axe: int, signe: int, aile := "") -> void:
-	rcs.append({"nom": nom, "position": pos, "direction": dir, "poussee_max": poussee, "axe": axe, "signe": signe, "actuel": 0.0,
-		"aile": aile, "pos_aile": pos, "dir_aile": dir})
+## Valeur actuelle d'une commande (0 à 1).
+func valeur_commande(nom: String) -> float:
+	match nom:
+		"ailes":
+			return ailes
+		"train":
+			return train
+		"vertical":
+			return vertical
+	return 0.0
+
+
+## Avancement (0 à 1) d'une articulation du plan dans la phase de sa commande.
+func progression(a: Dictionary) -> float:
+	return Plan.progression(a, valeur_commande(String(a["commande"])))
 
 
 ## Angle de la charnière d'une aile (degrés, autour de l'axe Z du vaisseau) pour l'ouverture actuelle.
 ## Sert aussi à l'affichage : le modèle 3D et la physique tournent exactement pareil.
 func angle_aile(nom: String) -> float:
-	var a: Dictionary = AILES[nom]
-	return lerpf(float(a["replie"]), float(a["ouvert"]), ailes)
-
-
-## Recalcule la position et la direction des propulseurs posés sur les ailes.
-func _placer_propulseurs_ailes() -> void:
-	for t in moteurs + rcs:
-		var nom: String = t["aile"]
-		if nom == "":
-			continue
-		var rot := Basis(Vector3.BACK, deg_to_rad(angle_aile(nom)))
-		t["position"] = (AILES[nom]["charniere"] as Vector3) + rot * (t["pos_aile"] as Vector3)
-		t["direction"] = rot * (t["dir_aile"] as Vector3)
+	var a: Dictionary = articulations[ailes_def[nom]["articulation"]]
+	return lerpf(float(a["angle_0_deg"]), float(a["angle_1_deg"]), progression(a))
 
 
 ## Sortie des moteurs de levage (0 = rentrés, 1 = sortis) et angle de la tuyère (degrés).
 func sortie_levage() -> float:
-	return clampf(vertical / PART_LEVAGE, 0.0, 1.0)
+	return progression(_verin_vertical) if not _verin_vertical.is_empty() else 0.0
 
 
 func angle_tuyere() -> float:
-	return 90.0 * clampf((vertical - PART_LEVAGE) / (1.0 - PART_LEVAGE), 0.0, 1.0)
+	return float(_tuyere["angle_1_deg"]) * progression(_tuyere) if not _tuyere.is_empty() else 0.0
 
 
-## Place la sortie de la tuyère centrale et les moteurs de levage selon la séquence de vol vertical.
-func _placer_propulseurs_vertical() -> void:
-	var rot := Basis(Vector3.RIGHT, deg_to_rad(angle_tuyere()))
-	var central: Dictionary = moteurs[4]
-	# chaque anneau tourne d'un tiers de l'angle par rapport au précédent (3 x 30° = 90°)
-	var pos := PIVOT_TUYERE
-	var tiers := deg_to_rad(angle_tuyere()) / 3.0
-	for k in 3:
-		pos += Basis(Vector3.RIGHT, tiers * (k + 1)) * Vector3(0, 0, float(ANNEAUX_TUYERE[k]))
-	central["position"] = pos
-	central["direction"] = rot * Vector3(0, 0, -1)
-	var s := sortie_levage()
-	for k in 2:
-		var m: Dictionary = moteurs[5 + k]
-		var x := -PIVOT_LEVAGE if k == 0 else PIVOT_LEVAGE
-		m["position"] = Vector3(x, LEVAGE_HAUT.y + COURSE_LEVAGE * s + LEVAGE_SORTIE, LEVAGE_HAUT.z)
+## Place les propulseurs posés sur une pièce mobile (aile, tuyère, vérin) selon les commandes actuelles.
+func _placer_propulseurs() -> void:
+	for t in moteurs + rcs:
+		var id: String = t["articulation"]
+		if id == "":
+			continue
+		var a: Dictionary = articulations[id]
+		var p := progression(a)
+		var p_ref: Vector3 = t["pos_ref"]
+		var d_ref: Vector3 = t["dir_ref"]
+		match String(a["type"]):
+			"charniere":
+				var rot := Basis(a["axe"], deg_to_rad(lerpf(float(a["angle_0_deg"]), float(a["angle_1_deg"]), p) - float(a["angle_ref"])))
+				t["position"] = (a["point"] as Vector3) + rot * (p_ref - (a["point"] as Vector3))
+				t["direction"] = rot * d_ref
+			"tuyere_anneaux":
+				# chaque anneau tourne d'une part de l'angle par rapport au précédent (3 x 30° = 90°)
+				var angle := deg_to_rad(float(a["angle_1_deg"]) * p)
+				var axe: Vector3 = a["axe"]
+				var pivot: Vector3 = a["pivot"]
+				var reste := (p_ref - pivot).length()
+				var u := (p_ref - pivot) / reste if reste > 0.0 else Vector3.ZERO
+				var anneaux: Array = a["anneaux_m"]
+				var part := angle / anneaux.size()
+				var pos := pivot
+				for k in anneaux.size():
+					var l := minf(float(anneaux[k]), reste)
+					pos += Basis(axe, part * (k + 1)) * (u * l)
+					reste -= l
+				if reste > 1e-6:
+					pos += Basis(axe, angle) * (u * reste)
+				t["position"] = pos
+				t["direction"] = Basis(axe, angle) * d_ref
+			"verin":
+				t["position"] = p_ref + (a["course"] as Vector3) * (p - float(a["progression_ref"]))
 		# un moteur de levage à moitié sorti ne peut pas fonctionner (il soufflerait dans la coque)
-		m["poussee_max"] = POUSSEE_LEVAGE if s >= 1.0 else 0.0
+		if t["seulement_sorti"]:
+			t["poussee_max"] = float(t["poussee_n"]) if p >= 1.0 else 0.0
 
 
 func passer_vol_vertical(oui: bool) -> void:
@@ -300,8 +403,9 @@ func passer_vol_vertical(oui: bool) -> void:
 ## Direction de la poussée commandée par les gaz (repère du vaisseau) : vers l'avant, puis vers le
 ## haut à mesure que la tuyère tourne.
 func direction_poussee() -> Vector3:
-	var a := deg_to_rad(angle_tuyere())
-	return Vector3(0.0, sin(a), -cos(a))
+	if _tuyere.is_empty():
+		return Vector3(0.0, 0.0, -1.0)
+	return Basis(_tuyere["axe"], deg_to_rad(angle_tuyere())) * Vector3(0.0, 0.0, -1.0)
 
 
 func ouvrir_ailes(ouvrir: bool) -> void:
@@ -315,7 +419,7 @@ func sortir_train(sortir: bool) -> void:
 ## Distance entre le centre du vaisseau et ce qui touche le sol : les roues si le train est
 ## complètement sorti, sinon le ventre de la coque.
 func hauteur_contact() -> float:
-	return HAUTEUR_TRAIN if train >= 1.0 else HAUTEUR_VENTRE
+	return hauteur_train if train >= 1.0 else hauteur_ventre
 
 # =====================================================================
 # COMMANDES
@@ -361,7 +465,7 @@ func _preparer_repartition() -> void:
 		var k: int = t["axe"]
 		if k < 0:
 			continue
-		var c: float = (t["position"] as Vector3 - CENTRE_GRAVITE).cross(t["direction"])[k] * float(t["poussee_max"])
+		var c: float = (t["position"] as Vector3 - centre_gravite).cross(t["direction"])[k] * float(t["poussee_max"])
 		if int(t["signe"]) > 0:
 			plus[k] += maxf(0.0, c)
 		else:
@@ -382,7 +486,7 @@ func _preparer_repartition() -> void:
 	for i in _tous.size():
 		var t = _tous[i]
 		var f: Vector3 = (t["direction"] as Vector3) * float(t["poussee_max"])
-		var c2: Vector3 = (t["position"] as Vector3 - CENTRE_GRAVITE).cross(f)
+		var c2: Vector3 = (t["position"] as Vector3 - centre_gravite).cross(f)
 		_colonnes.append(PackedFloat64Array([
 			f.x / f_cote, f.y / f_cote, f.z / f_cote,
 			POIDS_ROTATION * c2.x / couple_max.x, POIDS_ROTATION * c2.y / couple_max.y, POIDS_ROTATION * c2.z / couple_max.z]))
@@ -569,7 +673,7 @@ func _couple_un_astre(gm_astre: float, dx: float, dy: float, dz: float, vers_cor
 	if r <= 0.0:
 		return Vector3.ZERO
 	var n: Vector3 = vers_corps * Vector3(dx / r, dy / r, dz / r)
-	var i_n := Vector3(inertie.x * n.x, inertie.y * n.y, inertie.z * n.z)
+	var i_n := _fois(_i64, n)
 	return n.cross(i_n) * (3.0 * gm_astre / (r * r * r))
 
 
@@ -597,7 +701,7 @@ func effet_propulseurs() -> Array:
 			var f: Vector3 = t["direction"] * (float(t["poussee_max"]) * niveau)
 			# moteurs principaux : poussée x facteur_poussee, mais la part en plus passe par le centre de gravité
 			f_corps += f * facteur_poussee if i < n_moteurs else f
-			couple += (t["position"] as Vector3 - CENTRE_GRAVITE).cross(f)
+			couple += (t["position"] as Vector3 - centre_gravite).cross(f)
 	return [f_corps, couple]
 
 
@@ -620,15 +724,28 @@ var force_air := Vector3.ZERO     # N, repère du vaisseau (dernier pas)
 ## Flux de chaleur au point d'arrêt : loi de Sutton-Graves (q = k·√(ρ/r)·v³, utilisée pour les capsules
 ## et la navette), corrigée pour une paroi chaude. La coque rayonne sa chaleur (loi de Stefan-Boltzmann)
 ## et a une capacité thermique : elle chauffe et refroidit en quelques dizaines de secondes.
-const RAYON_NEZ := 0.3            # m (nez effilé du modèle : plus il est pointu, plus il chauffe)
+## La coque (plan : « coque ») : rayon du nez, capacité de chaleur, émissivité, température limite.
+var rayon_nez := 0.3              # m (nez effilé du modèle : plus il est pointu, plus il chauffe)
 const SUTTON_GRAVES := 1.7415e-4  # kg^0,5/m (air)
-const CAPACITE_COQUE := 25000.0   # J/(m²·K) : environ 1 cm d'acier ou de céramique
-const EMISSIVITE := 0.85
+var capacite_coque := 25000.0     # J/(m²·K) : environ 1 cm d'acier ou de céramique
+var emissivite := 0.85
 const SIGMA := 5.670374e-8        # W/(m²·K⁴)
 const T_ESPACE := 250.0           # K : équilibre moyen d'une coque à l'ombre et au soleil, loin de l'air
-const T_LIMITE_COQUE := 1900.0    # K (~1 630 °C) : au-delà, une vraie coque fondrait (seulement affiché)
+var t_limite_coque := 1900.0      # K (~1 630 °C) : au-delà, une vraie coque fondrait (seulement affiché)
 var temperature_nez := 290.0      # K
 var flux_nez := 0.0               # W/m², chaleur reçue de l'air
+
+
+## Réglages de la coque lus dans le plan (chaleur, dureté contre le sol).
+func _construire_coque() -> void:
+	var c: Dictionary = plan.donnees.get("coque", {})
+	rayon_nez = float(c.get("rayon_nez_m", 0.3))
+	capacite_coque = float(c.get("capacite_thermique_j_m2_k", 25000.0))
+	emissivite = float(c.get("emissivite", 0.85))
+	t_limite_coque = float(c.get("temperature_limite_k", 1900.0))
+	raideur_coque = float(c.get("raideur_n_m", 1500000.0))
+	amorti_coque = float(c.get("amorti_n_s_m", 60000.0))
+	choc_max_coque = float(c.get("choc_max_m_s", 3.0))
 
 
 ## Einstein C : le trou de ver (scripts/physique/trou_de_ver.gd), ou null. Près de sa gorge, c'est lui
@@ -694,20 +811,20 @@ func _pas_un(dt: float) -> void:
 	# 1 bis. Les ailes et le train bougent à vitesse constante vers leur consigne. Les propulseurs
 	# des ailes tournent avec elles : le calcul des poussées est refait avec leurs nouvelles positions.
 	if ailes != ailes_consigne:
-		ailes = move_toward(ailes, ailes_consigne, dt / DUREE_AILES)
-		_placer_propulseurs_ailes()
+		ailes = move_toward(ailes, ailes_consigne, dt / duree_ailes)
+		_placer_propulseurs()
 		_preparer_repartition()
 		_recalcul_poussee = true
 	# posé sur le ventre, le train ne peut pas sortir : le sol bloque les jambes (il peut rentrer)
 	if vertical != vertical_consigne:
-		vertical = move_toward(vertical, vertical_consigne, dt / DUREE_VERTICAL)
-		_placer_propulseurs_vertical()
+		vertical = move_toward(vertical, vertical_consigne, dt / duree_vertical)
+		_placer_propulseurs()
 		_preparer_repartition()
 		_recalcul_poussee = true
 	if train != train_consigne and not (au_sol and train_consigne > train):
-		train = move_toward(train, train_consigne, dt / DUREE_TRAIN)
+		train = move_toward(train, train_consigne, dt / duree_train)
 	# étape 6 (sol) : la roue avant tourne vers sa consigne à vitesse limitée (vérin de direction)
-	braquage = move_toward(braquage, clampf(braquage_consigne, -1.0, 1.0) * braquage_permis(), dt * VITESSE_BRAQUAGE)
+	braquage = move_toward(braquage, clampf(braquage_consigne, -1.0, 1.0) * braquage_permis(), dt * vitesse_braquage)
 
 	# 2. Somme des forces et des couples, dans le repère du vaisseau
 	var effet := effet_propulseurs()
@@ -793,20 +910,20 @@ const SOUS_PAS_MAX := 16         # limite pour rester léger, même en tournant 
 
 
 func _tourner(couple_corps: Vector3, dt: float) -> void:
-	var l_monde: Vector3 = Basis(orientation) * (inertie * omega)
+	var l_monde: Vector3 = Basis(orientation) * _fois(_i64, omega)
 	# vitesse de rotation la plus grande atteinte pendant ce pas (pour choisir le découpage)
-	var w_max := omega.length() + (couple_corps / inertie).length() * dt
+	var w_max := omega.length() + _fois(_inv64, couple_corps).length() * dt
 	var n := clampi(int(ceil(w_max * dt / ANGLE_SOUS_PAS)), 1, SOUS_PAS_MAX)
 	var h := dt / n
 	for i in n:
 		# le couple est attaché au vaisseau : il tourne avec lui
 		l_monde += Basis(orientation) * (couple_corps * h)
 		# méthode du point milieu : rotation calculée avec la vitesse du milieu du sous-pas
-		var w1: Vector3 = (Basis(orientation.inverse()) * l_monde) / inertie
+		var w1: Vector3 = _fois(_inv64, Basis(orientation.inverse()) * l_monde)
 		var q_milieu := _tourner_quaternion(orientation, w1, h * 0.5)
-		var w2: Vector3 = (Basis(q_milieu.inverse()) * l_monde) / inertie
+		var w2: Vector3 = _fois(_inv64, Basis(q_milieu.inverse()) * l_monde)
 		orientation = _tourner_quaternion(orientation, w2, h)
-	omega = (Basis(orientation.inverse()) * l_monde) / inertie
+	omega = _fois(_inv64, Basis(orientation.inverse()) * l_monde)
 
 
 static func _tourner_quaternion(q: Quaternion, w: Vector3, t: float) -> Quaternion:
@@ -847,44 +964,44 @@ func ordres_stabilisateur(duree_s: float) -> Vector3:
 ## Le sol frotte (il freine le glissement, sans dépasser frottement × poussée du sol).
 ## Si la jambe arrive en bout de course trop vite, ou si la coque tape le sol trop fort : écrasé.
 ## Rien n'est déplacé ou arrêté directement : le sol ne fait que pousser.
-## Train du modèle v27 : bas de la roue avant et des roues arrière, train sorti, amortisseurs détendus.
-## Les jambes arrière partent en biais vers l'extérieur (40° de la verticale, elles passent sous les
-## réacteurs d'aile, modèle v26). Depuis la v27, les patins sont remplacés par des roues freinées de
-## 18 cm de rayon, montées sur une fusée 14 cm à l'extérieur du bout de la jambe : elles sont à 2,37 m
-## l'une de l'autre (patins v26 : 2,09 m ; v25 : 84 cm, le vaisseau se couchait dès 3,5° de pente de
-## côté). Le ressort de chaque jambe est compté ici comme un ressort vertical équivalent sous la roue.
-const ROUES := [Vector3(0.0, -1.6, -4.4), Vector3(-1.184, -1.6, 2.4), Vector3(1.184, -1.6, 2.4)]   # avant, arrière gauche, arrière droit
-const COURSE_TRAIN := [0.15, 0.12, 0.12]           # m : course des amortisseurs du modèle
-## Amortisseurs dimensionnés pour le poids que porte chaque jambe : le centre de gravité réel est
-## à 1,43 m derrière l'origine, tout près des jambes arrière, qui portent donc 86 % du vaisseau.
-const RAIDEUR_TRAIN := [250000.0, 700000.0, 700000.0]  # N/m (posé : environ 5 cm à l'avant, 5 cm à l'arrière)
-const AMORTI_TRAIN := [30000.0, 80000.0, 80000.0]  # N·s/m (amortisseur un peu sous le critique : pas de rebond)
-const COQUE := [Vector3(-0.9, -1.0, -2.5), Vector3(0.9, -1.0, -2.5), Vector3(-0.9, -1.0, 2.5),
-	Vector3(0.9, -1.0, 2.5), Vector3(0.0, -0.2, -5.6), Vector3(0.0, 0.0, 5.4)]   # ventre, nez, queue
-const RAIDEUR_COQUE := 1500000.0 # N/m : la coque est dure
-const AMORTI_COQUE := 60000.0
+## Train (plan : pièces « roue ») : bas de chaque roue, train sorti, amortisseurs détendus. Chasseur v27 :
+## les jambes arrière partent en biais vers l'extérieur (40° de la verticale, elles passent sous les
+## réacteurs d'aile, modèle v26) ; leurs roues freinées de 18 cm de rayon sont à 2,37 m l'une de l'autre
+## (patins v26 : 2,09 m ; v25 : 84 cm, le vaisseau se couchait dès 3,5° de pente de côté). Le ressort de
+## chaque jambe est compté comme un ressort vertical équivalent sous la roue. Les amortisseurs sont
+## dimensionnés pour le poids que porte chaque jambe : le centre de gravité est tout près des jambes
+## arrière, qui portent donc 86 % du vaisseau.
+var roues: Array = []                 # Vector3 : bas de chaque roue (repère du modèle)
+var course_train: Array = []          # m : course de chaque amortisseur
+var raideur_train: Array = []         # N/m
+var amorti_train: Array = []          # N·s/m (un peu sous le critique : pas de rebond)
+var choc_max_train: Array = []        # m/s : jambe en bout de course encore plus vite que ça = train cassé
+var roue_orientable := -1             # la roue qui tourne (roue avant), -1 si aucune
+## Points de la coque qui peuvent toucher le sol (plan : pièces « contact_coque ») : ventre, nez, queue.
+var coque_points: Array = []
+var raideur_coque := 1500000.0        # N/m : la coque est dure
+var amorti_coque := 60000.0
+var choc_max_coque := 3.0             # m/s : la coque qui tape le sol plus vite que ça = écrasé
 const FROTTEMENT := 0.5          # le sol freine au plus de 0,5 × la force qui appuie
 const VISCOSITE_SOL := 40000.0   # N·s/m : force de freinage d'un point qui glisse
-const CHOC_MAX_COQUE := 3.0      # m/s : la coque qui tape le sol plus vite que ça = écrasé
-const CHOC_MAX_TRAIN := 2.0      # m/s : jambe en bout de course encore plus vite que ça = train cassé
 var _touchait := {}              # points qui touchaient déjà le sol au pas précédent
 ## Son, phase 3 : « prise » du sol, en LECTURE SEULE. _forces_sol y note ce qui se passe sous chaque point
 ## (choc au contact, roulement, glissement, freins). Le son (scripts/son/capteurs.gd) la lit puis la vide.
 ## Rien de ce qui est écrit ici ne sert à la physique : aucun résultat ne change (test « La physique ne
-## change pas » du son, et les tests de la physique). Index : roues 0 à 2, puis points de la coque 3 à 8.
-const PRISE_POINTS := 9
-var prise_n := 0                                               # morceaux de pas de physique notés
-var prise_choc := PackedFloat64Array([0, 0, 0, 0, 0, 0, 0, 0, 0])       # m/s : plus forte vitesse d'arrivée sur le sol
-var prise_choc_cote := PackedFloat64Array([0, 0, 0, 0, 0, 0, 0, 0, 0])  # m/s : vitesse le long du sol à ce moment
-var prise_butee := PackedFloat64Array([0, 0, 0])               # m/s : amortisseur qui arrive en bout de course
-var prise_fn := PackedFloat64Array([0, 0, 0, 0, 0, 0, 0, 0, 0])         # N (somme) : force qui appuie sur le sol
-var prise_roule := PackedFloat64Array([0, 0, 0])               # m/s (somme) : vitesse de roulement des roues
-var prise_glisse := PackedFloat64Array([0, 0, 0, 0, 0, 0, 0, 0, 0])     # m/s (somme) : vitesse de glissement (dérapage, raclage)
-var prise_frein := PackedFloat64Array([0, 0, 0])               # (somme) serrage des freins d'une roue qui roule
+## change pas » du son, et les tests de la physique). Index : les roues d'abord (chasseur : 0 à 2), puis
+## les points de la coque (3 à 8). prise_points = nombre de points (roues + coque).
+var prise_points := 0
+var prise_n := 0                                 # morceaux de pas de physique notés
+var prise_choc := PackedFloat64Array()           # m/s : plus forte vitesse d'arrivée sur le sol
+var prise_choc_cote := PackedFloat64Array()      # m/s : vitesse le long du sol à ce moment
+var prise_butee := PackedFloat64Array()          # m/s : amortisseur qui arrive en bout de course (roues)
+var prise_fn := PackedFloat64Array()             # N (somme) : force qui appuie sur le sol
+var prise_roule := PackedFloat64Array()          # m/s (somme) : vitesse de roulement des roues
+var prise_glisse := PackedFloat64Array()         # m/s (somme) : vitesse de glissement (dérapage, raclage)
+var prise_frein := PackedFloat64Array()          # (somme) serrage des freins d'une roue qui roule
 ## Phase 4 : force du sol sur chaque point (N, somme, repère du vaisseau), pour la tension des jambes du train.
-var prise_f_sol := PackedVector3Array([Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO,
-	Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO])
-var _prise_butee := PackedByteArray([0, 0, 0])                 # amortisseur déjà en bout de course (pour la prise)
+var prise_f_sol := PackedVector3Array()
+var _prise_butee := PackedByteArray()            # amortisseur déjà en bout de course (pour la prise)
 
 
 ## Le son lit la prise puis la vide (aucun effet sur la physique).
@@ -895,7 +1012,59 @@ func vider_prise_sol() -> void:
 	for a in [prise_butee, prise_roule, prise_frein]:
 		a.fill(0.0)
 	prise_f_sol.fill(Vector3.ZERO)
-var compression_roues := PackedFloat64Array([0.0, 0.0, 0.0])   # m, écrasement de chaque amortisseur (pour le dessin)
+var compression_roues := PackedFloat64Array()   # m, écrasement de chaque amortisseur (pour le dessin)
+
+
+## Train et points de la coque, lus dans le plan.
+func _construire_sol() -> void:
+	roues = []
+	course_train = []
+	raideur_train = []
+	amorti_train = []
+	choc_max_train = []
+	roue_orientable = -1
+	braquage_max = 0.0
+	vitesse_braquage = 0.0
+	for p in plan.pieces_de_type("roue"):
+		if p.has("orientable_deg") and roue_orientable < 0:
+			roue_orientable = roues.size()
+			braquage_max = deg_to_rad(float(p["orientable_deg"]))
+			vitesse_braquage = deg_to_rad(float(p.get("vitesse_braquage_deg_s", 60.0)))
+		roues.append(p["point"])
+		course_train.append(float(p["course_m"]))
+		raideur_train.append(float(p["raideur_n_m"]))
+		amorti_train.append(float(p["amorti_n_s_m"]))
+		choc_max_train.append(float(p.get("choc_max_m_s", 2.0)))
+	coque_points = []
+	for p in plan.pieces_de_type("contact_coque"):
+		coque_points.append(p["point"])
+	# hauteurs de contact (pilote automatique, affichage) : la roue la plus basse, le point de coque le plus bas
+	hauteur_train = 0.0
+	for r in roues:
+		hauteur_train = maxf(hauteur_train, -(r as Vector3).y)
+	hauteur_ventre = 0.0
+	for c in coque_points:
+		hauteur_ventre = maxf(hauteur_ventre, -(c as Vector3).y)
+	# empattement : de la roue orientable au milieu des autres roues (le long de l'axe avant-arrière)
+	empattement = 0.0
+	if roue_orientable >= 0 and roues.size() > 1:
+		var z := 0.0
+		for k in roues.size():
+			if k != roue_orientable:
+				z += (roues[k] as Vector3).z
+		empattement = absf(z / (roues.size() - 1) - (roues[roue_orientable] as Vector3).z)
+	var nr := roues.size()
+	prise_points = nr + coque_points.size()
+	for a in [prise_choc, prise_choc_cote, prise_fn, prise_glisse]:
+		a.resize(prise_points)
+		a.fill(0.0)
+	for a in [prise_butee, prise_roule, prise_frein, compression_roues]:
+		a.resize(nr)
+		a.fill(0.0)
+	prise_f_sol.resize(prise_points)
+	prise_f_sol.fill(Vector3.ZERO)
+	_prise_butee.resize(nr)
+	_prise_butee.fill(0)
 
 
 ## Frottement « accroché » : un point posé reste accroché au sol par un petit ressort de côté
@@ -920,20 +1089,20 @@ const ADHERENCE_PNEU := 0.8
 ## Frein de parc automatique (comme le « auto hold » d'une voiture) : vaisseau au sol presque arrêté
 ## (moins de 0,3 m/s par rapport au sol) et gaz à zéro, les freins se serrent tout seuls ; ils se
 ## desserrent dès qu'on remet les gaz. Sans lui, posé sur une pente, le vaisseau partirait en roue libre.
-const BRAQUAGE_MAX := deg_to_rad(35.0)   # rad
+var braquage_max := 0.0                  # rad (plan : orientable_deg de la roue avant, 35° pour le chasseur)
 ## v27 : avec les roues arrière qui accrochent, un virage serré trop vite ferait basculer le vaisseau
 ## (centre de gravité haut, 1,6 m au-dessus du sol, pour 2,37 m entre les roues arrière). Comme sur un
 ## vrai avion (palonniers : beaucoup de braquage à l'arrêt, quelques degrés en vitesse), le vérin de
 ## direction braque de moins en moins vite qu'on roule : virage à au plus ACCEL_VIRAGE (0,3 g).
 const ACCEL_VIRAGE := 3.0                # m/s²
-const EMPATTEMENT := 6.8                 # m, entre la roue avant et les roues arrière
+var empattement := 0.0                   # m, entre la roue avant et les roues arrière (calculé : 6,8 m)
 
 
 ## Braquage le plus grand que le vérin donne à cette vitesse (rad).
 func braquage_permis() -> float:
 	var v2 := vitesse_par_rapport_au_sol().length_squared()
-	return minf(BRAQUAGE_MAX, atan(EMPATTEMENT * ACCEL_VIRAGE / maxf(v2, 1e-6)))
-const VITESSE_BRAQUAGE := deg_to_rad(60.0)   # rad/s
+	return minf(braquage_max, atan(empattement * ACCEL_VIRAGE / maxf(v2, 1e-6)))
+var vitesse_braquage := 0.0              # rad/s (plan : vitesse_braquage_deg_s de la roue avant)
 var braquage_consigne := 0.0     # -1 (droite) à 1 (gauche), donné par le lacet quand on est au sol
 var braquage := 0.0              # rad, angle réel de la roue avant (positif = vers la gauche)
 var frein := 0.0                 # 0 à 1 : serrage des freins des roues (Maj)
@@ -970,11 +1139,12 @@ func _forces_sol(base: Basis) -> Array:
 	var serrage := 1.0 if frein_parc else clampf(frein, 0.0, 1.0)
 	var points := []
 	compression_roues.fill(0.0)
+	var nr := roues.size()
 	if train >= 1.0:
-		for k in ROUES.size():
-			points.append([ROUES[k], k, k])
-	for i in COQUE.size():
-		points.append([COQUE[i], -1, 10 + i])
+		for k in nr:
+			points.append([roues[k], k, k, k])
+	for i in coque_points.size():
+		points.append([coque_points[i], -1, 1000 + i, nr + i])
 	var deja := _touchait
 	_touchait = {}
 	var accroches := _accroches
@@ -982,7 +1152,7 @@ func _forces_sol(base: Basis) -> Array:
 	var avant: Vector3 = base * Vector3(0.0, 0.0, -1.0)
 	prise_n += 1   # prise du son (lecture seule)
 	for pt in points:
-		var r_corps: Vector3 = (pt[0] as Vector3) - CENTRE_GRAVITE   # vu du centre de gravité
+		var r_corps: Vector3 = (pt[0] as Vector3) - centre_gravite   # vu du centre de gravité
 		var k_roue: int = pt[1]
 		var roue := k_roue >= 0
 		var r_monde: Vector3 = base * r_corps
@@ -991,7 +1161,8 @@ func _forces_sol(base: Basis) -> Array:
 		var qy := py + r_monde.y
 		var qz := pz + r_monde.z
 		var dq := sqrt(qx * qx + qy * qy + qz * qz)
-		var cle: int = pt[2]   # numéro du point (roue 0-2, coque 10-15)
+		var cle: int = pt[2]   # numéro du point (roues 0, 1, 2…, coque 1000, 1001…)
+		var ip: int = pt[3]    # index de la prise du son (roues, puis points de la coque)
 		var ici := _vers_planete_64(qx, qy, qz)   # 64 bits : un Vector3 (32 bits) à 600 km ne voit pas 6 cm
 		var sol_ici := _sol_sous(cle, ici, qx, qy, qz, false)
 		var h := dq - rayon_planete - float(sol_ici[0])
@@ -1012,22 +1183,21 @@ func _forces_sol(base: Basis) -> Array:
 				vitesse_impact = 0.0   # premier point qui touche : nouveau posé
 			vitesse_impact = maxf(vitesse_impact, -vn)
 			# prise du son : choc au contact (vitesse d'arrivée, et le long du sol pour le crissement du pneu)
-			var ip := k_roue if roue else cle - 7
 			if -vn > prise_choc[ip]:
 				prise_choc[ip] = -vn
 				prise_choc_cote[ip] = (v_point - n * vn).length()
-			if not roue and -vn > CHOC_MAX_COQUE:
+			if not roue and -vn > choc_max_coque:
 				ecrase = true
 		_touchait[cle] = true
 		var fn := 0.0
 		if roue:
-			var course: float = COURSE_TRAIN[k_roue]
+			var course: float = course_train[k_roue]
 			compression_roues[k_roue] = minf(c, course)
-			fn = float(RAIDEUR_TRAIN[k_roue]) * minf(c, course) - float(AMORTI_TRAIN[k_roue]) * vn
+			fn = float(raideur_train[k_roue]) * minf(c, course) - float(amorti_train[k_roue]) * vn
 			if c > course:
 				# amortisseur en bout de course : la jambe devient dure
-				fn += RAIDEUR_COQUE * (c - course) - AMORTI_COQUE * vn
-				if -vn > CHOC_MAX_TRAIN:
+				fn += raideur_coque * (c - course) - amorti_coque * vn
+				if -vn > float(choc_max_train[k_roue]):
 					ecrase = true
 				if _prise_butee[k_roue] == 0:
 					prise_butee[k_roue] = maxf(prise_butee[k_roue], -vn)   # prise du son
@@ -1035,7 +1205,7 @@ func _forces_sol(base: Basis) -> Array:
 			else:
 				_prise_butee[k_roue] = 0
 		else:
-			fn = RAIDEUR_COQUE * c - AMORTI_COQUE * vn
+			fn = raideur_coque * c - amorti_coque * vn
 		fn = maxf(fn, 0.0)
 		if fn <= 0.0:
 			continue
@@ -1049,7 +1219,7 @@ func _forces_sol(base: Basis) -> Array:
 		if roue and not frein_parc:
 			# chaque roue roule dans sa direction : la roue avant selon son braquage, les roues arrière
 			# (v27) dans l'axe du vaisseau ; direction projetée sur le sol
-			var dir_roue: Vector3 = base * Vector3(-sin(braquage), 0.0, -cos(braquage)) if k_roue == 0 and braquage != 0.0 else avant
+			var dir_roue: Vector3 = base * Vector3(-sin(braquage), 0.0, -cos(braquage)) if k_roue == roue_orientable and braquage != 0.0 else avant
 			axe_roule = dir_roue - n * dir_roue.dot(n)
 			if axe_roule.length() > 1e-6:
 				axe_roule = axe_roule.normalized()
@@ -1060,7 +1230,7 @@ func _forces_sol(base: Basis) -> Array:
 		# jusqu'à l'adhérence du pneu
 		var ft_max := (ADHERENCE_PNEU if roue else FROTTEMENT) * fn
 		if ft.length() > ft_max:
-			prise_glisse[k_roue if roue else cle - 7] += vt.length()   # prise du son : ça dérape ou ça racle
+			prise_glisse[ip] += vt.length()   # prise du son : ça dérape ou ça racle
 			# ça glisse : la force est limitée et l'accroche suit le point
 			ft = ft.normalized() * ft_max
 			var e_ok := ecart.normalized() * minf(ecart.length(), ft_max / RAIDEUR_COTE)
@@ -1085,9 +1255,9 @@ func _forces_sol(base: Basis) -> Array:
 					prise_glisse[k_roue] += absf(v_roule)   # prise du son : roue bloquée par le frein, qui glisse
 			prise_roule[k_roue] += absf(v_roule)   # prise du son (lecture seule)
 			prise_frein[k_roue] += serrage
-		prise_fn[k_roue if roue else cle - 7] += fn   # prise du son (lecture seule)
+		prise_fn[ip] += fn   # prise du son (lecture seule)
 		var f: Vector3 = n * fn + ft
-		prise_f_sol[k_roue if roue else cle - 7] += f * base   # prise du son (lecture seule) : repère du vaisseau
+		prise_f_sol[ip] += f * base   # prise du son (lecture seule) : repère du vaisseau
 		f_monde += f
 		couple += r_corps.cross(base.inverse() * f)
 	return [f_monde, couple]
@@ -1144,7 +1314,7 @@ func _chauffer(dt: float, son: float) -> void:
 	if rho > 0.0:
 		var m := v / maxf(son, 1.0)
 		var t_r := temperature_air * (1.0 + 0.18 * m * m)   # température de l'air arrêté contre le nez
-		var froid := SUTTON_GRAVES * sqrt(rho / RAYON_NEZ) * v * v * v
+		var froid := SUTTON_GRAVES * sqrt(rho / rayon_nez) * v * v * v
 		# paroi chaude : elle reçoit moins (rien quand elle est à la température de l'air arrêté)
 		q = froid * (t_r - t) / maxf(t_r - 300.0, 50.0)
 		# à petite vitesse, l'air échange aussi sa chaleur par simple contact (nombre de Stanton ≈ 0,001)
@@ -1158,8 +1328,8 @@ func _chauffer(dt: float, son: float) -> void:
 	var n := maxi(1, ceili(dt / 2.0))   # pas de 2 s au plus (temps accéléré)
 	var h := dt / n
 	for i in n:
-		var ray := EMISSIVITE * SIGMA * (t_env ** 4 - t ** 4)
-		t = maxf(t + (q + ray) * h / CAPACITE_COQUE, 3.0)
+		var ray := emissivite * SIGMA * (t_env ** 4 - t ** 4)
+		t = maxf(t + (q + ray) * h / capacite_coque, 3.0)
 	temperature_nez = t
 
 
@@ -1446,7 +1616,7 @@ func energie_specifique() -> float:
 
 
 func moment_cinetique_monde() -> Vector3:
-	return Basis(orientation) * Vector3(inertie.x * omega.x, inertie.y * omega.y, inertie.z * omega.z)
+	return Basis(orientation) * _fois(_i64, omega)
 
 
 ## Orbite actuelle : périapside et apoapside (altitudes, en m). apo = INF si on s'échappe.
@@ -1540,17 +1710,16 @@ func placer_en_orbite(altitude_m: float) -> void:
 	for m in moteurs:
 		m["consigne"] = 0.0
 		m["actuel"] = 0.0
-	# ailes ouvertes, train rentré
-	ailes = 1.0
-	ailes_consigne = 1.0
-	train = 0.0
-	train_consigne = 0.0
+	# comme au départ du plan (chasseur : ailes ouvertes, train rentré, vol normal)
+	ailes = plan.valeur_depart("ailes")
+	ailes_consigne = ailes
+	train = plan.valeur_depart("train")
+	train_consigne = train
 	braquage = 0.0
 	braquage_consigne = 0.0
 	frein = 0.0
-	vertical = 0.0
-	vertical_consigne = 0.0
-	_placer_propulseurs_ailes()
-	_placer_propulseurs_vertical()
+	vertical = plan.valeur_depart("vertical")
+	vertical_consigne = vertical
+	_placer_propulseurs()
 	_preparer_repartition()
 	_calculer_poussee_max()

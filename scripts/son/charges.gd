@@ -250,7 +250,7 @@ func cas_de_calcul(c: Capteurs) -> Dictionary:
 		if echelle_9g == 0.0:
 			echelle_9g = s
 		var ph := _copie(base)
-		for g in Aerodynamique.PRISE_SURFACES:
+		for g in aero.prise_surfaces:
 			ph.air_f[g] = aero.prise_f[g] * s
 			ph.air_c[g] = aero.prise_c[g] * s
 		ph.acceleration = tot * s / m
@@ -342,8 +342,9 @@ func _photo_vide(c: Capteurs) -> Capteurs:
 	e.points_sol = c.points_sol.duplicate()
 	e.poussee_reference = c.poussee_reference
 	e.poussee_levage = c.poussee_levage
-	e.air_f.resize(Aerodynamique.PRISE_SURFACES)
-	e.air_c.resize(Aerodynamique.PRISE_SURFACES)
+	var n_air := c.air_f.size() if c.air_f.size() > 0 else Aerodynamique.new().prise_surfaces
+	e.air_f.resize(n_air)
+	e.air_c.resize(n_air)
 	e.air_f.fill(Vector3.ZERO)
 	e.air_c.fill(Vector3.ZERO)
 	e.sol_f.resize(c.points_sol.size())

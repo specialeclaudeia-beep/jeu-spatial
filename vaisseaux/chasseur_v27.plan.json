@@ -1,0 +1,1299 @@
+{
+	"format": "plan-vaisseau",
+	"version": 1,
+	"nom": "Chasseur v27",
+	"description": "Chasseur à 4 ailes en X (modèle v27, roues arrière freinées), 5 moteurs arrière de 200 kN, 2 moteurs de levage, 12 propulseurs d'orientation et 10 buses encastrées.",
+	"modele_3d": "modele3d/v27_roues_arriere/vaisseau_v27.blend",
+	"pose_reference": "ailes ouvertes, train rentré, vol normal (tuyère droite, moteurs de levage rentrés)",
+	"commandes": {
+		"ailes": {
+			"nom": "ouverture des ailes",
+			"duree_s": 2.5,
+			"depart": 1.0,
+			"reference": 1.0
+		},
+		"train": {
+			"nom": "train d'atterrissage",
+			"duree_s": 3.0,
+			"depart": 0.0,
+			"reference": 0.0
+		},
+		"vertical": {
+			"nom": "vol vertical",
+			"duree_s": 4.0,
+			"depart": 0.0,
+			"reference": 0.0
+		}
+	},
+	"articulations": [
+		{
+			"id": "aile_haut_gauche",
+			"type": "charniere",
+			"nom": "aile haut gauche",
+			"commande": "ailes",
+			"point": [-0.6, 0.0, 0.0],
+			"axe": [0.0, 0.0, 1.0],
+			"angle_0_deg": 0.0,
+			"angle_1_deg": -22.249,
+			"modele_3d": "Charniere_haut_gauche"
+		},
+		{
+			"id": "aile_haut_droit",
+			"type": "charniere",
+			"nom": "aile haut droit",
+			"commande": "ailes",
+			"point": [0.6, 0.0, 0.0],
+			"axe": [0.0, 0.0, 1.0],
+			"angle_0_deg": 0.0,
+			"angle_1_deg": 22.249,
+			"modele_3d": "Charniere_haut_droit"
+		},
+		{
+			"id": "aile_bas_gauche",
+			"type": "charniere",
+			"nom": "aile bas gauche",
+			"commande": "ailes",
+			"point": [-0.6, 0.0, 0.0],
+			"axe": [0.0, 0.0, 1.0],
+			"angle_0_deg": -180.0,
+			"angle_1_deg": -157.751,
+			"modele_3d": "Charniere_bas_gauche"
+		},
+		{
+			"id": "aile_bas_droit",
+			"type": "charniere",
+			"nom": "aile bas droit",
+			"commande": "ailes",
+			"point": [0.6, 0.0, 0.0],
+			"axe": [0.0, 0.0, 1.0],
+			"angle_0_deg": 180.0,
+			"angle_1_deg": 157.751,
+			"modele_3d": "Charniere_bas_droit"
+		},
+		{
+			"id": "tuyere",
+			"type": "tuyere_anneaux",
+			"nom": "tuyère orientable du moteur central",
+			"commande": "vertical",
+			"phase": [0.4, 1.0],
+			"pivot": [0.0, 0.0, 4.25],
+			"axe": [1.0, 0.0, 0.0],
+			"anneaux_m": [0.26, 0.26, 0.28],
+			"angle_1_deg": 90.0,
+			"modele_3d": "Pivot_tuyere_centrale"
+		},
+		{
+			"id": "verin_levage_gauche",
+			"type": "verin",
+			"nom": "vérin du moteur de levage gauche",
+			"commande": "vertical",
+			"phase": [0.0, 0.4],
+			"course": [0.0, -0.32, 0.0],
+			"modele_3d": "Moteur_levage_gauche"
+		},
+		{
+			"id": "verin_levage_droit",
+			"type": "verin",
+			"nom": "vérin du moteur de levage droit",
+			"commande": "vertical",
+			"phase": [0.0, 0.4],
+			"course": [0.0, -0.32, 0.0],
+			"modele_3d": "Moteur_levage_droit"
+		}
+	],
+	"coque": {
+		"longueur_m": 10.3,
+		"rayon_nez_m": 0.3,
+		"capacite_thermique_j_m2_k": 25000.0,
+		"emissivite": 0.85,
+		"temperature_limite_k": 1900.0,
+		"raideur_n_m": 1500000.0,
+		"amorti_n_s_m": 60000.0,
+		"choc_max_m_s": 3.0
+	},
+	"air": {
+		"fuselage": {
+			"centre": [0.0, 0.09, -0.5],
+			"surface_face_m2": 3.34,
+			"surface_cote_m2": 13.07,
+			"surface_dessus_m2": 12.68
+		},
+		"nez": {
+			"point": [0.0, 0.0, -1.46],
+			"section_max_m2": 2.8
+		},
+		"train": {
+			"point": [0.0, -1.3, -1.0],
+			"surface_m2": 0.9
+		}
+	},
+	"pieces": [
+		{
+			"id": "Aile_bas_droit",
+			"type": "structure",
+			"matiere": "composite_carbone",
+			"masse_kg": 355.8,
+			"centre": [2.669441, -0.970686, 2.390452],
+			"inertie_propre": [357.031, 1006.8507, 895.1594, 295.4627, 78.8158, -29.927],
+			"surface_m2": 44.4727,
+			"articulation": "aile_bas_droit"
+		},
+		{
+			"id": "Aile_bas_gauche",
+			"type": "structure",
+			"matiere": "composite_carbone",
+			"masse_kg": 355.8,
+			"centre": [-2.669441, -0.970686, 2.390452],
+			"inertie_propre": [357.0309, 1006.8506, 895.1592, -295.4625, -78.8158, -29.927],
+			"surface_m2": 44.4727,
+			"articulation": "aile_bas_gauche"
+		},
+		{
+			"id": "Aile_haut_droit",
+			"type": "structure",
+			"matiere": "composite_carbone",
+			"masse_kg": 355.8,
+			"centre": [2.669441, 0.970686, 2.390452],
+			"inertie_propre": [357.031, 1006.8507, 895.1592, -295.4626, 78.8158, 29.927],
+			"surface_m2": 44.4727,
+			"articulation": "aile_haut_droit"
+		},
+		{
+			"id": "Aile_haut_gauche",
+			"type": "structure",
+			"matiere": "composite_carbone",
+			"masse_kg": 355.8,
+			"centre": [-2.669441, 0.970686, 2.390452],
+			"inertie_propre": [357.031, 1006.8507, 895.1592, 295.4626, -78.8158, 29.927],
+			"surface_m2": 44.4727,
+			"articulation": "aile_haut_gauche"
+		},
+		{
+			"id": "Aileron_d",
+			"type": "structure",
+			"matiere": "composite_carbone",
+			"masse_kg": 28.8,
+			"centre": [0.602024, 1.168791, 3.75955],
+			"inertie_propre": [8.1355, 7.5237, 0.9751, -0.3646, -0.5808, -1.2455],
+			"surface_m2": 3.5986
+		},
+		{
+			"id": "Aileron_g",
+			"type": "structure",
+			"matiere": "composite_carbone",
+			"masse_kg": 28.8,
+			"centre": [-0.602024, 1.168791, 3.75955],
+			"inertie_propre": [8.1355, 7.5237, 0.9751, 0.3646, 0.5808, -1.2455],
+			"surface_m2": 3.5986
+		},
+		{
+			"id": "Canons",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 5.8,
+			"centre": [0.0, -0.073333, -6.025],
+			"inertie_propre": [0.2303, 0.2534, 0.0438, 0.0, 0.0, 0.0],
+			"surface_m2": 0.365
+		},
+		{
+			"id": "Cockpit_cadre",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 10.8,
+			"centre": [0.0, 0.73473, -0.256098],
+			"inertie_propre": [10.7809, 12.6624, 3.5028, 0.0, 0.0, -0.721],
+			"surface_m2": 1.9948
+		},
+		{
+			"id": "Cockpit_details",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 21.1,
+			"centre": [-0.019284, 0.101087, -0.835782],
+			"inertie_propre": [9.2389, 13.9416, 6.2339, -0.0228, 0.2154, 0.2725],
+			"surface_m2": 3.9083
+		},
+		{
+			"id": "Cockpit_habillage",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 14.7,
+			"centre": [0.0, -0.039177, 0.004639],
+			"inertie_propre": [6.7134, 11.7799, 5.9413, 0.0, 0.0, 0.5065],
+			"surface_m2": 2.5387
+		},
+		{
+			"id": "Cockpit_interieur",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 142.2,
+			"centre": [0.0, -0.165991, -0.392151],
+			"inertie_propre": [154.3716, 172.6668, 44.3695, 0.0, 0.0, -6.2449],
+			"surface_m2": 26.3268
+		},
+		{
+			"id": "Cockpit_verriere",
+			"type": "structure",
+			"matiere": "verre_aluminosilicate",
+			"masse_kg": 211.2,
+			"centre": [0.0, 0.730663, -0.32763],
+			"inertie_propre": [186.7955, 223.5058, 58.1187, 0.0, 0.0, -12.2265],
+			"surface_m2": 7.053
+		},
+		{
+			"id": "Ecran_centre",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 0.2,
+			"centre": [0.0, -0.005, -1.133],
+			"inertie_propre": [0.0005, 0.0011, 0.0016, 0.0, 0.0, 0.0],
+			"surface_m2": 0.0425
+		},
+		{
+			"id": "Ecran_droit",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 0.3,
+			"centre": [0.34, -0.005, -1.133],
+			"inertie_propre": [0.0007, 0.0022, 0.0029, 0.0, 0.0, 0.0],
+			"surface_m2": 0.0491
+		},
+		{
+			"id": "Ecran_gauche",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 0.3,
+			"centre": [-0.34, -0.005, -1.133],
+			"inertie_propre": [0.0007, 0.0022, 0.0029, 0.0, 0.0, 0.0],
+			"surface_m2": 0.0491
+		},
+		{
+			"id": "Ecran_lateral_droit",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 0.2,
+			"centre": [0.62, 0.002, -0.6],
+			"inertie_propre": [0.0014, 0.0016, 0.0002, 0.0, 0.0, 0.0],
+			"surface_m2": 0.0278
+		},
+		{
+			"id": "Ecran_lateral_gauche",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 0.2,
+			"centre": [-0.62, 0.002, -0.6],
+			"inertie_propre": [0.0014, 0.0016, 0.0002, 0.0, 0.0, 0.0],
+			"surface_m2": 0.0278
+		},
+		{
+			"id": "Emplacement_droide",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 36.8,
+			"centre": [0.0, 0.58618, 1.849942],
+			"inertie_propre": [4.3711, 3.5251, 4.3728, 0.0, 0.0, -0.0006],
+			"surface_m2": 2.3175
+		},
+		{
+			"id": "Fourche_avant",
+			"type": "structure",
+			"matiere": "acier",
+			"masse_kg": 31.2,
+			"centre": [0.0, -0.055393, -3.305076],
+			"inertie_propre": [1.4798, 1.5429, 0.1432, 0.0, 0.0, -0.0092],
+			"surface_m2": 0.3972
+		},
+		{
+			"id": "Fuselage",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 758.9,
+			"centre": [3.3e-05, 0.080233, 0.421485],
+			"inertie_propre": [6160.1917, 6135.8146, 496.5182, -0.0158, -0.0057, -12.1548],
+			"surface_m2": 47.8935
+		},
+		{
+			"id": "Jambe_arriere_droit",
+			"type": "structure",
+			"matiere": "acier",
+			"masse_kg": 30.2,
+			"centre": [0.44, -0.76, 1.910687],
+			"inertie_propre": [1.9446, 1.9446, 0.0768, 0.0, 0.0, 0.0],
+			"surface_m2": 0.3266
+		},
+		{
+			"id": "Jambe_arriere_gauche",
+			"type": "structure",
+			"matiere": "acier",
+			"masse_kg": 30.2,
+			"centre": [-0.44, -0.76, 1.910687],
+			"inertie_propre": [1.9446, 1.9446, 0.0768, 0.0, 0.0, 0.0],
+			"surface_m2": 0.3266
+		},
+		{
+			"id": "Jambe_avant",
+			"type": "structure",
+			"matiere": "acier",
+			"masse_kg": 60.0,
+			"centre": [0.0, -0.048347, -4.029831],
+			"inertie_propre": [4.9355, 4.9055, 0.3054, 0.0, 0.0, 0.0863],
+			"surface_m2": 0.7644
+		},
+		{
+			"id": "Levier_gaz_piece",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 0.2,
+			"centre": [-0.52, 0.175597, -0.387767],
+			"inertie_propre": [0.0007, 0.0004, 0.0007, 0.0, 0.0, 0.0003],
+			"surface_m2": 0.0449
+		},
+		{
+			"id": "Manche_piece",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 0.3,
+			"centre": [0.53, 0.247878, -0.286749],
+			"inertie_propre": [0.0018, 0.0002, 0.0018, 0.0, 0.0, -0.0002],
+			"surface_m2": 0.0592
+		},
+		{
+			"id": "Marquages",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 8.9,
+			"centre": [-0.000488, 0.489865, -1.448461],
+			"inertie_propre": [25.6811, 28.1825, 2.7721, -0.0022, -0.0055, -1.4355],
+			"surface_m2": 0.562
+		},
+		{
+			"id": "Masse_avionique",
+			"type": "masse",
+			"masse_kg": 350.0,
+			"centre": [0.0, 0.05, -5.0],
+			"note": "ordinateurs, radar, batteries"
+		},
+		{
+			"id": "Masse_canons",
+			"type": "masse",
+			"masse_kg": 300.0,
+			"centre": [0.0, -0.1, -5.4],
+			"note": "canons du nez et munitions"
+		},
+		{
+			"id": "Masse_droide",
+			"type": "masse",
+			"masse_kg": 45.0,
+			"centre": [0.0, 0.71, 1.85],
+			"note": "droide mecanicien dans son logement"
+		},
+		{
+			"id": "Masse_moteur_central",
+			"type": "masse",
+			"masse_kg": 1500.0,
+			"centre": [0.0, 0.0, 3.6],
+			"note": "coeur du moteur principal (turbopompes, chambre)"
+		},
+		{
+			"id": "Masse_moteurs_levage",
+			"type": "masse",
+			"masse_kg": 240.0,
+			"centre": [0.0, -0.2, -3.0],
+			"note": "2 moteurs de levage"
+		},
+		{
+			"id": "Masse_pilote_et_siege",
+			"type": "masse",
+			"masse_kg": 180.0,
+			"centre": [0.0, 0.1, 0.3],
+			"note": "pilote équipé + siège éjectable"
+		},
+		{
+			"id": "Masse_reacteur_aile_bas_droit",
+			"type": "masse",
+			"masse_kg": 380.0,
+			"centre": [1.637, -0.424, 2.5],
+			"note": "réacteur d'aile",
+			"articulation": "aile_bas_droit"
+		},
+		{
+			"id": "Masse_reacteur_aile_bas_gauche",
+			"type": "masse",
+			"masse_kg": 380.0,
+			"centre": [-1.637, -0.424, 2.5],
+			"note": "réacteur d'aile",
+			"articulation": "aile_bas_gauche"
+		},
+		{
+			"id": "Masse_reacteur_aile_haut_droit",
+			"type": "masse",
+			"masse_kg": 380.0,
+			"centre": [1.637, 0.424, 2.5],
+			"note": "réacteur d'aile",
+			"articulation": "aile_haut_droit"
+		},
+		{
+			"id": "Masse_reacteur_aile_haut_gauche",
+			"type": "masse",
+			"masse_kg": 380.0,
+			"centre": [-1.637, 0.424, 2.5],
+			"note": "réacteur d'aile",
+			"articulation": "aile_haut_gauche"
+		},
+		{
+			"id": "Masse_survie",
+			"type": "masse",
+			"masse_kg": 250.0,
+			"centre": [0.0, 0.3, 1.6],
+			"note": "air, eau, refroidissement"
+		},
+		{
+			"id": "Moteur_central",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 175.4,
+			"centre": [0.0, 0.0, 3.783176],
+			"inertie_propre": [69.6094, 69.6094, 112.1771, 0.0, 0.0, 0.0],
+			"surface_m2": 4.8714
+		},
+		{
+			"id": "Moteur_levage_droit_piece",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 13.8,
+			"centre": [0.27, -0.256543, -3.0],
+			"inertie_propre": [0.2633, 0.0951, 0.2633, 0.0, 0.0, 0.0],
+			"surface_m2": 0.3846,
+			"articulation": "verin_levage_droit"
+		},
+		{
+			"id": "Moteur_levage_gauche_piece",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 13.8,
+			"centre": [-0.27, -0.256543, -3.0],
+			"inertie_propre": [0.2633, 0.0951, 0.2633, 0.0, 0.0, 0.0],
+			"surface_m2": 0.3846,
+			"articulation": "verin_levage_gauche"
+		},
+		{
+			"id": "Pedale_droite_piece",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 0.7,
+			"centre": [0.2, -0.35, -0.9],
+			"inertie_propre": [0.0045, 0.003, 0.0053, 0.0, 0.0, 0.0],
+			"surface_m2": 0.124
+		},
+		{
+			"id": "Pedale_gauche_piece",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 0.7,
+			"centre": [-0.2, -0.35, -0.9],
+			"inertie_propre": [0.0045, 0.003, 0.0053, 0.0, 0.0, 0.0],
+			"surface_m2": 0.124
+		},
+		{
+			"id": "Pied_arriere_droit",
+			"type": "structure",
+			"matiere": "acier",
+			"masse_kg": 41.7,
+			"centre": [0.494663, -0.715479, 1.461105],
+			"inertie_propre": [0.3172, 0.3464, 0.4086, -0.0418, -0.0002, -0.0058],
+			"surface_m2": 0.4607
+		},
+		{
+			"id": "Pied_arriere_gauche",
+			"type": "structure",
+			"matiere": "acier",
+			"masse_kg": 41.7,
+			"centre": [-0.494663, -0.715479, 1.461105],
+			"inertie_propre": [0.3172, 0.3464, 0.4086, 0.0418, 0.0002, -0.0058],
+			"surface_m2": 0.4607
+		},
+		{
+			"id": "Pivot_train_arriere_droit",
+			"type": "structure",
+			"matiere": "acier",
+			"masse_kg": 45.0,
+			"centre": [0.44, -0.76, 2.4],
+			"inertie_propre": [0.2393, 0.2625, 0.3178, -0.0659, 0.0, 0.0],
+			"surface_m2": 0.1164
+		},
+		{
+			"id": "Pivot_train_arriere_gauche",
+			"type": "structure",
+			"matiere": "acier",
+			"masse_kg": 45.0,
+			"centre": [-0.44, -0.76, 2.4],
+			"inertie_propre": [0.2393, 0.2625, 0.3178, 0.0659, 0.0, 0.0],
+			"surface_m2": 0.1164
+		},
+		{
+			"id": "Poignee_recommencer_piece",
+			"type": "structure",
+			"matiere": "aluminium",
+			"masse_kg": 0.1,
+			"centre": [0.0, -0.305, -0.821624],
+			"inertie_propre": [0.0, 0.0002, 0.0002, 0.0, 0.0, 0.0],
+			"surface_m2": 0.0182
+		},
+		{
+			"id": "Puits_moteur_levage_droit",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 6.6,
+			"centre": [0.27, -0.20281, -2.998899],
+			"inertie_propre": [0.1695, 0.1003, 0.1556, 0.0, 0.0, 0.0017],
+			"surface_m2": 0.4121
+		},
+		{
+			"id": "Puits_moteur_levage_gauche",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 6.6,
+			"centre": [-0.27, -0.20281, -2.998899],
+			"inertie_propre": [0.1695, 0.1003, 0.1556, 0.0, 0.0, 0.0017],
+			"surface_m2": 0.4121
+		},
+		{
+			"id": "Puits_train_arriere_droit",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 29.3,
+			"centre": [0.396242, -0.673628, 1.865],
+			"inertie_propre": [7.471, 7.8061, 1.5772, -0.3438, 0.0, 0.0],
+			"surface_m2": 1.8318
+		},
+		{
+			"id": "Puits_train_arriere_gauche",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 29.3,
+			"centre": [-0.396242, -0.673628, 1.865],
+			"inertie_propre": [7.471, 7.8061, 1.5772, 0.3438, 0.0, 0.0],
+			"surface_m2": 1.8318
+		},
+		{
+			"id": "Puits_train_avant",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 45.9,
+			"centre": [0.0, -0.02833, -3.612488],
+			"inertie_propre": [15.9227, 14.9138, 2.4675, 0.0, 0.0, 0.5948],
+			"surface_m2": 2.8861
+		},
+		{
+			"id": "RCS_integres",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 5.7,
+			"centre": [-4e-06, 0.030561, -0.340147],
+			"inertie_propre": [62.1977, 63.466, 2.6319, 0.0, 0.0, -0.0592],
+			"surface_m2": 0.1577
+		},
+		{
+			"id": "RCS_nez_bas",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 0.5,
+			"centre": [0.0, 0.21579, -5.199646],
+			"inertie_propre": [0.0005, 0.001, 0.0005, 0.0, 0.0, -0.0001],
+			"surface_m2": 0.0128
+		},
+		{
+			"id": "RCS_nez_droit",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 0.5,
+			"centre": [0.30021, 0.0, -5.200353],
+			"inertie_propre": [0.001, 0.0005, 0.0005, 0.0, -0.0001, 0.0],
+			"surface_m2": 0.0128
+		},
+		{
+			"id": "RCS_nez_gauche",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 0.5,
+			"centre": [-0.30021, 0.0, -5.200353],
+			"inertie_propre": [0.001, 0.0005, 0.0005, 0.0, 0.0001, 0.0],
+			"surface_m2": 0.0128
+		},
+		{
+			"id": "RCS_nez_haut",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 0.5,
+			"centre": [0.0, -0.227773, -5.199777],
+			"inertie_propre": [0.0005, 0.001, 0.0005, 0.0, 0.0, 0.0001],
+			"surface_m2": 0.0128
+		},
+		{
+			"id": "RCS_queue_bas",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 0.5,
+			"centre": [0.0, -0.977171, 4.000543],
+			"inertie_propre": [0.0005, 0.001, 0.0005, 0.0, 0.0, -0.0001],
+			"surface_m2": 0.0128
+		},
+		{
+			"id": "RCS_queue_droit",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 0.5,
+			"centre": [0.877171, 0.0, 4.000543],
+			"inertie_propre": [0.001, 0.0005, 0.0005, 0.0, 0.0001, 0.0],
+			"surface_m2": 0.0128
+		},
+		{
+			"id": "RCS_queue_gauche",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 0.5,
+			"centre": [-0.877171, 0.0, 4.000543],
+			"inertie_propre": [0.001, 0.0005, 0.0005, 0.0, -0.0001, 0.0],
+			"surface_m2": 0.0128
+		},
+		{
+			"id": "RCS_queue_haut",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 0.5,
+			"centre": [0.0, 0.977171, 4.000543],
+			"inertie_propre": [0.0005, 0.001, 0.0005, 0.0, 0.0, 0.0001],
+			"surface_m2": 0.0128
+		},
+		{
+			"id": "Ressort_arriere_droit",
+			"type": "structure",
+			"matiere": "acier",
+			"masse_kg": 13.9,
+			"centre": [0.44, -0.76, 1.550121],
+			"inertie_propre": [0.0692, 0.0692, 0.0611, 0.0, 0.0034, -0.004],
+			"surface_m2": 0.1766
+		},
+		{
+			"id": "Ressort_arriere_gauche",
+			"type": "structure",
+			"matiere": "acier",
+			"masse_kg": 13.9,
+			"centre": [-0.44, -0.76, 1.550121],
+			"inertie_propre": [0.0692, 0.0692, 0.0611, 0.0, -0.0034, -0.004],
+			"surface_m2": 0.1766
+		},
+		{
+			"id": "Roue_arriere_droit",
+			"type": "structure",
+			"matiere": "acier",
+			"masse_kg": 30.0,
+			"centre": [0.58, -0.7, 1.460107],
+			"inertie_propre": [0.6255, 0.3771, 0.3771, 0.0, 0.0, 0.0],
+			"surface_m2": 0.3524
+		},
+		{
+			"id": "Roue_arriere_gauche",
+			"type": "structure",
+			"matiere": "acier",
+			"masse_kg": 30.0,
+			"centre": [-0.58, -0.7, 1.460107],
+			"inertie_propre": [0.6255, 0.3771, 0.3771, 0.0, 0.0, 0.0],
+			"surface_m2": 0.3524
+		},
+		{
+			"id": "Roue_avant",
+			"type": "structure",
+			"matiere": "acier",
+			"masse_kg": 27.7,
+			"centre": [0.0, -0.05, -3.03],
+			"inertie_propre": [0.5776, 0.3482, 0.3482, 0.0, 0.0, 0.0],
+			"surface_m2": 0.3524
+		},
+		{
+			"id": "Trappe_arriere_droit",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 18.0,
+			"centre": [0.558016, -0.860875, 1.865],
+			"inertie_propre": [3.3205, 3.3931, 0.8686, -0.3638, 0.0, 0.0],
+			"surface_m2": 2.374
+		},
+		{
+			"id": "Trappe_arriere_gauche",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 18.0,
+			"centre": [-0.558016, -0.860875, 1.865],
+			"inertie_propre": [3.3205, 3.3931, 0.8686, 0.3638, 0.0, 0.0],
+			"surface_m2": 2.374
+		},
+		{
+			"id": "Trappe_avant",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 16.8,
+			"centre": [0.0, -0.383777, -3.65],
+			"inertie_propre": [4.3599, 4.4525, 0.1557, 0.0, 0.0, 0.3599],
+			"surface_m2": 1.0586
+		},
+		{
+			"id": "Trappe_levage_droit",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 1.8,
+			"centre": [0.27, -0.44375, -3.0],
+			"inertie_propre": [0.01, 0.0169, 0.0072, 0.0, 0.0, 0.0006],
+			"surface_m2": 0.1138
+		},
+		{
+			"id": "Trappe_levage_gauche",
+			"type": "structure",
+			"matiere": "aluminium_lithium",
+			"masse_kg": 1.8,
+			"centre": [-0.27, -0.44375, -3.0],
+			"inertie_propre": [0.01, 0.0169, 0.0072, 0.0, 0.0, 0.0006],
+			"surface_m2": 0.1138
+		},
+		{
+			"id": "Tuyere_segment_1",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 184.7,
+			"centre": [0.0, 0.0, 4.202512],
+			"inertie_propre": [60.9738, 60.9738, 99.0837, 0.0, 0.0, 0.0],
+			"surface_m2": 5.1298,
+			"articulation": "tuyere"
+		},
+		{
+			"id": "Tuyere_segment_2",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 163.8,
+			"centre": [0.0, 0.0, 4.481459],
+			"inertie_propre": [46.5763, 46.5763, 75.0133, 0.0, 0.0, 0.0],
+			"surface_m2": 4.5499,
+			"articulation": "tuyere"
+		},
+		{
+			"id": "Tuyere_segment_3",
+			"type": "structure",
+			"matiere": "titane",
+			"masse_kg": 147.6,
+			"centre": [0.0, 0.0, 4.76191],
+			"inertie_propre": [32.1447, 32.1447, 49.8949, 0.0, 0.0, 0.0],
+			"surface_m2": 4.0986,
+			"articulation": "tuyere"
+		},
+		{
+			"id": "Verriere",
+			"type": "structure",
+			"matiere": "verre_aluminosilicate",
+			"masse_kg": 105.0,
+			"centre": [0.0, 0.908863, -0.298741],
+			"inertie_propre": [87.6133, 94.9168, 9.6046, 0.0, 0.0, -7.2345],
+			"surface_m2": 3.5153
+		},
+		{
+			"id": "Verriere_cadre",
+			"type": "structure",
+			"matiere": "verre_aluminosilicate",
+			"masse_kg": 26.8,
+			"centre": [-1.1e-05, 0.90256, -0.306794],
+			"inertie_propre": [25.8361, 28.3331, 3.3233, -0.0001, -0.0005, -2.2468],
+			"surface_m2": 0.8957
+		},
+		{
+			"id": "moteur_haut_gauche",
+			"type": "moteur",
+			"nom": "haut gauche",
+			"point": [-1.6366128, 0.4240684, 4.0],
+			"direction": [0.0, 0.0, -1.0],
+			"poussee_n": 200000.0,
+			"role": "principal",
+			"articulation": "aile_haut_gauche"
+		},
+		{
+			"id": "moteur_haut_droit",
+			"type": "moteur",
+			"nom": "haut droit",
+			"point": [1.6366128, 0.4240684, 4.0],
+			"direction": [0.0, 0.0, -1.0],
+			"poussee_n": 200000.0,
+			"role": "principal",
+			"articulation": "aile_haut_droit"
+		},
+		{
+			"id": "moteur_bas_gauche",
+			"type": "moteur",
+			"nom": "bas gauche",
+			"point": [-1.6366128, -0.4240684, 4.0],
+			"direction": [0.0, 0.0, -1.0],
+			"poussee_n": 200000.0,
+			"role": "principal",
+			"articulation": "aile_bas_gauche"
+		},
+		{
+			"id": "moteur_bas_droit",
+			"type": "moteur",
+			"nom": "bas droit",
+			"point": [1.6366128, -0.4240684, 4.0],
+			"direction": [0.0, 0.0, -1.0],
+			"poussee_n": 200000.0,
+			"role": "principal",
+			"articulation": "aile_bas_droit"
+		},
+		{
+			"id": "moteur_central",
+			"type": "moteur",
+			"nom": "central",
+			"point": [0.0, 0.0, 5.05],
+			"direction": [0.0, 0.0, -1.0],
+			"poussee_n": 200000.0,
+			"role": "principal",
+			"articulation": "tuyere"
+		},
+		{
+			"id": "moteur_levage_gauche",
+			"type": "moteur",
+			"nom": "levage gauche",
+			"point": [-0.27, -0.4, -3.0],
+			"direction": [0.0, 1.0, 0.0],
+			"poussee_n": 37500.0,
+			"role": "levage",
+			"articulation": "verin_levage_gauche",
+			"seulement_sorti": true
+		},
+		{
+			"id": "moteur_levage_droit",
+			"type": "moteur",
+			"nom": "levage droit",
+			"point": [0.27, -0.4, -3.0],
+			"direction": [0.0, 1.0, 0.0],
+			"poussee_n": 37500.0,
+			"role": "levage",
+			"articulation": "verin_levage_droit",
+			"seulement_sorti": true
+		},
+		{
+			"id": "rcs_nez_bas",
+			"type": "propulseur",
+			"nom": "nez bas",
+			"point": [0.0, -0.26, -5.2],
+			"direction": [0.0, 1.0, 0.0],
+			"poussee_n": 6000.0
+		},
+		{
+			"id": "rcs_queue_haut",
+			"type": "propulseur",
+			"nom": "queue haut",
+			"point": [0.0, 1.01, 4.0],
+			"direction": [0.0, -1.0, 0.0],
+			"poussee_n": 6000.0
+		},
+		{
+			"id": "rcs_nez_haut",
+			"type": "propulseur",
+			"nom": "nez haut",
+			"point": [0.0, 0.2, -5.2],
+			"direction": [0.0, -1.0, 0.0],
+			"poussee_n": 6000.0
+		},
+		{
+			"id": "rcs_queue_bas",
+			"type": "propulseur",
+			"nom": "queue bas",
+			"point": [0.0, -1.01, 4.0],
+			"direction": [0.0, 1.0, 0.0],
+			"poussee_n": 6000.0
+		},
+		{
+			"id": "rcs_nez_droit",
+			"type": "propulseur",
+			"nom": "nez droit",
+			"point": [0.29, 0.0, -5.2],
+			"direction": [-1.0, 0.0, 0.0],
+			"poussee_n": 6000.0
+		},
+		{
+			"id": "rcs_queue_gauche",
+			"type": "propulseur",
+			"nom": "queue gauche",
+			"point": [-0.91, 0.0, 4.0],
+			"direction": [1.0, 0.0, 0.0],
+			"poussee_n": 6000.0
+		},
+		{
+			"id": "rcs_nez_gauche",
+			"type": "propulseur",
+			"nom": "nez gauche",
+			"point": [-0.29, 0.0, -5.2],
+			"direction": [1.0, 0.0, 0.0],
+			"poussee_n": 6000.0
+		},
+		{
+			"id": "rcs_queue_droit",
+			"type": "propulseur",
+			"nom": "queue droit",
+			"point": [0.91, 0.0, 4.0],
+			"direction": [-1.0, 0.0, 0.0],
+			"poussee_n": 6000.0
+		},
+		{
+			"id": "rcs_bout_aile_haut_droit",
+			"type": "propulseur",
+			"nom": "bout aile haut droit",
+			"point": [5.4608053, 2.247815, 1.475],
+			"direction": [-0.3786325, 0.9255471, 0.0],
+			"poussee_n": 6000.0,
+			"articulation": "aile_haut_droit"
+		},
+		{
+			"id": "rcs_bout_aile_bas_gauche",
+			"type": "propulseur",
+			"nom": "bout aile bas gauche",
+			"point": [-5.4608053, -2.247815, 1.475],
+			"direction": [0.3786325, -0.9255471, 0.0],
+			"poussee_n": 6000.0,
+			"articulation": "aile_bas_gauche"
+		},
+		{
+			"id": "rcs_bout_aile_haut_gauche",
+			"type": "propulseur",
+			"nom": "bout aile haut gauche",
+			"point": [-5.4608053, 2.247815, 1.475],
+			"direction": [0.3786325, 0.9255471, 0.0],
+			"poussee_n": 6000.0,
+			"articulation": "aile_haut_gauche"
+		},
+		{
+			"id": "rcs_bout_aile_bas_droit",
+			"type": "propulseur",
+			"nom": "bout aile bas droit",
+			"point": [5.4608053, -2.247815, 1.475],
+			"direction": [-0.3786325, -0.9255471, 0.0],
+			"poussee_n": 6000.0,
+			"articulation": "aile_bas_droit"
+		},
+		{
+			"id": "buse_freinage_gauche",
+			"type": "propulseur",
+			"nom": "freinage gauche",
+			"point": [-0.1, 0.0, -6.0],
+			"direction": [0.0, 0.0, 1.0],
+			"poussee_n": 6000.0,
+			"encastre": true
+		},
+		{
+			"id": "buse_freinage_droit",
+			"type": "propulseur",
+			"nom": "freinage droit",
+			"point": [0.1, 0.0, -6.0],
+			"direction": [0.0, 0.0, 1.0],
+			"poussee_n": 6000.0,
+			"encastre": true
+		},
+		{
+			"id": "buse_poussee_fine_gauche",
+			"type": "propulseur",
+			"nom": "poussee fine gauche",
+			"point": [-0.7, 0.0, 4.3],
+			"direction": [0.0, 0.0, -1.0],
+			"poussee_n": 6000.0,
+			"encastre": true
+		},
+		{
+			"id": "buse_poussee_fine_droit",
+			"type": "propulseur",
+			"nom": "poussee fine droit",
+			"point": [0.7, 0.0, 4.3],
+			"direction": [0.0, 0.0, -1.0],
+			"poussee_n": 6000.0,
+			"encastre": true
+		},
+		{
+			"id": "buse_lateral_gauche",
+			"type": "propulseur",
+			"nom": "lateral gauche",
+			"point": [-0.75, 0.0, 0.0],
+			"direction": [0.997, 0.0, 0.083],
+			"poussee_n": 6000.0,
+			"encastre": true
+		},
+		{
+			"id": "buse_lateral_droit",
+			"type": "propulseur",
+			"nom": "lateral droit",
+			"point": [0.75, 0.0, 0.0],
+			"direction": [-0.997, 0.0, 0.083],
+			"poussee_n": 6000.0,
+			"encastre": true
+		},
+		{
+			"id": "buse_montee_gauche",
+			"type": "propulseur",
+			"nom": "montee gauche",
+			"point": [-0.5622, -0.4635, 0.0],
+			"direction": [0.847, 0.529, 0.052],
+			"poussee_n": 6000.0,
+			"encastre": true
+		},
+		{
+			"id": "buse_montee_droit",
+			"type": "propulseur",
+			"nom": "montee droit",
+			"point": [0.5622, -0.4635, 0.0],
+			"direction": [-0.833, 0.521, 0.187],
+			"poussee_n": 6000.0,
+			"encastre": true
+		},
+		{
+			"id": "buse_descente_gauche",
+			"type": "propulseur",
+			"nom": "descente gauche",
+			"point": [-0.5667, 0.6163, 0.0],
+			"direction": [0.842, -0.526, 0.119],
+			"poussee_n": 6000.0,
+			"encastre": true
+		},
+		{
+			"id": "buse_descente_droit",
+			"type": "propulseur",
+			"nom": "descente droit",
+			"point": [0.5667, 0.6163, 0.0],
+			"direction": [-0.84, -0.526, 0.135],
+			"poussee_n": 6000.0,
+			"encastre": true
+		},
+		{
+			"id": "roue_avant",
+			"type": "roue",
+			"nom": "roue avant",
+			"point": [0.0, -1.6, -4.4],
+			"course_m": 0.15,
+			"raideur_n_m": 250000.0,
+			"amorti_n_s_m": 30000.0,
+			"rayon_m": 0.18,
+			"orientable_deg": 35.0,
+			"vitesse_braquage_deg_s": 60.0,
+			"freinee": true,
+			"choc_max_m_s": 2.0
+		},
+		{
+			"id": "roue_arriere_gauche",
+			"type": "roue",
+			"nom": "roue arrière gauche",
+			"point": [-1.184, -1.6, 2.4],
+			"course_m": 0.12,
+			"raideur_n_m": 700000.0,
+			"amorti_n_s_m": 80000.0,
+			"rayon_m": 0.18,
+			"freinee": true,
+			"choc_max_m_s": 2.0
+		},
+		{
+			"id": "roue_arriere_droit",
+			"type": "roue",
+			"nom": "roue arrière droit",
+			"point": [1.184, -1.6, 2.4],
+			"course_m": 0.12,
+			"raideur_n_m": 700000.0,
+			"amorti_n_s_m": 80000.0,
+			"rayon_m": 0.18,
+			"freinee": true,
+			"choc_max_m_s": 2.0
+		},
+		{
+			"id": "coque_ventre_avant_gauche",
+			"type": "contact_coque",
+			"point": [-0.9, -1.0, -2.5]
+		},
+		{
+			"id": "coque_ventre_avant_droit",
+			"type": "contact_coque",
+			"point": [0.9, -1.0, -2.5]
+		},
+		{
+			"id": "coque_ventre_arriere_gauche",
+			"type": "contact_coque",
+			"point": [-0.9, -1.0, 2.5]
+		},
+		{
+			"id": "coque_ventre_arriere_droit",
+			"type": "contact_coque",
+			"point": [0.9, -1.0, 2.5]
+		},
+		{
+			"id": "coque_nez",
+			"type": "contact_coque",
+			"point": [0.0, -0.2, -5.6]
+		},
+		{
+			"id": "coque_queue",
+			"type": "contact_coque",
+			"point": [0.0, 0.0, 5.4]
+		},
+		{
+			"id": "air_aile_haut_gauche_1",
+			"type": "surface_air",
+			"point": [-1.5255471, 0.3786325, 1.68],
+			"normale": [0.3786325, 0.9255471, 0.0],
+			"surface_m2": 6.2,
+			"allongement": 4.8,
+			"corde_m": 3.1,
+			"biplan": true,
+			"groupe": "aile_haut_gauche",
+			"articulation": "aile_haut_gauche"
+		},
+		{
+			"id": "air_aile_haut_gauche_2",
+			"type": "surface_air",
+			"point": [-3.2378093, 1.0791025, 1.83],
+			"normale": [0.3786325, 0.9255471, 0.0],
+			"surface_m2": 3.57,
+			"allongement": 4.8,
+			"corde_m": 2.1,
+			"biplan": true,
+			"groupe": "aile_haut_gauche",
+			"articulation": "aile_haut_gauche"
+		},
+		{
+			"id": "air_aile_haut_gauche_3",
+			"type": "surface_air",
+			"point": [-4.8112394, 1.7227777, 1.73],
+			"normale": [0.3786325, 0.9255471, 0.0],
+			"surface_m2": 3.23,
+			"allongement": 4.8,
+			"corde_m": 1.9,
+			"biplan": true,
+			"groupe": "aile_haut_gauche",
+			"articulation": "aile_haut_gauche"
+		},
+		{
+			"id": "air_aile_haut_droit_1",
+			"type": "surface_air",
+			"point": [1.5255471, 0.3786325, 1.68],
+			"normale": [-0.3786325, 0.9255471, 0.0],
+			"surface_m2": 6.2,
+			"allongement": 4.8,
+			"corde_m": 3.1,
+			"biplan": true,
+			"groupe": "aile_haut_droit",
+			"articulation": "aile_haut_droit"
+		},
+		{
+			"id": "air_aile_haut_droit_2",
+			"type": "surface_air",
+			"point": [3.2378093, 1.0791025, 1.83],
+			"normale": [-0.3786325, 0.9255471, 0.0],
+			"surface_m2": 3.57,
+			"allongement": 4.8,
+			"corde_m": 2.1,
+			"biplan": true,
+			"groupe": "aile_haut_droit",
+			"articulation": "aile_haut_droit"
+		},
+		{
+			"id": "air_aile_haut_droit_3",
+			"type": "surface_air",
+			"point": [4.8112394, 1.7227777, 1.73],
+			"normale": [-0.3786325, 0.9255471, 0.0],
+			"surface_m2": 3.23,
+			"allongement": 4.8,
+			"corde_m": 1.9,
+			"biplan": true,
+			"groupe": "aile_haut_droit",
+			"articulation": "aile_haut_droit"
+		},
+		{
+			"id": "air_aile_bas_gauche_1",
+			"type": "surface_air",
+			"point": [-1.5255471, -0.3786325, 1.68],
+			"normale": [0.3786325, -0.9255471, 0.0],
+			"surface_m2": 6.2,
+			"allongement": 4.8,
+			"corde_m": 3.1,
+			"biplan": true,
+			"groupe": "aile_bas_gauche",
+			"articulation": "aile_bas_gauche"
+		},
+		{
+			"id": "air_aile_bas_gauche_2",
+			"type": "surface_air",
+			"point": [-3.2378093, -1.0791025, 1.83],
+			"normale": [0.3786325, -0.9255471, 0.0],
+			"surface_m2": 3.57,
+			"allongement": 4.8,
+			"corde_m": 2.1,
+			"biplan": true,
+			"groupe": "aile_bas_gauche",
+			"articulation": "aile_bas_gauche"
+		},
+		{
+			"id": "air_aile_bas_gauche_3",
+			"type": "surface_air",
+			"point": [-4.8112394, -1.7227777, 1.73],
+			"normale": [0.3786325, -0.9255471, 0.0],
+			"surface_m2": 3.23,
+			"allongement": 4.8,
+			"corde_m": 1.9,
+			"biplan": true,
+			"groupe": "aile_bas_gauche",
+			"articulation": "aile_bas_gauche"
+		},
+		{
+			"id": "air_aile_bas_droit_1",
+			"type": "surface_air",
+			"point": [1.5255471, -0.3786325, 1.68],
+			"normale": [-0.3786325, -0.9255471, 0.0],
+			"surface_m2": 6.2,
+			"allongement": 4.8,
+			"corde_m": 3.1,
+			"biplan": true,
+			"groupe": "aile_bas_droit",
+			"articulation": "aile_bas_droit"
+		},
+		{
+			"id": "air_aile_bas_droit_2",
+			"type": "surface_air",
+			"point": [3.2378093, -1.0791025, 1.83],
+			"normale": [-0.3786325, -0.9255471, 0.0],
+			"surface_m2": 3.57,
+			"allongement": 4.8,
+			"corde_m": 2.1,
+			"biplan": true,
+			"groupe": "aile_bas_droit",
+			"articulation": "aile_bas_droit"
+		},
+		{
+			"id": "air_aile_bas_droit_3",
+			"type": "surface_air",
+			"point": [4.8112394, -1.7227777, 1.73],
+			"normale": [-0.3786325, -0.9255471, 0.0],
+			"surface_m2": 3.23,
+			"allongement": 4.8,
+			"corde_m": 1.9,
+			"biplan": true,
+			"groupe": "aile_bas_droit",
+			"articulation": "aile_bas_droit"
+		},
+		{
+			"id": "air_derive_gauche",
+			"type": "surface_air",
+			"point": [-0.62, 1.2, 3.0],
+			"normale": [1.0, 0.0, 0.0],
+			"surface_m2": 1.2,
+			"allongement": 1.4,
+			"groupe": "derive_gauche"
+		},
+		{
+			"id": "air_derive_droite",
+			"type": "surface_air",
+			"point": [0.62, 1.2, 3.0],
+			"normale": [1.0, 0.0, 0.0],
+			"surface_m2": 1.2,
+			"allongement": 1.4,
+			"groupe": "derive_droite"
+		}
+	]
+}

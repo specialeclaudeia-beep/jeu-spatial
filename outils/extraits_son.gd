@@ -286,7 +286,7 @@ func _tout() -> void:
 		root.add_child(pil)
 		var s = MoteurAudio.new()
 		root.add_child(s)
-		s.installer(v, p, null, Jeu.OEIL_PILOTE_DEFAUT - VaisseauPhysique.CENTRE_GRAVITE)
+		s.installer(v, p, null, Jeu.OEIL_PILOTE_DEFAUT - v.centre_gravite)
 		rec.set_recording_active(true)
 		await create_timer(float(e[1])).timeout
 		rec.set_recording_active(false)

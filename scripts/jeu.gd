@@ -449,7 +449,7 @@ func _creer_pilote_et_cockpit() -> void:
 	# le modèle 3D est exporté de Blender dans le même repère que la physique (-Z avant, +Y haut) ;
 	# il est décalé pour que son centre de gravité soit au centre de la scène (le vaisseau tourne autour)
 	var corps := Node3D.new()
-	corps.position = -VaisseauPhysique.CENTRE_GRAVITE
+	corps.position = -vaisseau.centre_gravite
 	pilote.add_child(corps)
 	exterieur = (load(MODELE_EXTERIEUR) as PackedScene).instantiate()
 	corps.add_child(exterieur)
@@ -460,7 +460,7 @@ func _creer_pilote_et_cockpit() -> void:
 	if logement != null and ResourceLoader.exists(MODELE_DROIDE):
 		modele_droide = (load(MODELE_DROIDE) as PackedScene).instantiate()
 		logement.add_child(modele_droide)
-	for nom in VaisseauPhysique.AILES:
+	for nom in vaisseau.ailes_def:
 		var n := exterieur.find_child("Charniere_" + nom, true, false) as Node3D
 		if n != null:
 			charnieres[nom] = n
@@ -505,7 +505,7 @@ func _creer_pilote_et_cockpit() -> void:
 	var oeil := cockpit.find_child("Oeil_pilote", true, false) as Node3D
 	if oeil != null:
 		oeil_pilote = oeil.position
-	oeil_pilote -= VaisseauPhysique.CENTRE_GRAVITE   # la caméra est placée par rapport au centre de gravité
+	oeil_pilote -= vaisseau.centre_gravite   # la caméra est placée par rapport au centre de gravité
 	for m in exterieur.find_children("*", "GeometryInstance3D", true, false):
 		maillages_exterieurs.append(m)
 	for n in exterieur.find_children("*", "Node3D", true, false):
@@ -1130,7 +1130,7 @@ var _vent_chaleur := Vector3.ZERO
 func _ligne_air() -> String:
 	var v = vaisseau
 	var t_nez := "COQUE (nez)   %.0f °C" % (v.temperature_nez - 273.15)
-	if v.temperature_nez > VaisseauPhysique.T_LIMITE_COQUE:
+	if v.temperature_nez > v.t_limite_coque:
 		t_nez += "  TROP CHAUD (une vraie coque fondrait)"
 	if v.densite_air <= 0.0:
 		return "AIR           aucun (vide)      " + t_nez

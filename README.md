@@ -77,8 +77,11 @@ ou couper la poussée, le désactive.
   150 m, x1 sous 30 m) ; l'écran affiche « TEMPS x1000 (pilote auto : x100) ».
 
 ## Ce qui est simulé
-- Vaisseau de 8,5 t (8 534 kg, calculés dans Blender à partir de la matière de chaque pièce), corps rigide à
-  6 degrés de liberté (masse, inertie, couples).
+- Vaisseau de 8,5 t (8 535 kg), corps rigide à 6 degrés de liberté (masse, inertie complète 3×3, couples).
+  Depuis l'atelier (étape 1), le vaisseau est construit à partir de son **plan**
+  (`vaisseaux/chasseur_v27.plan.json`) : la liste de ses pièces, chacune avec sa place, sa matière et sa
+  masse. La masse, le centre de gravité et l'inertie sont recalculés à partir des pièces ; le rôle de
+  chaque petit propulseur (tourner sur quel axe, ou glisser) est trouvé par le calcul de son couple.
 - 5 moteurs arrière de 200 kN (chacun seul pousse 2,4 fois le poids ; ensemble, environ 12 g d'accélération),
   chacun à sa vraie position. 12 petits propulseurs d'orientation de 6 kN (le roulis n'est possible
   qu'avec eux) et 10 buses de 6 kN encastrées dans la coque (freiner, glisser, monter, descendre).
@@ -332,7 +335,12 @@ façon Star Wars (jet de 3 000 m/s), qui suit de vraies lois là où elles exist
   chauffe, vol vertical).
 
 ## Organisation
-- `scripts/physique/vaisseau_physique.gd` : toute la physique (indépendante de l'affichage).
+- `scripts/physique/vaisseau_physique.gd` : toute la physique (indépendante de l'affichage). Elle ne connaît
+  que des lois : le vaisseau lui-même vient de son plan.
+- `scripts/atelier/` : le plan d'un vaisseau (`plan.gd` : lecture, vérification, sous-ensembles, masse,
+  centre de gravité, inertie) et le catalogue des matières et des types de pièces (`catalogue.gd`).
+  `vaisseaux/` : les plans (celui du chasseur de départ). `outils/plan/` : comment refaire le plan à
+  partir du modèle Blender. `scripts/tests_atelier.gd` : ses tests (`res://scenes/tests_atelier.tscn`).
 - `scripts/physique/atmosphere.gd` et `aerodynamique.gd` : l'air de la planète et ce qu'il fait au vaisseau.
 - `scripts/physique/reperes.gd` : les systèmes d'étoile, leurs repères et les transformations de Lorentz entre eux.
 - `scripts/physique/lentille.gd` : Einstein B, la lumière courbée par un trou noir (tables pour le ciel et les étoiles).
