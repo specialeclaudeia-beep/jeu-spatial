@@ -306,6 +306,30 @@ Tout est dans `scripts/son/air_son.gd` ; la physique n'est que lue (nouvelles «
 - Réglages à valider à l'écoute : chemin par la structure des ailes (−25 dB), double paroi sous le ventre (−15 dB).
 - Extraits à écouter : 17 à 21 (train qui sort, transsonique, décrochage puis aile gauche, Mach 2, rentrée).
 
+## Son (phase 6 : l'intérieur des moteurs ioniques)
+Un **modèle inventé, pour le son seulement** (`scripts/son/ionique_son.gd`) : la physique ne connaît que la poussée
+de chaque moteur ; il n'y a ni carburant ni pièce en plus. On donne au vaisseau un petit « intérieur » de moteur à plasma
+façon Star Wars (jet de 3 000 m/s), qui suit de vraies lois là où elles existent :
+- **Le réacteur qui bourdonne** (derrière le pilote) : 110 Hz et ses harmoniques (le fer des transformateurs s'allonge
+  deux fois par période). Un peu au repos, plus fort quand les moteurs tirent (2,3 GW pour les cinq à fond : ½ F v
+  ÷ 65 %), et un peu plus grave (−3 %) ; il creuse un instant quand on remet les gaz, remonte quand on coupe.
+- **Les bobines qui sifflent** : pour pousser plus fort, il faut un champ plus fort (B ∝ √poussée) ; l'onduleur suit le
+  courant, les bobines vibrent au double : un sifflement qui monte avec √poussée (2,4 kHz à fond, levage plus aigu).
+  Chaque moteur a le sien, réglé à quelques millièmes près : ils battent doucement entre eux. Le champ part AVANT la
+  poussée (0,12 s) ; à la coupure, le courant s'écoule en 0,9 s : le sifflement redescend en glissant.
+- **La chambre à plasma qui gronde** : le gaz s'ionise par vagues (« respiration » des propulseurs de Hall,
+  √(v_gaz × v_ions) / 2πL ≈ 190 Hz). Les parois chauffent en quelques secondes : le grondement monte lentement (×1,4)
+  et redescend quand le moteur refroidit. Le grondement large des moteurs (phase 1) suit la même hauteur.
+- **Allumage détaillé** : « clac » du contacteur (il rebondit), sifflement qui part du grave, puis « whoomp » du plasma
+  avec ses étincelles et sa bouffée de gaz ~40 ms après ; à la coupure, le contacteur se rouvre quand le champ est
+  retombé (avec un petit arc).
+- Chaque son garde son côté (moteur d'aile gauche à gauche, réacteur au milieu derrière) : la partie C++ donne
+  maintenant un côté à chacun de ses 24 sons purs (`SyntheSon.regler_raies`). Un son pur qui tombe sur une résonance
+  d'un panneau du cockpit sonne plus fort (`Resonances.reponse`).
+- Le modèle avance au rythme de la physique (rien en pause, ×10 en temps accéléré). Niveaux réglés « à l'oreille ».
+- Extraits à écouter : 22 à 26 (allumage puis coupure, paliers de poussée, aile gauche puis droite, chambre qui
+  chauffe, vol vertical).
+
 ## Organisation
 - `scripts/physique/vaisseau_physique.gd` : toute la physique (indépendante de l'affichage).
 - `scripts/physique/atmosphere.gd` et `aerodynamique.gd` : l'air de la planète et ce qu'il fait au vaisseau.

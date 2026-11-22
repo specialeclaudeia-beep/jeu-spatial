@@ -21,6 +21,13 @@ extends Node
 ## 10 octaves : on lui donne, bande par bande, le spectre calculé par la physique (egaliseur.gd calcule
 ## exactement ce qui en sort). Les jets n'en ont pas besoin : la forme de leur bruit ne change pas.
 ##
+## Phase 6 : l'intérieur des moteurs ioniques (ionique_son.gd, modèle inventé pour le son seulement). Le réacteur
+## bourdonne (110 Hz et ses harmoniques, plus fort et un peu plus grave quand il est chargé), les bobines de chaque
+## moteur sifflent (le sifflement monte avec √poussée, part avant la poussée, redescend en glissant après la coupure),
+## la chambre à plasma gronde (vagues d'ionisation vers 190 Hz, plus aiguës quand les parois chauffent). Les contacteurs
+## claquent. Les sons purs (bobines, réacteur) sont des raies de la voix « structure », chacune de son côté
+## (SyntheSon.regler_raies) ; le grondement de la chambre a le côté des moteurs.
+##
 ## Phase 2 : les sons continus sont fabriqués EN DIRECT par la partie C++ (classe SyntheSon,
 ## labo-lumiere/cpp/src/synthe_son.cpp), dans le fil audio de Godot. Deux « voix » :
 ##  - structure (bus Structure) : grondement des moteurs + souffle des petits propulseurs, qui arrivent par les
@@ -71,6 +78,7 @@ const TensionSon = preload("res://scripts/son/tension_son.gd")
 const PoussiereSon = preload("res://scripts/son/poussiere_son.gd")
 const CoteSon = preload("res://scripts/son/cote_son.gd")
 const AirSon = preload("res://scripts/son/air_son.gd")
+const IoniqueSon = preload("res://scripts/son/ionique_son.gd")
 
 const CATALOGUE := "res://sons/sons.json"
 const COUCHES_MAX := 8
@@ -91,7 +99,8 @@ const RELACHE := 0.3             # s : … et revient doucement
 const RELACHE_COUCHE := 0.06     # s : une couche qui baisse (jet de gaz coupé) s'éteint en ~60 ms
 ## Phase 2 : les voix fabriquées en direct, et les couches qu'elles regroupent (bus, graine du hasard).
 const VOIX_DIRECTES := {
-	"structure": {"bus": "Structure", "couches": ["structure", "rcs", "roulage", "verins", "tension", "tremblement"], "graine": 21},
+	"structure": {"bus": "Structure", "couches": ["structure", "rcs", "roulage", "verins", "tension", "tremblement",
+		"plasma", "bobines", "reacteur"], "graine": 21},
 	"air": {"bus": "Exterieur", "couches": ["souffle", "jet", "jet_rcs", "poussiere", "sifflement", "cavites", "choc_verriere"],
 		"graine": 22, "instabilite": 0.012, "instabilite_temps": 0.15},
 	"sol": {"bus": "Structure", "couches": ["derapage", "frein", "raclage"], "graine": 23, "instabilite": 0.03, "instabilite_temps": 0.02},
@@ -102,11 +111,15 @@ const COUCHES_SOL := ["roulage", "verins", "derapage", "frein", "raclage"]
 const COUCHES_PHASE4 := ["tension", "poussiere"]
 ## Couches de la phase 5 (l'air en détail).
 const COUCHES_PHASE5 := ["sifflement", "cavites", "tremblement", "choc_verriere"]
+## Couches de la phase 6 (l'intérieur des moteurs ioniques).
+const COUCHES_PHASE6 := ["plasma", "bobines", "reacteur"]
+const RAIES_VOIX := 24           # sons purs de chaque voix C++ (SyntheSon.RAIES)
 ## Priorité de chaque famille de sons brefs.
 const PRIORITE_CHOC := {"pneu_toucher": 4, "coque_choc": 4, "train_butee": 4, "amortisseur_detente": 4, "pneu_crissement": 4,
 	"gravier": 1, "frein_serrage": 3, "verin_depart": 3, "verin_arret": 3, "verrouillage": 3,
 	"craquement_composite": 1, "craquement_metal": 1, "craquement_verre": 1, "tic_thermique": 1,
-	"relachement_composite": 2, "relachement_metal": 2, "relachement_verre": 2, "poussiere_verre": 2, "poussiere_coque": 1}
+	"relachement_composite": 2, "relachement_metal": 2, "relachement_verre": 2, "poussiere_verre": 2, "poussiere_coque": 1,
+	"contacteur_fermeture": 3, "contacteur_ouverture": 3}
 const BOUCLE_DE := {"structure": "structure", "rcs": "rcs", "jet": "jet_moteur", "jet_rcs": "jet_rcs", "souffle": "souffle"}
 const LISSAGE_DIRECT := 0.01     # s : les cibles changent 60 fois par seconde, le C++ les rejoint en ~10 ms
 const OCTAVE_DE := [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9]
@@ -127,6 +140,8 @@ var sol := SolSon.new()
 var tension := TensionSon.new()
 var poussiere := PoussiereSon.new()
 var air := AirSon.new()
+var ionique := IoniqueSon.new()
+var _amorcages: Array = []             # allumages qui attendent le champ des bobines : [demande, n° du moteur, heure limite]
 var ecoute: AudioListener3D = null
 var actif := false
 
@@ -296,6 +311,9 @@ func _preparer_voix_directes(catalogue: Dictionary) -> void:
 			flux.instabilite_temps = float(d["instabilite_temps"])
 		if nv == "structure":
 			flux.regler_modes(resonances.frequences, resonances.pertes)
+			if flux.has_method("lier_raies"):
+				flux.lier_raies(IoniqueSon.liens())   # les harmoniques tremblent avec leur fondamentale (phase 6)
+			ionique.resonances = resonances
 		# les filtres sont calculés une fois ici (quelques ms), jamais pendant le jeu
 		flux.instantiate_playback().start(0.0)
 		var l := AudioStreamPlayer.new()
@@ -323,6 +341,9 @@ func _preparer_voix_directes(catalogue: Dictionary) -> void:
 			elif nom in COUCHES_PHASE5:
 				parts = SolSon.octaves(_forme(nom))
 				priorite = AIR
+			elif nom in COUCHES_PHASE6:
+				parts = SolSon.octaves(_forme(nom))
+				priorite = AMBIANCE if nom == "reacteur" else MOTEUR
 			else:
 				parts = SolSon.octaves(sol.formes.get(nom, SolSon.forme_roulage(10.0)))
 			couches[nom] = {"lecteur": l, "ref_dbfs": 0.0, "parts": parts,
@@ -352,10 +373,10 @@ func _forme(nom: String) -> PackedFloat64Array:
 	var source := PackedFloat64Array()
 	match nom:
 		"structure":
-			# le grondement « monte en régime » avec la poussée (invention pour le son, à revoir en phase 6) :
-			# toutes ses fréquences × p, comme la hauteur de la boucle de la phase 1 ; les résonances, elles,
-			# restent celles des panneaux
-			var p := 0.9 + 0.25 * sqrt(clampf(moteurs.regime, 0.0, 1.5))
+			# le grondement « monte en régime » (phase 6) : il suit la respiration de la chambre à plasma, plus
+			# aiguë quand les parois ont chauffé (ionique_son.gd) ; toutes ses fréquences × p ; les résonances,
+			# elles, restent celles des panneaux
+			var p := ionique.facteur_regime
 			if absf(p - _regime_forme) > 0.003 or not _formes.has("structure"):
 				_formes["structure"] = _forme_fixe("structure", p)
 				_regime_forme = p
@@ -374,6 +395,8 @@ func _forme(nom: String) -> PackedFloat64Array:
 			return poussiere.forme
 		"sifflement", "cavites", "tremblement", "choc_verriere":
 			return air.formes[nom]
+		"plasma", "bobines", "reacteur":
+			return ionique.formes[nom]
 		_:
 			if sol.formes.has(nom):
 				return sol.formes[nom]
@@ -404,7 +427,18 @@ func _cote(nom: String) -> PackedFloat64Array:
 			return tension.cote
 		"tremblement":
 			return air.cote_tremblement
+		"plasma":
+			return moteurs.cote_structure   # même poids que le grondement de chaque moteur (∝ force², même chemin)
 	return PackedFloat64Array()
+
+
+## Sons purs d'une couche : [[n° de raie, Hz, part de l'énergie de la couche (, part à gauche)]].
+func _raies_de(nom: String) -> Array:
+	if sol.raies.has(nom):
+		return sol.raies[nom]
+	if air.raies.has(nom):
+		return air.raies[nom]
+	return ionique.raies.get(nom, [])
 
 
 ## Battement du grondement : énergie × (1 + 0,18 s(t))² / (1 + 0,18²), s = 6 ondes lentes de 2 à 10 Hz
@@ -429,8 +463,19 @@ func _envoyer_voix() -> void:
 		var d30: PackedFloat64Array = vd["ecarts"]   # énergie à gauche en plus de la moitié (couches de côté)
 		var de_cote := false
 		var total := 0.0
-		var e_raies := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-		var f_raies := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+		if not vd.has("e_raies"):
+			for cle in ["e_raies", "f_raies", "g_raies"]:
+				var a := PackedFloat32Array()
+				a.resize(RAIES_VOIX)
+				vd[cle] = a
+		var e_raies: PackedFloat32Array = vd["e_raies"]
+		var f_raies: PackedFloat32Array = vd["f_raies"]
+		var g_raies: PackedFloat32Array = vd["g_raies"]
+		var utilisees := false
+		if vd.get("raies_utilisees", false):
+			e_raies.fill(0.0)
+			f_raies.fill(0.0)
+			g_raies.fill(0.5)
 		for nom in vd["couches"]:
 			var en: float = couches[nom]["energie"]
 			if en <= 0.0:
@@ -439,15 +484,24 @@ func _envoyer_voix() -> void:
 				en *= _facteur_battement(capteurs.temps)
 			elif nom == "tremblement":
 				en *= air.facteur_tremblement   # le choc qui va et vient (phase 5)
+			elif nom == "plasma":
+				en *= ionique.facteur_respiration   # l'ionisation se fait par vagues irrégulières (phase 6)
 			var forme := _forme(nom)
 			if forme.size() != 30:
 				continue
-			# sons purs de la couche (sifflement de la pompe, pneu qui crisse) : leur part de l'énergie
+			# sons purs de la couche (sifflement de la pompe, pneu qui crisse, bobines) : leur part de l'énergie
 			var reste := 1.0
-			for r in sol.raies.get(nom, air.raies.get(nom, [])):
-				e_raies[int(r[0])] += en * float(r[2])
-				f_raies[int(r[0])] = float(r[1])
+			for r in _raies_de(nom):
+				var n := int(r[0])
+				if n < 0 or n >= RAIES_VOIX:
+					continue
+				e_raies[n] += en * float(r[2])
+				f_raies[n] = float(r[1])
+				utilisees = utilisees or en * float(r[2]) > 0.0
+				if r.size() > 3:
+					g_raies[n] = float(r[3])   # phase 6 : chaque son pur a son côté
 				reste -= float(r[2])
+			reste = maxf(reste, 0.0)
 			var cote := _cote(nom)
 			if cote.is_empty():
 				for j in 30:
@@ -463,10 +517,13 @@ func _envoyer_voix() -> void:
 					d30[j] += e * (cote[b] - 0.5)
 			total += en
 		var flux = vd["flux"]
-		for r in 8:
-			if e_raies[r] > 0.0 or vd.get("raies_utilisees", false):
-				flux.regler_raie(r, f_raies[r] if f_raies[r] > 0.0 else 1000.0, e_raies[r])
-		vd["raies_utilisees"] = e_raies.max() > 0.0
+		if utilisees or vd.get("raies_utilisees", false):
+			if flux.has_method("regler_raies"):
+				flux.regler_raies(f_raies, e_raies, g_raies)   # les 24 sons purs en un appel
+			else:
+				for r in 8:
+					flux.regler_raie(r, f_raies[r] if f_raies[r] > 0.0 else 1000.0, e_raies[r])
+		vd["raies_utilisees"] = utilisees
 		if (de_cote or vd.get("de_cote", false)) and flux.has_method("regler_gauche"):
 			# un côté n'est renvoyé que s'il a bougé d'au moins 1 % (0,2 dB) : entre deux, la partie C++ garde le sien
 			# et n'a pas de rampe à suivre (boucle plus légère)
@@ -522,8 +579,19 @@ func _envoyer_banc() -> void:
 			em.resize(resonances.frequences.size())
 			em.fill(0.01)
 			vd["flux"].regler_energie_modes(em)
-		for r in 2:
-			vd["flux"].regler_raie(r, 400.0 * (r + 1), 0.01)
+		if vd["flux"].has_method("regler_raies"):
+			# les 24 sons purs, chacun de son côté (le cas le plus cher)
+			var f := PackedFloat32Array()
+			var e := PackedFloat32Array()
+			var g := PackedFloat32Array()
+			for r in RAIES_VOIX:
+				f.append(150.0 * (r + 1))
+				e.append(0.01 / RAIES_VOIX)
+				g.append(0.3 if r % 2 == 0 else 0.7)
+			vd["flux"].regler_raies(f, e, g)
+		else:
+			for r in 2:
+				vd["flux"].regler_raie(r, 400.0 * (r + 1), 0.01)
 		var l := vd["lecteur"] as AudioStreamPlayer
 		l.volume_db = -80.0
 		if not l.playing and not hors_ligne:
@@ -567,7 +635,12 @@ func _physics_process(delta: float) -> void:
 	if son_permis():
 		moteurs.detecter(capteurs, oreille)
 		for e in moteurs.evenements:
-			_demandes.append([e[0], e[1], e[2], MOTEUR, 0.0, float(e[4]) if e.size() > 4 else 0.5])
+			var d := [e[0], e[1], e[2], MOTEUR, 0.0, float(e[4]) if e.size() > 4 else 0.5]
+			if e[0] == "moteur_allumage":
+				# phase 6 : le plasma s'amorce quand le champ des bobines est là (le « clac » du contacteur d'abord)
+				_amorcages.append([d, int(e[3]), capteurs.temps + IoniqueSon.ATTENTE_AMORCAGE])
+			else:
+				_demandes.append(d)
 		sol.detecter(capteurs, oreille, delta)
 		for e in sol.evenements:
 			_demandes.append([e[0], e[1], e[2], PRIORITE_CHOC.get(e[0], CHOC), 0.0, float(e[4])])
@@ -582,6 +655,22 @@ func _physics_process(delta: float) -> void:
 	sol.evenements.clear()
 	tension.evenements.clear()
 	poussiere.evenements.clear()
+	# phase 6 : l'intérieur des moteurs avance au rythme de la physique (temps de l'univers depuis la photo précédente :
+	# rien en pause, × le temps accéléré), comme la poussée qu'il accompagne ; il claque ses contacteurs
+	ionique.avancer(capteurs, oreille, capteurs.temps_physique, son_permis(), moteurs.attenuation)
+	for e in ionique.evenements:
+		_demandes.append([e[0], e[1], e[2], PRIORITE_CHOC.get(e[0], MOTEUR), 0.0, float(e[4]), float(e[6])])
+	ionique.evenements.clear()
+	if not son_permis():
+		_amorcages.clear()
+	elif not _amorcages.is_empty():
+		var restent := []
+		for a in _amorcages:
+			if ionique.amorce(int(a[1])) or capteurs.temps >= float(a[2]):
+				_demandes.append(a[0])
+			else:
+				restent.append(a)
+		_amorcages = restent
 	_us_physique += Time.get_ticks_usec() - t0
 
 
@@ -635,6 +724,10 @@ func mettre_a_jour(delta: float) -> void:
 	air.calculer(c, oreille, _transm, delta)
 	for nom in COUCHES_PHASE5:
 		_poser(nom, float(air.niveaux[nom]), delta)
+	ionique.tete = tete
+	ionique.calculer(c, oreille, moteurs.attenuation, delta)
+	for nom in COUCHES_PHASE6:
+		_poser(nom, float(ionique.niveaux[nom]), delta)
 	# 3. compression : du vrai niveau total au volume des haut-parleurs
 	var total := _somme_db(couches.values().map(func(k): return float(k["lisse"])))
 	var cible := 0.0
@@ -644,13 +737,14 @@ func mettre_a_jour(delta: float) -> void:
 	var tau := ATTAQUE if cible < gain else RELACHE
 	gain += (cible - gain) * clampf(delta / tau, 0.0, 1.0)
 	# 4. chaque couche : volume, égaliseur, silence si trop faible ou cachée
+	_preparer_masquage()
 	for nom in couches:
 		_jouer_couche(nom, fondu_db)
 	if synthese_directe:
 		_envoyer_voix()
 	elif couches.has("structure"):
-		# le grondement « monte en régime » avec la poussée (invention pour le son, à revoir en phase 6)
-		(couches["structure"]["lecteur"] as AudioStreamPlayer).pitch_scale = 0.9 + 0.25 * sqrt(clampf(moteurs.regime, 0.0, 1.5))
+		# le grondement « monte en régime » : il suit la chambre à plasma (phase 6, ionique_son.gd)
+		(couches["structure"]["lecteur"] as AudioStreamPlayer).pitch_scale = ionique.facteur_regime
 	# 5. sons brefs
 	_servir_demandes(delta, fondu_db)
 	# 6. l'oreille suit la tête du pilote en vue cockpit ; dehors, elle reste à sa place, tête droite
@@ -696,6 +790,13 @@ func _poser(nom: String, niveau: float, delta: float) -> void:
 		spectre = moteurs.bandes_jet_rcs
 	elif sol.formes.has(nom):
 		spectre = SolSon.octaves(sol.formes[nom])
+	elif nom in COUCHES_PHASE6:
+		# la forme ne change que quand ionique_son.gd refait la couche : octaves gardées tant qu'elle ne bouge pas
+		var forme := _forme(nom)
+		if not is_same(k.get("forme_vue"), forme):
+			k["forme_vue"] = forme
+			k["octaves_vues"] = SolSon.octaves(forme)
+		spectre = k["octaves_vues"]
 	elif nom in COUCHES_PHASE4 or nom in COUCHES_PHASE5:
 		spectre = SolSon.octaves(_forme(nom))
 	var tot := 0.0
@@ -749,24 +850,47 @@ func _jouer_couche(nom: String, fondu_db: float) -> void:
 		l.play(_rng.randf() * d)   # départ au hasard dans la boucle
 
 
+## Les deux couches les plus fortes de chaque octave (une fois par image : la plus forte des AUTRES couches s'en déduit).
+func _preparer_masquage() -> void:
+	_fort1.fill(-INF)
+	_fort2.fill(-INF)
+	_qui1.fill(-1)
+	var n := 0
+	for nom in couches:
+		var o: PackedFloat64Array = couches[nom]["bandes_db"]
+		if o.size() == 10:
+			for b in 10:
+				var x := o[b]
+				if x > _fort1[b]:
+					_fort2[b] = _fort1[b]
+					_fort1[b] = x
+					_qui1[b] = n
+				elif x > _fort2[b]:
+					_fort2[b] = x
+		couches[nom]["rang"] = n
+		n += 1
+
+
+var _fort1 := PackedFloat64Array([-INF, -INF, -INF, -INF, -INF, -INF, -INF, -INF, -INF, -INF])
+var _fort2 := PackedFloat64Array([-INF, -INF, -INF, -INF, -INF, -INF, -INF, -INF, -INF, -INF])
+var _qui1 := PackedInt32Array([-1, -1, -1, -1, -1, -1, -1, -1, -1, -1])
+
+
 ## Une couche est cachée si, dans toutes les octaves où elle compte, une autre est 20 dB plus forte.
 func _masquee(nom: String) -> bool:
-	var a: PackedFloat64Array = couches[nom]["bandes_db"]
-	var lvl: float = couches[nom]["lisse"]
+	var k: Dictionary = couches[nom]
+	var a: PackedFloat64Array = k["bandes_db"]
+	var lvl: float = k["lisse"]
 	if a.size() != 10:
 		return false
+	if not k.has("rang"):
+		_preparer_masquage()
+	var rang: int = k["rang"]
 	for b in 10:
 		if a[b] < lvl - 10.0:
 			continue   # octave qui compte peu pour cette couche
-		var cachee := false
-		for autre in couches:
-			if autre == nom:
-				continue
-			var o: PackedFloat64Array = couches[autre]["bandes_db"]
-			if o.size() == 10 and o[b] > a[b] + MASQUAGE_DB:
-				cachee = true
-				break
-		if not cachee:
+		var autre := _fort2[b] if _qui1[b] == rang else _fort1[b]   # la plus forte des autres couches
+		if not autre > a[b] + MASQUAGE_DB:
 			return false
 	return true
 

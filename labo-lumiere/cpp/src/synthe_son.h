@@ -16,8 +16,10 @@
 //      fréquence propre et s'amortit selon son facteur de perte (durée = 1 / (π f η)), nourri par un bruit :
 //      c'est ainsi qu'une plaque de métal « chante » quand on la secoue. Une résonance met du temps à monter
 //      et à s'éteindre, comme en vrai.
-//   3. Sons purs (« raies ») : jusqu'à 8 sinusoïdes dont la fréquence glisse et tremble un peu (une vraie
-//      machine n'est jamais parfaitement régulière).
+//   3. Sons purs (« raies ») : jusqu'à 24 sinusoïdes dont la fréquence glisse et tremble un peu (une vraie
+//      machine n'est jamais parfaitement régulière). Phase 6 (moteur ionique) : chaque raie a son côté (part à
+//      gauche, comme une bande), et une raie peut « suivre » le tremblement d'une autre (les harmoniques d'une même
+//      machine tremblent ensemble).
 // La voie droite est la même que la gauche, passée par 4 filtres « passe-tout » (même énergie, même couleur,
 // mais décalée dans le temps différemment selon la fréquence) : comme dans un vrai cockpit où le son vient de
 // toutes les parois, les deux oreilles n'entendent pas exactement la même chose dans les aigus.
@@ -35,6 +37,7 @@
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_float64_array.hpp>
+#include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector2_array.hpp>
 
 #include <atomic>
@@ -52,7 +55,7 @@ class SyntheSon : public AudioStream {
 public:
 	static constexpr int BANDES = 30;
 	static constexpr int MODES = 32;
-	static constexpr int RAIES = 8;
+	static constexpr int RAIES = 24;
 	static constexpr int BLOC = 256;   // échantillons : les cibles sont relues et rejointes à chaque bloc
 
 	SyntheSon();
@@ -63,6 +66,11 @@ public:
 	void regler_energie_modes(const PackedFloat32Array &p_energies);
 	void regler_raie(int p_i, double p_frequence, double p_energie);
 	void regler_gauche(const PackedFloat32Array &p_parts);   // part à gauche par bande (0..1), 0,5 = au milieu
+	// Phase 6 : toutes les raies d'un coup (fréquences, énergies, parts à gauche ; au-delà de la taille : énergie 0,
+	// au milieu), et le « maître » de chaque raie (−1 : son propre tremblement).
+	void regler_raies(const PackedFloat32Array &p_frequences, const PackedFloat32Array &p_energies,
+			const PackedFloat32Array &p_parts_gauche);
+	void lier_raies(const PackedInt32Array &p_maitres);
 	void couper();   // toutes les cibles à zéro
 
 	void set_lissage(double p_s);
@@ -103,6 +111,8 @@ private:
 	std::atomic<uint32_t> version_modes{ 0 };
 	std::atomic<float> raies_f[RAIES];
 	std::atomic<float> raies_e[RAIES];
+	std::atomic<float> raies_g[RAIES];    // part à gauche (0,5 = au milieu)
+	std::atomic<int> raies_lien[RAIES];   // raie dont celle-ci suit le tremblement (−1 = la sienne)
 	std::atomic<float> lissage{ 0.01f };
 	std::atomic<float> instabilite{ 0.002f };
 	std::atomic<float> instabilite_temps{ 0.5f };
@@ -168,6 +178,8 @@ private:
 		double tremble = 0.0;        // écart relatif de fréquence (processus d'Ornstein-Uhlenbeck)
 		double re = 1.0, im = 0.0;   // phaseur
 		double e = 0.0, a = 0.0, ac = 0.0;
+		double w = 0.5;                          // part à gauche, lissée (phase 6)
+		double pl = 1.0, pr = 1.0, plc = 1.0, prc = 1.0;
 	};
 	struct PasseTout {
 		std::vector<float> ligne;
@@ -189,9 +201,11 @@ private:
 	Raie raies[SyntheSon::RAIES];
 	double pas_g[SyntheSon::BANDES];
 	double pas_pl[SyntheSon::BANDES], pas_pr[SyntheSon::BANDES];
-	bool au_milieu = true;               // toutes les bandes au milieu : un seul calcul pour les deux oreilles
+	bool au_milieu = true;               // tout au milieu (bandes et sons purs) : un seul calcul pour les deux oreilles
+	bool bandes_milieu = true;           // les bandes (et leurs résonances) au milieu : bruit calculé une seule fois
 	double pas_b[SyntheSon::MODES];
 	double pas_a[SyntheSon::RAIES];
+	double pas_pl_r[SyntheSon::RAIES], pas_pr_r[SyntheSon::RAIES];
 	double rot_re[SyntheSon::RAIES], rot_im[SyntheSon::RAIES];
 	PasseTout passe_tout[4];
 	std::vector<float> mono;     // voie gauche (ou les deux, si tout est au milieu)

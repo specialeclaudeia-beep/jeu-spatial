@@ -17,6 +17,12 @@ extends SceneTree
 ## 140 m/s), 18 (de Mach 0,7 à 1,3 : le tremblement transsonique), 19 (ailes qui décrochent, puis l'aile gauche seule
 ## en roulis : on l'entend à gauche), 20 (de Mach 1 à 2,2 : l'onde de choc bat devant la verrière), 21 (rentrée de 70 à
 ## 40 km, coque chaude, puis montée hors de l'air : tout s'efface). Le script force la vitesse et l'angle de l'air.
+## Phase 6 (l'intérieur des moteurs ioniques) : 22 (allumage puis coupure dans le vide : « clac » du contacteur, sifflement
+## qui part du grave, « whoomp » du plasma ; à la coupure le sifflement redescend en glissant, puis le contacteur
+## s'ouvre), 23 (paliers de poussée 25, 50, 100 % : le sifflement monte avec √poussée, le réacteur gronde plus fort et
+## un peu plus grave), 24 (moteur de l'aile gauche seul, puis de droite : chaque sifflement de son côté), 25 (12 s à
+## fond : la chambre chauffe et le grondement monte lentement, puis redescend), 26 (vol vertical : les moteurs de
+## levage sortent et sifflent plus aigu).
 ## `--seul=14` après le dossier : n'enregistre que les extraits dont le nom commence par « 14 ».
 ## Les commandes (gaz, manche) sont rejouées par le script ; les extraits 4 et 17 à 21 forcent la vitesse.
 
@@ -52,6 +58,12 @@ const EXTRAITS := [
 	["19-air-decrochage-puis-aile-gauche", 13.0, "air_train"],
 	["20-air-choc-sur-la-verriere-mach-2", 12.0, "air_15km"],
 	["21-rentree-puis-fondu-vers-le-silence", 14.0, "rentree"],
+	# phase 6 : l'intérieur des moteurs ioniques (dans le vide : rien que la structure)
+	["22-espace-allumage-puis-coupure", 12.0, "vide"],
+	["23-espace-paliers-de-poussee", 14.0, "vide"],
+	["24-espace-moteur-aile-gauche-puis-droite", 12.0, "vide"],
+	["25-espace-la-chambre-chauffe", 20.0, "vide"],
+	["26-espace-vol-vertical", 14.0, "vide"],
 ]
 
 var dossier := "res://extraits"
@@ -124,6 +136,19 @@ class Pilotage extends Node:
 				elif t > 7.9 and t < 8.3: seul = "lateral droit"
 				elif t > 8.8 and t < 9.2: seul = "bout aile haut gauche"
 				elif t > 9.7 and t < 10.1: seul = "bout aile haut droit"
+			"22-espace-allumage-puis-coupure":
+				if t > 1.5 and t < 5.0: gaz = 1.0
+			"23-espace-paliers-de-poussee":
+				if t > 1.0 and t < 3.5: gaz = 0.25
+				elif t > 3.5 and t < 6.0: gaz = 0.5
+				elif t > 6.0 and t < 8.5: gaz = 1.0
+				elif t > 8.5 and t < 11.0: gaz = 0.5
+			"25-espace-la-chambre-chauffe":
+				if t > 1.0 and t < 13.0: gaz = 1.0
+			"26-espace-vol-vertical":
+				if t < 0.1: v.passer_vol_vertical(true)
+				if t > 5.0 and t < 7.5: gaz = 0.5
+				elif t > 7.5 and t < 10.5: gaz = 0.9
 			"15-espace-poussee-x10-la-structure-craque":
 				# moteurs imaginaires x10 (touche du jeu) : 120 g, bien au-delà de ce que la structure supporte
 				if t < 0.1: v.regler_poussee(10.0)
@@ -165,6 +190,18 @@ class Pilotage extends Node:
 			if not nom.begins_with("19") or t < 7.0:
 				v.omega = Vector3.ZERO
 		v.commander(gaz, tangage, lacet, roulis, cote)
+		if nom.begins_with("24"):
+			# un seul moteur d'aile à la fois (le plus à gauche, puis le plus à droite), donné après la commande
+			var aile := ""
+			if t > 1.0 and t < 4.5: aile = "gauche"
+			elif t > 6.0 and t < 9.5: aile = "droite"
+			var i_g := 0
+			var i_d := 0
+			for i in 5:
+				if v.moteurs[i]["position"].x < v.moteurs[i_g]["position"].x: i_g = i
+				if v.moteurs[i]["position"].x > v.moteurs[i_d]["position"].x: i_d = i
+			if aile != "":
+				v.moteurs[i_g if aile == "gauche" else i_d]["consigne"] = 1.0
 		if seul != "":
 			for r in v.rcs:
 				if r["nom"] == seul:
@@ -259,7 +296,11 @@ func _tout() -> void:
 		print("%s : %.1f s, son %.2f ms par image, %d sons brefs (craquements %d, relâchements %d, tics %d, grains %d)" % [chemin,
 			w.get_length(), s.ms_par_image, s.joues, s.tension.craquements, s.tension.relachements, s.tension.tics,
 			s.poussiere.grains_joues])
-		if int(String(e[0]).get_slice("-", 0)) >= 17:
+		if int(String(e[0]).get_slice("-", 0)) >= 22:
+			print("   moteurs ioniques : bobines %.0f dB, chambre %.0f dB, réacteur %.0f dB (%.1f Hz), %d contacteurs (fin de l'extrait)" % [
+				float(s.couches["bobines"]["lisse"]), float(s.couches["plasma"]["lisse"]), float(s.couches["reacteur"]["lisse"]),
+				s.ionique.f_bourdon, s.ionique.contacts])
+		elif int(String(e[0]).get_slice("-", 0)) >= 17:
 			print("   air : sifflement %.0f dB, trappes %.0f dB, tremblement %.0f dB, choc verrière %.0f dB, souffle %.0f dB (fin de l'extrait)" % [
 				float(s.couches["sifflement"]["lisse"]), float(s.couches["cavites"]["lisse"]), float(s.couches["tremblement"]["lisse"]),
 				float(s.couches["choc_verriere"]["lisse"]), float(s.couches["souffle"]["lisse"])])

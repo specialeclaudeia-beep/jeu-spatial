@@ -128,3 +128,51 @@ func partager(bandes_e: PackedFloat32Array) -> Array:
 	for j in BANDES:
 		bruit[j] = bandes_e[j] * (1.0 - part_modes[j])
 	return [bruit, modes]
+
+
+## Phase 6 : un son PUR de fréquence f qui arrive par la structure (sifflement d'une bobine, bourdon du réacteur) :
+## combien les panneaux le renforcent. Moyenne 1 sur chaque tiers d'octave (l'énergie totale ne change pas, comme
+## partager()). Dans une bande où la part p de l'énergie passe par les modes : (1 − p) + p × (pics des modes, chacun de
+## demi-largeur f η / 2) / (leur moyenne sur la bande, calculée exactement : ∫ 1/(1 + x²) = arctan). Pile sur un mode :
+## jusqu'à ~+9 dB ; entre deux : −7 dB.
+func reponse(f: float) -> float:
+	if f <= 0.0:
+		return 1.0
+	# gardée en mémoire par pas de 0,05 % (dix fois plus fin qu'un pic : demi-largeur 0,5 %)
+	var cle := roundi(log(f) / log(1.0005))
+	var connue = _reponses.get(cle)
+	if connue != null:
+		return connue
+	if _reponses.size() > 4096:
+		_reponses.clear()
+	var r := _reponse(f)
+	_reponses[cle] = r
+	return r
+
+
+var _reponses := {}
+var _moyennes_pics := PackedFloat64Array()   # moyenne des pics de tous les modes sur chaque tiers d'octave
+
+
+func _reponse(f: float) -> float:
+	var j := bande(f)
+	var p := part_modes[j]
+	if p <= 0.0:
+		return 1.0
+	if _moyennes_pics.size() != BANDES:
+		_moyennes_pics.resize(BANDES)
+		for b in BANDES:
+			var bas := centre(b) * pow(2.0, -1.0 / 6.0)
+			var haut := centre(b) * pow(2.0, 1.0 / 6.0)
+			var aire := 0.0
+			for i in frequences.size():
+				var demi := 0.5 * frequences[i] * pertes[i]
+				aire += demi * (atan((haut - frequences[i]) / demi) - atan((bas - frequences[i]) / demi))
+			_moyennes_pics[b] = aire / (haut - bas)
+	if _moyennes_pics[j] <= 0.0:
+		return 1.0
+	var pics := 0.0
+	for i in frequences.size():
+		var x := (f - frequences[i]) / (0.5 * frequences[i] * pertes[i])
+		pics += 1.0 / (1.0 + x * x)
+	return (1.0 - p) + p * pics / _moyennes_pics[j]

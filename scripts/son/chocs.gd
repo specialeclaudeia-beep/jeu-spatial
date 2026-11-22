@@ -33,10 +33,22 @@ const FAMILLES := {
 		"f_min": 180.0, "f_max": 4500.0, "modes": 14, "perte": 0.012, "contact": 0.0004, "souffle": 0.5, "souffle_f": 1800.0},
 	"rcs_fermeture": {"matiere": "acier", "duree": 0.25,
 		"f_min": 400.0, "f_max": 6000.0, "modes": 10, "perte": 0.015, "contact": 0.0002},
+	# phase 6 : le plasma s'amorce (« whoomp » grave de la structure), avec les étincelles de l'arc d'amorçage (grains
+	# aigus) et la bouffée du gaz qui entre dans la chambre
 	"moteur_allumage": {"matiere": "aluminium", "duree": 1.4,
-		"f_min": 35.0, "f_max": 600.0, "modes": 16, "perte": 0.02, "contact": 0.004, "attaque": 0.03},
+		"f_min": 35.0, "f_max": 600.0, "modes": 16, "perte": 0.02, "contact": 0.004, "attaque": 0.03,
+		"ticks": 10, "souffle": 0.5, "souffle_f": 900.0},
 	"moteur_coupure": {"matiere": "aluminium", "duree": 1.0,
 		"f_min": 30.0, "f_max": 400.0, "modes": 12, "perte": 0.03, "contact": 0.01, "attaque": 0.06},
+	# --- contacteurs des bobines des moteurs (phase 6, ionique_son.gd) ---
+	# il se ferme : palette d'acier contre ses butées, qui rebondit deux fois (comme tous les contacteurs, 10 à 20 ms)
+	"contacteur_fermeture": {"matiere": "acier", "duree": 0.3,
+		"f_min": 300.0, "f_max": 6000.0, "modes": 12, "perte": 0.01, "contact": 0.00015,
+		"rebonds": [[0.011, 0.45], [0.019, 0.18]]},
+	# il s'ouvre (le champ est retombé) : coup plus doux et le petit arc entre les contacts qui claque
+	"contacteur_ouverture": {"matiere": "acier", "duree": 0.25,
+		"f_min": 400.0, "f_max": 6000.0, "modes": 10, "perte": 0.015, "contact": 0.0002, "souffle": 0.4,
+		"souffle_f": 3000.0},
 	# --- sol (phase 3) ---
 	# pneu qui touche le sol : le caoutchouc s'écrase (contact long, 3 à 8 ms : sourd), la jambe et la coque
 	# vibrent en grave
@@ -164,7 +176,10 @@ static func recette(famille: String, i: float, carre_moyen: float, rng: RandomNu
 		options[2] = p.get("souffle_f", 1500.0)
 		options[3] = 0.002
 		options[4] = 0.03
-		e_bruit = options[1] * options[1] * _integrale(func(t: float) -> float: return pow((1.0 - exp(-t / 0.002)) * exp(-t / 0.03), 2.0))
+		var t_a := maxf(attaque, 0.0)
+		e_bruit = options[1] * options[1] * _integrale(func(t: float) -> float:
+			var w := 0.5 - 0.5 * cos(PI * t / t_a) if t < t_a else 1.0   # la force qui monte (partie C++) l'adoucit aussi
+			return pow((1.0 - exp(-t / 0.002)) * exp(-t / 0.03) * w, 2.0))
 		parts[_octave(options[2])] += e_bruit
 	# crissement : son presque pur + harmoniques + un peu de bruit
 	if float(p.get("crissement", 0.0)) > 0.0:
