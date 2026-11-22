@@ -3,7 +3,7 @@ Un jeu a la première personne dans l'espace , avec un physique réaliste.
 
 Moteur : Godot 4.7 (rendu Compatibilité). Dossier de référence du projet : `docs/dossier-jeu-spatial.md`.
 
-Version réunie le 18/11/2026 : le vaisseau v25 (cockpit détaillé, droïde R-7, pilote automatique, fait
+Version réunie le 18/11/2026 : le vaisseau v25 (aujourd'hui modèle v27, roues arrière freinées ; cockpit détaillé, droïde R-7, pilote automatique, fait
 sur le PC) avec le système de lumière (étapes 0 à 9, fait dans le cloud). Le droïde a besoin de deux
 choses qui ne sont pas dans le dépôt (trop lourdes) : l'extension `addons/nobodywho` et le dossier `ia/`
 (modèles Qwen3-0.6B et LFM2.5-350M). Sans elles, le jeu marche, R-7 dit seulement qu'il est hors ligne.
@@ -42,7 +42,7 @@ Disposition par défaut :
 | pause | P | Carré |
 | cacher / montrer l'aide | H | Rond |
 | recommencer / remettre en orbite | R / O | Créer |
-| temps ×1, ×10, ×100, ×1000, ×10 000, ×100 000 | 1 2 3 4 5 6 | croix directionnelle gauche / droite (moins / plus vite) |
+| temps ×1, ×10, ×100, ×1000, ×10 000, ×100 000 ; loin des astres ×1 million, ×10 millions | 1 2 3 4 5 6 ; 9 0 | croix directionnelle gauche / droite (moins / plus vite) |
 | puissance des moteurs : moins / plus (÷10 / ×10, de ×1 à ×100 000) | 7 / 8 | — (à choisir avec F2) |
 | tourner la tête, ou la caméra en vue extérieure (le vaisseau ne bouge pas) | — | stick droit (lâché : la tête revient devant) |
 | regarder droit devant | C | R3 (enfoncer le stick droit) |
@@ -77,10 +77,11 @@ ou couper la poussée, le désactive.
   150 m, x1 sous 30 m) ; l'écran affiche « TEMPS x1000 (pilote auto : x100) ».
 
 ## Ce qui est simulé
-- Vaisseau de 10 t, corps rigide à 6 degrés de liberté (masse, inertie, couples).
-- 5 moteurs arrière de 200 kN (chacun seul pousse 2 fois le poids ; ensemble, 10 g d'accélération),
+- Vaisseau de 8,5 t (8 534 kg, calculés dans Blender à partir de la matière de chaque pièce), corps rigide à
+  6 degrés de liberté (masse, inertie, couples).
+- 5 moteurs arrière de 200 kN (chacun seul pousse 2,4 fois le poids ; ensemble, environ 12 g d'accélération),
   chacun à sa vraie position. 12 petits propulseurs d'orientation de 6 kN (le roulis n'est possible
-  qu'avec eux).
+  qu'avec eux) et 10 buses de 6 kN encastrées dans la coque (freiner, glisser, monter, descendre).
 - Calcul automatique des poussées : on demande une poussée et une rotation, et le calcul choisit
   combien chaque propulseur pousse, d'après sa position (moteurs d'un côté plus forts que de l'autre,
   propulseurs d'orientation). Le vaisseau n'est jamais tourné directement.
@@ -92,7 +93,7 @@ ou couper la poussée, le désactive.
   du pilote) ; touches 7 / 8 : moteurs « imaginaires » jusqu'à ×100 000 (toujours de vraies forces, dont la
   part en plus passe par le centre de gravité). Le ciel (aberration, Doppler) suit la vraie vitesse.
   Étape A2 : planète et lune déformées par l'aberration et colorées par l'effet Doppler.
-  Pas encore : gravité d'Einstein (étape B), trou de ver (étape C).
+  Étapes B (gravité d'Einstein, trou noir) et C (trou de ver) : voir plus bas.
 - Un repère par système d'étoile (étape A3) : le système du Soleil (la maison : planète, lune, Soleil,
   étoile compagne), Alpha du Centaure A et B (4,37 années-lumière) et Proxima du Centaure (4,25), à leur
   vraie place dans le ciel, avec leur vraie vitesse (32 km/s par rapport au Soleil). Le vaisseau compte
@@ -136,7 +137,7 @@ ou couper la poussée, le désactive.
   longueur suit la poussée.
 - Vol vertical (F) : deux moteurs de levage de 37,5 kN sortent du ventre à l'avant (trappes puis vérin),
   puis la tuyère du moteur central tourne vers le bas (4 s en tout). Les gaz poussent alors vers le haut,
-  au plus 132 kN sans faire basculer le vaisseau (il pèse 98 kN au sol) : de quoi décoller et se poser
+  au plus 211 kN sans faire basculer le vaisseau (il pèse 84 kN au sol) : de quoi décoller et se poser
   à la verticale. Tout vient de la poussée réelle des moteurs, à leur vraie place.
 - Cockpit fonctionnel : levier des gaz (et ses 8 voyants), manche et pédales suivent les commandes ;
   interrupteurs (train, ailes, stabilisateur, couper les gaz) et boutons (temps, pause, vue, aide,
