@@ -3,6 +3,10 @@ extends Node
 ## (scripts/atelier/catalogue.gd), et la physique construite à partir du plan.
 ## Étape 2 : l'écran de l'atelier (tableau ingénieur, catalogue, fiches, caméra, choix d'une pièce dans la
 ## vue 3D), le départ posé au sol devant le hangar, et le passage accueil / atelier / jeu.
+## Étape 3 : construire. Pièces toutes faites (scripts/atelier/pieces_toutes_faites.gd), édition du plan
+## (scripts/atelier/edition.gd : poser, symétrie, régler, enlever, annuler / refaire, enregistrer), dessin
+## partagé atelier / jeu (scripts/dessin_vaisseau.gd), et dans l'écran : poser à la souris, pièces qui
+## flottent, « Lancer » refusé.
 ## Ligne de commande :
 ##   Godot_console.exe --headless --path . res://scenes/tests_atelier.tscn
 ## Les valeurs « d'avant » viennent du code d'avant l'atelier (vaisseau écrit en dur), gardées dans
@@ -17,6 +21,12 @@ const Analyse = preload("res://scripts/atelier/analyse.gd")
 const CameraAtelier = preload("res://scripts/atelier/camera_atelier.gd")
 const Partie = preload("res://scripts/partie.gd")
 const Atmosphere = preload("res://scripts/physique/atmosphere.gd")
+const Edition = preload("res://scripts/atelier/edition.gd")
+const Pieces = preload("res://scripts/atelier/pieces_toutes_faites.gd")
+const DessinVaisseau = preload("res://scripts/dessin_vaisseau.gd")
+const ModeleVaisseau = preload("res://scripts/modele_vaisseau.gd")
+const AtelierScript = preload("res://scripts/atelier/atelier.gd")
+const DOSSIER_ESSAI := "user://essais_atelier_etape3/"
 const SCENE_ATELIER := "res://scenes/atelier.tscn"
 ## Mêmes valeurs que scripts/jeu.gd (le test ne charge pas le jeu, trop lourd)
 const RAYON_PLANETE := 600000.0
@@ -52,7 +62,30 @@ func _ready() -> void:
 	_tests_analyse()
 	_tests_camera()
 	_tests_partie()
+	_tests_pieces_toutes_faites()
+	_tests_edition()
+	_tests_fichiers()
+	_tests_dessin()
+	_tests_vaisseaux_limites()
+	_tests_pose_calcul()
+	# l'écran de l'atelier s'ouvre sur le chasseur de départ, et ce que les tests enregistrent ne touche pas
+	# aux vaisseaux ni au dernier vaisseau ouvert du joueur
+	var partie_avant = Engine.get_meta("partie") if Engine.has_meta("partie") else null
+	var cfg_avant := FileAccess.get_file_as_string(Partie.FICHIER) if FileAccess.file_exists(Partie.FICHIER) else ""
+	Engine.set_meta("partie", {"plan": Plan.PLAN_PAR_DEFAUT, "depart": "", "plan_lu": true})
 	await _tests_ecran_atelier()
+	await _tests_ecran_etape3()
+	if partie_avant != null:
+		Engine.set_meta("partie", partie_avant)
+	else:
+		Engine.remove_meta("partie")
+	if cfg_avant != "":
+		var fc := FileAccess.open(Partie.FICHIER, FileAccess.WRITE)
+		fc.store_string(cfg_avant)
+		fc.close()
+	elif FileAccess.file_exists(Partie.FICHIER):
+		DirAccess.remove_absolute(Partie.FICHIER)
+	_vider_dossier(DOSSIER_ESSAI)
 	print("=== Atelier : %d / %d réussis ===" % [reussis, reussis + rates])
 	get_tree().quit(0 if rates == 0 else 1)
 
@@ -760,3 +793,481 @@ func _feuilles(it: TreeItem, sortie: Array) -> void:
 	while e != null:
 		_feuilles(e, sortie)
 		e = e.get_next()
+
+
+# =====================================================================
+# ÉTAPE 3 — A. LES PIÈCES TOUTES FAITES
+# =====================================================================
+static func _plan_de(d: Dictionary):
+	var p = Plan.new()
+	p.lire_dictionnaire(d.duplicate(true))
+	return p
+
+
+static func _ed_depart():
+	var base = Plan.par_defaut()
+	return Edition.new(base.donnees, base.chemin)
+
+
+func _tests_pieces_toutes_faites() -> void:
+	# chaque pièce du catalogue se pose : le plan reste valide, la physique gagne exactement sa masse
+	var lignes := []
+	var ok := true
+	var m0: float = VaisseauPhysique.new().masse
+	for modele in Pieces.MODELES:
+		var ed = _ed_depart()
+		var ids: Array = ed.ajouter(modele, {}, Transform3D(Basis.IDENTITY, Vector3(0.0, 1.0, 2.0)), "Fuselage")
+		var p = ed.plan()
+		var v = VaisseauPhysique.new(p)
+		var attendu: float = Pieces.masse(modele, {})
+		var dm: float = v.masse - m0
+		var bon: bool = p.valide() and ids.size() == 1 and absf(dm - attendu) < 0.01 and attendu > 0.0 and is_finite(v.inertie.x)
+		ok = ok and bon
+		lignes.append("%s +%.1f kg%s" % [modele, dm, "" if bon else " (FAUX)"])
+	_resultat(ok, "Pièces toutes faites : chacune se pose et pèse", ", ".join(lignes))
+	# moteurs : 3 tailles et poussée réglable ; plus il pousse, plus il est gros et lourd (4,5 kg par kN)
+	var tailles := []
+	ok = true
+	var d_avant := 0.0
+	for kn in [100.0, 200.0, 400.0, 600.0]:
+		var dl: Vector2 = Pieces.dimensions_ionique(kn)
+		var m: float = Pieces.masse("moteur_ionique", {"poussee_kn": kn})
+		ok = ok and dl.x > d_avant and absf(m - 4.5 * kn) < 0.01
+		d_avant = dl.x
+		tailles.append("%d kN : Ø %.2f m, %.2f m de long, %.0f kg" % [kn, dl.x, dl.y, m])
+	var r: Dictionary = Pieces.reglages_complets("moteur_ionique", {"poussee_kn": 5000.0})
+	ok = ok and float(r["poussee_kn"]) == 600.0 and Pieces.reglages_complets("plaque", {"matiere": "fromage"})["matiere"] == "aluminium_lithium"
+	_resultat(ok, "Moteurs : 3 tailles, poussée réglable (plus gros quand il pousse plus)", "; ".join(tailles) + " ; réglage hors bornes ramené à 600 kN")
+	# réservoir : eau ou air, la masse du contenu compte (pas de carburant : elle ne change jamais)
+	var eau: float = Pieces.masse("reservoir", {"volume_l": 400.0, "contenu": "eau"})
+	var air: float = Pieces.masse("reservoir", {"volume_l": 400.0, "contenu": "air"})
+	ok = eau > 400.0 and eau < 480.0 and air > 140.0 and air < eau
+	_resultat(ok, "Réservoirs d'eau et d'air", "400 L d'eau : %.0f kg ; 400 L d'air à 300 bar : %.0f kg (enveloppe comprise)" % [eau, air])
+	# bloc : inertie d'un cylindre plein (formule) tournée avec la pièce
+	var mp: Dictionary = Catalogue.masse_piece({"type": "bloc", "forme": "cylindre", "dimensions_m": [1.0, 2.0], "masse_kg": 100.0, "position": [0, 0, 0]})
+	var i6: Array = mp["inertie"]
+	var ix := 100.0 * (3.0 * 0.25 + 4.0) / 12.0
+	var iz := 100.0 * 0.25 / 2.0
+	ok = absf(float(i6[0]) - ix) < 1e-4 and absf(float(i6[1]) - ix) < 1e-4 and absf(float(i6[2]) - iz) < 1e-4
+	var mp2: Dictionary = Catalogue.masse_piece({"type": "bloc", "forme": "cylindre", "dimensions_m": [1.0, 2.0], "masse_kg": 100.0,
+		"position": [0, 0, 0], "rotation_deg": [90.0, 0.0, 0.0]})
+	var j6: Array = mp2["inertie"]
+	ok = ok and absf(float(j6[1]) - iz) < 1e-3 and absf(float(j6[2]) - ix) < 1e-3
+	_resultat(ok, "Bloc : inertie d'un cylindre plein, tournée avec lui", "Ixx = Iyy = %.2f, Izz = %.2f kg·m² ; couché (90°) : Iyy = %.2f, Izz = %.2f" % [i6[0], i6[2], j6[1], j6[2]])
+
+
+# =====================================================================
+# ÉTAPE 3 — B. ÉDITION DU PLAN : poser, symétrie, régler, enlever, annuler
+# =====================================================================
+func _tests_edition() -> void:
+	var v0 = VaisseauPhysique.new()
+	# une paire de moteurs en symétrie : le centre de gravité reste au milieu, les deux poussent pareil
+	var ed = _ed_depart()
+	var xf := Transform3D(Basis.IDENTITY, Vector3(2.2, 0.0, 2.6))
+	var ids: Array = ed.ajouter("moteur_ionique", {"poussee_kn": 200.0}, xf, "Aile_haut_droit", "aile_haut_droit", true)
+	var p = ed.plan()
+	var v = VaisseauPhysique.new(p)
+	var e1: Dictionary = ed.element(ids[0])
+	var e2: Dictionary = ed.element(ids[1]) if ids.size() > 1 else {}
+	var couple := Vector3.ZERO
+	var force := Vector3.ZERO
+	for m in v.moteurs:
+		if String(m["id"]).begins_with("moteur_ionique"):
+			var f: Vector3 = (m["dir_ref"] as Vector3) * float(m["poussee_n"])
+			force += f
+			couple += ((m["pos_ref"] as Vector3) - v.centre_gravite).cross(f)
+	var ti: Basis = v.tenseur_inertie
+	var bras_max := 1e-4 * force.length() + 1.0   # 0,1 mm de bras de levier
+	var ok: bool = ids.size() == 2 and String(e2.get("articulation", "")) == "aile_haut_gauche" and String(e2.get("fixe_a", "")) == "Aile_haut_gauche" \
+		and String(e1.get("symetrique", "")) == ids[1] and String(e2.get("symetrique", "")) == ids[0] \
+		and absf(v.centre_gravite.x - v0.centre_gravite.x) < 0.0001 and absf(couple.y) < bras_max and absf(couple.z) < bras_max and absf(v.masse - v0.masse - 1800.0) < 0.01 \
+		and absf(ti.x.y) < 1.0 and absf(ti.x.z) < 1.0 and String(e1["nom"]).ends_with("droite") and String(e2["nom"]).ends_with("gauche")
+	_resultat(ok, "Symétrie : deux moteurs en miroir", "%s / %s, centre de gravité x = %.3f mm (%.3f avant), couple des deux moteurs (%.0f kN) : lacet %.1f, roulis %.1f N·m ; posés sur %s et %s ; masse +%.0f kg" % [
+		e1.get("nom", ""), e2.get("nom", ""), v.centre_gravite.x * 1000.0, v0.centre_gravite.x * 1000.0, force.length() / 1000.0, couple.y, couple.z, e1.get("fixe_a", ""), e2.get("fixe_a", ""), v.masse - v0.masse])
+	# la jumelle est vraiment l'image en miroir (une pièce tournée : sa jumelle tourne dans l'autre sens)
+	var ed2 = _ed_depart()
+	var b := Basis(Vector3.UP, deg_to_rad(30.0)) * Basis(Vector3.BACK, deg_to_rad(-90.0))
+	var ids2: Array = ed2.ajouter("propulseur", {}, Transform3D(b, Vector3(1.0, 0.3, -2.0)), "Fuselage", "", true)
+	var p2 = ed2.plan()
+	var t1: Dictionary = {}
+	var t2: Dictionary = {}
+	for q in p2.pieces:
+		if q["id"] == ids2[0] + "/poussee":
+			t1 = q
+		elif q["id"] == ids2[1] + "/poussee":
+			t2 = q
+	var s := Vector3(-1, 1, 1)
+	ok = not t1.is_empty() and not t2.is_empty() and ((t1["point"] as Vector3) * s).distance_to(t2["point"]) < 1e-4 \
+		and ((t1["direction"] as Vector3) * s).distance_to(t2["direction"]) < 1e-4 and bool(ed2.element(ids2[1]).get("miroir_x", false))
+	_resultat(ok, "Symétrie : la jumelle est l'image en miroir", "propulseur en %s pousse vers %s ; jumelle en %s pousse vers %s" % [
+		Analyse.vecteur_txt(t1.get("point", Vector3.ZERO)), Analyse.vecteur_txt(t1.get("direction", Vector3.ZERO)),
+		Analyse.vecteur_txt(t2.get("point", Vector3.ZERO)), Analyse.vecteur_txt(t2.get("direction", Vector3.ZERO))])
+	# sur l'axe du vaisseau : pas de jumelle
+	var ids3: Array = ed2.ajouter("boite", {}, Transform3D(Basis.IDENTITY, Vector3(0.02, 1.0, 1.0)), "Fuselage", "", true)
+	_resultat(ids3.size() == 1, "Symétrie : une pièce posée au milieu n'a pas de jumelle", "%d pièce posée à 2 cm du milieu" % ids3.size())
+	# régler : la jumelle suit, la masse et la poussée suivent
+	ed.regler(ids[0], "poussee_kn", 400.0)
+	var v2 = VaisseauPhysique.new(ed.plan())
+	var r2: Dictionary = ed.element(ids[1])["reglages"]
+	var pn := 0.0
+	for m in v2.moteurs:
+		if String(m["id"]) == ids[1] + "/poussee":
+			pn = float(m["poussee_n"])
+	ok = float(r2["poussee_kn"]) == 400.0 and pn == 400000.0 and absf(v2.masse - v0.masse - 3600.0) < 0.01
+	_resultat(ok, "Régler une pièce : sa jumelle suit", "poussée de la jumelle %.0f kN, masse ajoutée %.0f kg (2 × 400 kN × 4,5 kg/kN)" % [pn / 1000.0, v2.masse - v0.masse])
+	# déplacer : la jumelle aussi, de l'autre côté
+	ed.placer(ids[0], Transform3D(Basis.IDENTITY, Vector3(2.5, -0.3, 2.0)), "Aile_bas_droit", "aile_bas_droit")
+	var e2b: Dictionary = ed.element(ids[1])
+	ok = Catalogue.vecteur(e2b["position"]).distance_to(Vector3(-2.5, -0.3, 2.0)) < 1e-4 and String(e2b["articulation"]) == "aile_bas_gauche"
+	_resultat(ok, "Déplacer une pièce : sa jumelle suit", "jumelle en %s sur %s" % [Analyse.vecteur_txt(e2b["position"]), e2b.get("fixe_a", "")])
+	# annuler tout, refaire tout : on retrouve exactement les mêmes plans
+	var texte_fin := JSON.stringify(ed.donnees)
+	var n := 0
+	while ed.annuler():
+		n += 1
+	var texte_debut := JSON.stringify(ed.donnees)
+	var depart := JSON.stringify(Plan.par_defaut().donnees)
+	var m_debut: float = VaisseauPhysique.new(ed.plan()).masse
+	var k := 0
+	while ed.refaire():
+		k += 1
+	ok = n == 3 and k == 3 and JSON.stringify(ed.donnees) == texte_fin and absf(m_debut - v0.masse) < 1e-6 \
+		and texte_debut.replace("Chasseur v27 modifié", "Chasseur v27") == depart
+	_resultat(ok, "Annuler / refaire (Ctrl + Z / Ctrl + Y)", "%d annulés → vaisseau de départ (%.1f kg) ; %d refaits → le même plan qu'avant" % [n, m_debut, k])
+	# enlever : une pièce part avec sa jumelle ; un module entier ; le cockpit ne s'enlève pas
+	var ed3 = _ed_depart()
+	var paire: Array = ed3.ajouter("propulseur", {}, Transform3D(Basis.IDENTITY, Vector3(1.0, 0.8, 0.0)), "Fuselage", "", true)
+	var enleves: int = ed3.supprimer([paire[1]])
+	var reste_ajouts: int = ed3.ajouts().size()
+	var avant: int = ed3.plan().pieces.size()
+	var n_train: int = ed3.supprimer(["module:train_avant"])
+	var p3 = ed3.plan()
+	var v3 = VaisseauPhysique.new(p3)
+	var n_cockpit: int = ed3.supprimer(["module:cockpit", "Verriere"])
+	ok = enleves == 2 and reste_ajouts == 0 and n_train == 6 and p3.valide() and p3.pieces.size() == avant - n_train \
+		and v3.roues.size() == 2 and n_cockpit == 0 and not ed3.element("Verriere").is_empty()
+	_resultat(ok, "Enlever : une pièce et sa jumelle, un module entier", "pièce + jumelle : %d enlevées (%d restent) ; module « train avant » : %d pièces enlevées (%d → %d), %d roues restent ; cockpit : %d (le pilote est dedans)" % [
+		enleves, reste_ajouts, n_train, avant, p3.pieces.size(), v3.roues.size(), n_cockpit])
+	# le vaisseau du jeu ne s'écrase jamais : le vaisseau changé prend un autre nom
+	ok = String(ed3.nom()) == "Chasseur v27 modifié" and ed3.chemin == "" and ed3.modifie
+	ed3.renommer("Mon chasseur")
+	ok = ok and ed3.nom() == "Mon chasseur"
+	_resultat(ok, "Le vaisseau du jeu reste intact", "après un changement : « Chasseur v27 modifié » (pas encore de fichier) ; renommé « %s »" % ed3.nom())
+
+
+# =====================================================================
+# ÉTAPE 3 — C. ENREGISTRER : plusieurs vaisseaux, chacun son nom
+# =====================================================================
+func _vider_dossier(dossier: String) -> void:
+	var d := DirAccess.open(dossier)
+	if d == null:
+		return
+	for f in d.get_files():
+		d.remove(f)
+	DirAccess.remove_absolute(dossier)
+
+
+func _tests_fichiers() -> void:
+	_vider_dossier(DOSSIER_ESSAI)
+	var ed = _ed_depart()
+	ed.ajouter("moteur_ionique", {"poussee_kn": 300.0}, Transform3D(Basis(Vector3.UP, 0.4), Vector3(2.0, -0.4, 2.2)), "Aile_bas_droit", "aile_bas_droit", true)
+	ed.ajouter("reservoir", {"contenu": "air"}, Transform3D(Basis.IDENTITY, Vector3(0.0, -0.9, 1.0)), "Fuselage")
+	ed.supprimer(["module:canons"])
+	var err: Error = ed.enregistrer(DOSSIER_ESSAI)
+	var chemin: String = ed.chemin
+	var relu = Plan.new()
+	var lu: bool = relu.charger(chemin)
+	var v1 = VaisseauPhysique.new(ed.plan())
+	var v2 = VaisseauPhysique.new(relu)
+	var ed_relu = Edition.new(relu.donnees, chemin)
+	var ok: bool = err == OK and lu and chemin == DOSSIER_ESSAI + "chasseur_v27_modifie.plan.json" and not ed.modifie \
+		and absf(v1.masse - v2.masse) < 1e-6 and v1.centre_gravite.distance_to(v2.centre_gravite) < 1e-6 \
+		and v1.inertie.distance_to(v2.inertie) < 1e-3 and v1.moteurs.size() == v2.moteurs.size() and ed_relu.ajouts().size() == 3 \
+		and int(relu.donnees.get("version", 0)) == Plan.VERSION
+	_resultat(ok, "Enregistrer puis relire un vaisseau", "%s : %.1f kg relus (%.1f), %d moteurs, %d pièces posées, version %d du plan" % [
+		chemin.get_file(), v2.masse, v1.masse, v2.moteurs.size(), ed_relu.ajouts().size(), int(relu.donnees.get("version", 0))])
+	# renommer : le fichier suit le nom (l'ancien part) ; un autre vaisseau du même nom n'est jamais écrasé
+	ed.renommer("Éclair d'été")
+	ed.enregistrer(DOSSIER_ESSAI)
+	var renomme: String = ed.chemin
+	var ancien_parti := not FileAccess.file_exists(chemin)
+	var autre = _ed_depart()
+	autre.renommer("Éclair d'été")
+	autre.enregistrer(DOSSIER_ESSAI)
+	ok = renomme == DOSSIER_ESSAI + "eclair_d_ete.plan.json" and ancien_parti and autre.chemin == DOSSIER_ESSAI + "eclair_d_ete_2.plan.json" \
+		and FileAccess.file_exists(renomme)
+	# copie : un nouveau fichier, l'original reste
+	ed.enregistrer_copie(DOSSIER_ESSAI)
+	ok = ok and ed.chemin != renomme and FileAccess.file_exists(renomme) and FileAccess.file_exists(ed.chemin) and ed.nom() == "Éclair d'été (copie)"
+	_resultat(ok, "Plusieurs vaisseaux, chacun son nom", "%s → %s (l'ancien fichier est parti) ; même nom : %s ; copie : %s" % [
+		chemin.get_file(), renomme.get_file(), autre.chemin.get_file(), ed.chemin.get_file()])
+	# le fichier se lit à l'œil : listes de nombres sur une ligne
+	var texte := FileAccess.get_file_as_string(renomme)
+	ok = texte.contains("\"position\": [") and not texte.contains("[\n\t\t\t\t\t2") and texte.length() > 1000
+	_resultat(ok, "Fichier du vaisseau lisible", "%d caractères, nombres groupés : %s" % [texte.length(), texte.substr(texte.find("\"position\""), 40).replace("\n", " ")])
+
+
+# =====================================================================
+# ÉTAPE 3 — D. LE DESSIN (le même dans l'atelier et dans le jeu)
+# =====================================================================
+func _tests_dessin() -> void:
+	var ed = _ed_depart()
+	var ids: Array = ed.ajouter("moteur_ionique", {"poussee_kn": 200.0}, Transform3D(Basis.IDENTITY, Vector3(2.6, -0.45, 2.4)), "Aile_bas_droit", "aile_bas_droit", true)
+	ed.ajouter("propulseur", {}, Transform3D(Basis.IDENTITY, Vector3(0.0, 1.2, -1.0)), "Fuselage")
+	ed.supprimer(["module:aile_haut_gauche", "module:rcs_nez_haut", "module:droide"])
+	var p = ed.plan()
+	var v = VaisseauPhysique.new(p)
+	var ext: Node3D = (load("res://modeles/vaisseau/vaisseau_exterieur.glb") as PackedScene).instantiate()
+	var dr: Node3D = (load("res://modeles/vaisseau/droide.glb") as PackedScene).instantiate()
+	(ext.find_child("Point_droide", true, false) as Node3D).add_child(dr)
+	var mv = ModeleVaisseau.new(ext, v)
+	var d = DessinVaisseau.new(ext, mv, dr)
+	d.construire(p, v)
+	var caches: Array = d.caches.map(func(m): return String(m.name))
+	var ok: bool = caches.has("Aile_haut_gauche") and caches.has("Lueur_moteur_aile_haut_gauche") and caches.has("Panache_moteur_aile_haut_gauche") \
+		and caches.has("Emplacement_droide") and not dr.visible and not caches.has("Aile_haut_droit") and not caches.has("Fuselage") \
+		and (caches.has("Lueur_rcs_nez_haut") or caches.has("Lueur_rcs_nez_bas"))
+	_resultat(ok, "Dessin : un module enlevé disparaît (avec ses lueurs et ses jets)", "cachés : %s ; droïde caché : %s" % [", ".join(caches), not dr.visible])
+	# les pièces posées : dessinées, leurs lueurs et jets reliés au bon moteur de la physique
+	var par_id := {}
+	for t in v.moteurs + v.rcs:
+		par_id[String(t["id"])] = t
+	var relies := 0
+	var brillants := 0
+	for id in d.lueurs_ajouts:
+		for mi in d.lueurs_ajouts[id]:
+			brillants += 1
+			if par_id.has(String(mi.get_meta("extras", {}).get("id_physique", ""))):
+				relies += 1
+	ok = d.ajouts.size() == 3 and brillants == 6 and relies == 6 and (d.maillages_ajouts[ids[0]] as Array).size() >= 3
+	_resultat(ok, "Dessin : pièces posées, lueurs et jets reliés à leur moteur", "%d pièces dessinées, %d lueurs et jets, %d reliés à la physique" % [d.ajouts.size(), brillants, relies])
+	# un moteur posé sur une aile la suit : dessin et physique au même endroit, ailes ouvertes et repliées
+	var ecarts := []
+	ok = true
+	for ailes in [1.0, 0.0, 0.5]:
+		v.ailes = ailes
+		mv.poser(v)
+		var n: Node3D = d.ajouts[ids[1]]
+		var dessine: Vector3 = DessinVaisseau._relatif(n, ext).origin
+		var physique: Vector3 = v.transformation_articulation("aile_bas_gauche") * Catalogue.vecteur(ed.element(ids[1])["position"])
+		var poussee := {}
+		for m in v.moteurs:
+			if m["id"] == ids[1] + "/poussee":
+				poussee = m
+		v._placer_propulseurs()
+		var tuyere_dessin: Vector3 = DessinVaisseau._relatif(n, ext) * Vector3(0, 0, Pieces.dimensions_ionique(200.0).y * 0.5)
+		var e := dessine.distance_to(physique) + tuyere_dessin.distance_to(poussee["position"])
+		ok = ok and e < 1e-3
+		ecarts.append("ailes %.1f : %.2f mm" % [ailes, e * 1000.0])
+	_resultat(ok, "Dessin : une pièce posée sur une aile suit l'aile", ", ".join(ecarts))
+	ext.free()
+
+
+# =====================================================================
+# ÉTAPE 3 — E. VAISSEAUX LIMITES : rien ne casse
+# =====================================================================
+func _tests_vaisseaux_limites() -> void:
+	var ed = _ed_depart()
+	var mods: Array = ed.modules().keys()
+	ed.supprimer(mods.map(func(m): return "module:" + m))
+	var p = ed.plan()
+	var v = VaisseauPhysique.new(p)
+	v.gm = GRAVITE_SURFACE * RAYON_PLANETE * RAYON_PLANETE
+	v.rayon_planete = RAYON_PLANETE
+	v.poser_au_sol(Vector3.UP, Vector3.FORWARD, 1.0)
+	var a = Analyse.new(p)
+	var t: Dictionary = a.tableau()
+	var finis: bool = is_finite(v.masse) and is_finite(v.centre_gravite.length()) and is_finite(v.py) and is_finite(v.inertie.length()) \
+		and is_finite(float(t["poussee_poids"])) and is_finite(v.couple_max.length())
+	v.commander(1.0, 0.5, 0.5, 0.5)
+	for i in 120:
+		v.pas(1.0 / 120.0)
+	finis = finis and is_finite(v.py) and is_finite(v.omega.length())
+	var ok: bool = p.valide() and finis and v.moteurs.is_empty() and v.masse > 0.0 and a.tuiles().size() == 7
+	_resultat(ok, "Vaisseau limite : rien que le cockpit", "%d pièces, %.0f kg, aucun moteur ; posé, 1 s de vol à fond : tout reste fini (%s)" % [
+		p.pieces.size(), v.masse, "oui" if finis else "NON"])
+	# un seul moteur, loin du centre : le tableau le dit (couple trop fort pour les propulseurs ?)
+	var ed2 = _ed_depart()
+	ed2.supprimer(["module:moteur_central", "module:aile_haut_gauche", "module:aile_haut_droit", "module:aile_bas_gauche", "module:aile_bas_droit"])
+	ed2.ajouter("moteur_ionique", {"poussee_kn": 600.0}, Transform3D(Basis.IDENTITY, Vector3(3.0, 0.0, 2.0)), "Fuselage")
+	var a2 = Analyse.new(ed2.plan())
+	var t2: Dictionary = a2.tableau()
+	ok = is_finite(float(t2["poussee_avant"])) and float(t2["decalage_poussee"]) > 1.0 and not bool(t2["couple_compense"]) \
+		and float(t2["poussee_avant"]) < 600000.0 and float(t2["poussee_avant"]) > 0.0
+	_resultat(ok, "Vaisseau limite : un seul moteur sur le côté", "poussée à %.2f m du centre de gravité ; les propulseurs compensent : %s ; poussée utilisable sans partir en vrille %.0f kN sur 600 (%d moteur principal)" % [
+		float(t2["decalage_poussee"]), "oui" if bool(t2["couple_compense"]) else "non", float(t2["poussee_avant"]) / 1000.0, int(t2["moteurs_principaux"])])
+
+
+# =====================================================================
+# ÉTAPE 3 — F. LE CALCUL DE LA POSE (grille, orientation, contact)
+# =====================================================================
+func _tests_pose_calcul() -> void:
+	# repère aligné sur la surface : l'axe d'attache suit la normale, les autres restent droits
+	var ok := true
+	var lignes := []
+	for n in [Vector3.UP, Vector3.DOWN, Vector3.RIGHT, Vector3.LEFT, Vector3(0.6, 0.8, 0.0), Vector3(0.0, 0.6, -0.8)]:
+		for axe in 3:
+			var b: Basis = AtelierScript.base_alignee(axe, n)
+			var orth: bool = absf(b.x.dot(b.y)) < 1e-5 and absf(b.x.dot(b.z)) < 1e-5 and absf(b.y.dot(b.z)) < 1e-5 \
+				and absf(absf(b.determinant()) - 1.0) < 1e-5 and b[axe].distance_to(n.normalized()) < 1e-5
+			ok = ok and orth
+	# une aile posée à gauche est l'image en miroir de l'aile posée à droite
+	var droite: Basis = AtelierScript.base_alignee(0, Vector3.RIGHT)
+	var gauche: Basis = AtelierScript.base_alignee(0, Vector3.LEFT)
+	ok = ok and droite.determinant() > 0.0 and gauche.determinant() < 0.0 and gauche.y.is_equal_approx(Vector3.UP) and droite.y.is_equal_approx(Vector3.UP)
+	lignes.append("repères droits pour 6 surfaces × 3 axes ; aile à gauche = miroir de l'aile à droite")
+	# grille de 10 cm le long de la surface, sans quitter son plan
+	var g: Vector3 = AtelierScript.sur_grille(Vector3(0.537, 1.0, -2.461), Vector3.UP)
+	ok = ok and g.distance_to(Vector3(0.5, 1.0, -2.5)) < 1e-6
+	var n2 := Vector3(0.0, 0.6, -0.8)
+	var g2: Vector3 = AtelierScript.sur_grille(Vector3(0.33, 1.0, 1.0), n2)
+	ok = ok and absf((g2 - Vector3(0.33, 1.0, 1.0)).dot(n2)) < 1e-6
+	lignes.append("grille : (0,537 ; 1 ; −2,461) → %s" % Analyse.vecteur_txt(g))
+	# rotation par pas de 15° autour de la normale
+	var b0: Basis = AtelierScript.orientation_pose("propulseur", Vector3.UP, Vector3i.ZERO)
+	var b1: Basis = AtelierScript.orientation_pose("propulseur", Vector3.UP, Vector3i(1, 0, 0))
+	var angle := rad_to_deg(b0.z.angle_to(b1.z))
+	ok = ok and absf(angle - 15.0) < 1e-3 and b1.y.is_equal_approx(Vector3.UP)
+	lignes.append("R : %.1f° autour de la normale" % angle)
+	_resultat(ok, "Pose : orientation, grille de 10 cm, pas de 15°", " ; ".join(lignes))
+
+
+# =====================================================================
+# ÉTAPE 3 — G. L'ÉCRAN : poser, pièce qui flotte, Lancer refusé, enlever, enregistrer
+# =====================================================================
+func _attendre_atelier() -> void:
+	for i in 2:
+		await get_tree().process_frame
+	for i in 5:
+		await get_tree().physics_frame
+
+
+## Rayon (repère du monde) qui tombe d'en haut sur le centre d'un maillage, ou qui vient de côté.
+static func _rayon_vers(mi: MeshInstance3D, dir: Vector3) -> Array:
+	var c: Vector3 = (mi.global_transform * mi.get_aabb()).get_center()
+	return [c - dir.normalized() * 30.0, dir.normalized()]
+
+
+func _tests_ecran_etape3() -> void:
+	_vider_dossier(DOSSIER_ESSAI)
+	var at = (load(SCENE_ATELIER) as PackedScene).instantiate()
+	at.dossier_vaisseaux = DOSSIER_ESSAI
+	add_child(at)
+	await _attendre_atelier()
+	at.case_symetrie.button_pressed = true
+	var n_pieces: int = at.plan.pieces.size()
+	var masse0: float = at.analyse.masse_totale
+	# 1. poser un propulseur sur l'aile haute droite (repliée dans le hangar), à la souris : sa jumelle part
+	#    sur l'aile haute gauche
+	at.commencer_pose("propulseur", {})
+	var aile: MeshInstance3D = at.maillages["Aile_haut_droit"][0]
+	var r: Array = _rayon_vers(aile, Vector3.DOWN)
+	at.calculer_pose_rayon(r[0], r[1])
+	var pose_ok: bool = bool(at.pose["touche"]) and String(at.pose["fixe_a"]) == "Aile_haut_droit" and String(at.pose["articulation"]) == "aile_haut_droit"
+	var fantome_vert: bool = at._fantome != null and at._fantome.visible and at._fantome_jumeau.visible
+	at.valider_pose()
+	await _attendre_atelier()
+	var ajouts: Array = at.edition.ajouts()
+	var ok: bool = pose_ok and fantome_vert and ajouts.size() == 2 and at.plan.pieces.size() == n_pieces + 4 and at.pose.is_empty() \
+		and at.analyse.masse_totale > masse0 and at.nb_flottantes == 0 and at.maillages.has(String(ajouts[0]["id"])) \
+		and String(at.selection.get("id", "")) == String(ajouts[0]["id"]) and at.fiche.visible
+	_resultat(ok, "Écran : poser une pièce à la souris (avec sa jumelle)", "posée sur %s (aile repliée), jumelle sur %s ; %d pièces posées, masse %.1f → %.1f kg ; rien ne flotte : %s ; fiche « %s »" % [
+		ajouts[0].get("fixe_a", "?") if ajouts.size() > 0 else "?", ajouts[1].get("fixe_a", "?") if ajouts.size() > 1 else "?", ajouts.size(),
+		masse0, at.analyse.masse_totale, at.nb_flottantes == 0, at.fiche_titre.text])
+	# le dessin de la pièce posée est cliquable
+	var id1 := String(ajouts[0]["id"]) if ajouts.size() > 0 else ""
+	var mi1: MeshInstance3D = at.maillages[id1][0] if at.maillages.has(id1) else null
+	var touche := ""
+	if mi1 != null:
+		var r1: Array = _rayon_vers(mi1, Vector3.DOWN)
+		var rr: Dictionary = at._rayon_monde(r1[0], r1[1])
+		touche = String(rr["collider"].get_meta("piece", "")) if not rr.is_empty() else ""
+	_resultat(touche == id1, "Écran : une pièce posée se choisit d'un clic", "sous la souris : « %s »" % touche)
+	# 2. une pièce posée dans le vide : rouge, et « Lancer » refusé
+	at.commencer_pose("boite", {})
+	var haut_pilote: Vector3 = at.pilote.global_position + at.corps.global_transform.basis * Vector3(7.0, 4.0, 0.0)
+	at.calculer_pose_rayon(haut_pilote - Vector3(0, 0, 40.0), Vector3(0, 0, 1))   # passe loin au-dessus de l'aile : ne touche rien
+	var rouge_fantome: bool = not bool(at.pose["touche"]) and (at._fantome.get_child(0) as MeshInstance3D).material_override == at._materiau_fantome_rouge
+	at.valider_pose()
+	await _attendre_atelier()
+	var boite_id := ""
+	for e in at.edition.ajouts():
+		if e["modele"] == "boite":
+			boite_id = String(e["id"])
+	var mb: MeshInstance3D = at.maillages[boite_id][0] if at.maillages.has(boite_id) else null
+	at.deselectionner()
+	var rouge: bool = mb != null and mb.material_overlay == at._materiau_flotte
+	var lance := true
+	if at.nb_flottantes > 0:   # sinon « Lancer » partirait vraiment dans le jeu
+		lance = await at.lancer_jeu()
+	ok = rouge_fantome and at.nb_flottantes == 2 and at.flottantes.has(boite_id) and rouge and not lance and at.avis.visible \
+		and not at.chargement.visible
+	_resultat(ok, "Écran : une pièce qui ne touche rien est rouge, « Lancer » refusé", "fantôme rouge : %s ; %d pièces flottent (la boîte et sa jumelle), dessinées en rouge : %s ; Lancer : %s (« %s »)" % [
+		rouge_fantome, at.nb_flottantes, rouge, "refusé" if not lance else "ACCEPTÉ", at.texte_avis.text.left(70)])
+	# 3. Ctrl + Z : la pièce part, plus rien ne flotte
+	at.annuler()
+	await _attendre_atelier()
+	ok = at.edition.ajouts().size() == 2 and at.nb_flottantes == 0
+	_resultat(ok, "Écran : annuler (Ctrl + Z)", "%d pièces posées, %d flotte(nt)" % [at.edition.ajouts().size(), at.nb_flottantes])
+	# 4. enlever un module : le train avant ; le vaisseau se repose (sur son nez), la pièce sur l'aile tient toujours
+	var roue: MeshInstance3D = at.maillages["Roue_avant"][0]
+	at.choisir("module", "train_avant")
+	var orange: bool = roue.material_overlay == at._materiau_surligne
+	at.supprimer_selection()
+	await _attendre_atelier()
+	ok = orange and not at.maillages.has("Roue_avant") and roue.mesh == null and at.vaisseau_pose.roues.size() == 2 \
+		and at.vaisseau_pose.au_sol and is_finite(at.vaisseau_pose.py) and at.nb_flottantes == 0
+	_resultat(ok, "Écran : enlever un module du chasseur", "train avant enlevé (roue cachée : %s) ; posé sur %d roues et la coque : %s ; rien ne flotte : %s" % [
+		roue.mesh == null, at.vaisseau_pose.roues.size(), at.vaisseau_pose.au_sol, at.nb_flottantes == 0])
+	at.annuler()
+	await _attendre_atelier()
+	ok = at.maillages.has("Roue_avant") and roue.mesh != null and at.vaisseau_pose.roues.size() == 3 and absf(at.hauteur_roues()) < 0.02
+	_resultat(ok, "Écran : le module revient (Ctrl + Z)", "roue avant de retour, posé sur 3 roues (%.1f mm du sol)" % (at.hauteur_roues() * 1000.0))
+	# 5. sans fuselage, tout le reste tombe : en rouge
+	at.choisir("module", "fuselage")
+	at.supprimer_selection()
+	await _attendre_atelier()
+	var n_flotte: int = at.nb_flottantes
+	var aile_rouge: bool = (at.maillages["Aile_bas_droit"][0] as MeshInstance3D).material_overlay == at._materiau_flotte
+	at.annuler()
+	await _attendre_atelier()
+	_resultat(n_flotte > 10 and aile_rouge and at.nb_flottantes == 0, "Écran : sans fuselage, le reste ne tient plus", "%d modules et pièces flottent, ailes en rouge : %s ; remis : %d" % [
+		n_flotte, aile_rouge, at.nb_flottantes])
+	# 6. régler dans la fiche : le tableau ingénieur suit
+	at.choisir("ajout", id1)
+	var spin: SpinBox = null
+	for c in at.fiche_outils.find_children("*", "SpinBox", true, false):
+		spin = c
+		break
+	var tuile_avant := String((at.tableau.get_child(0).find_children("*", "Label", true, false)[1] as Label).text)
+	var case_trouvee := spin != null
+	if case_trouvee:
+		spin.value = 12.0
+	await _attendre_atelier()
+	var tuile_apres := String((at.tableau.get_child(0).find_children("*", "Label", true, false)[1] as Label).text)
+	var reglage: float = float(at.edition.element(id1)["reglages"]["poussee_kn"])
+	ok = case_trouvee and absf(reglage - 12.0) < 1e-6 and tuile_avant != tuile_apres
+	_resultat(ok, "Écran : régler une pièce dans sa fiche", "poussée %.3f kN (case trouvée : %s) ; masse du tableau %s → %s" % [reglage, case_trouvee, tuile_avant, tuile_apres])
+	# 7. déplacer (G) : la pièce et sa jumelle changent de place ensemble
+	at.deplacer_selection()
+	var fus: MeshInstance3D = at.maillages["Fuselage"][0]
+	var b_fus: AABB = fus.global_transform * fus.get_aabb()
+	at.calculer_pose_rayon(b_fus.get_center() + Vector3(0.6, 30.0, 0.0), Vector3.DOWN)
+	var sur := String(at.pose.get("fixe_a", ""))
+	at.valider_pose()
+	await _attendre_atelier()
+	var e1: Dictionary = at.edition.element(id1)
+	var e2: Dictionary = at.edition.element(String(e1.get("symetrique", "")))
+	ok = sur != "" and not sur.begins_with("Aile") and String(e1.get("fixe_a", "")) == sur and not e2.is_empty() \
+		and String(e2.get("fixe_a", "")) == sur \
+		and absf(Catalogue.vecteur(e1["position"]).x + Catalogue.vecteur(e2["position"]).x) < 1e-5 and at.nb_flottantes == 0
+	_resultat(ok, "Écran : déplacer une pièce (G)", "maintenant sur %s, en %s ; jumelle en %s" % [e1.get("fixe_a", ""),
+		Analyse.vecteur_txt(e1.get("position", [0, 0, 0])), Analyse.vecteur_txt(e2.get("position", [0, 0, 0]))])
+	# 8. enregistrer (Ctrl + S) : fichier écrit, c'est lui que le jeu chargera
+	var enregistre: bool = at.enregistrer()
+	var chemin: String = at.edition.chemin
+	ok = enregistre and FileAccess.file_exists(chemin) and Partie.plan_choisi() == chemin and not at.edition.modifie \
+		and chemin.begins_with(DOSSIER_ESSAI)
+	_resultat(ok, "Écran : enregistrer", "%s (le jeu prendra ce vaisseau)" % chemin.get_file())
+	at.queue_free()
+	await get_tree().process_frame

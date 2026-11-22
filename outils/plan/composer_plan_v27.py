@@ -32,6 +32,64 @@ ARTICULATION_DE = {
     "Moteur_levage_gauche": "verin_levage_gauche", "Moteur_levage_droit": "verin_levage_droit",
 }
 
+# MODULES (atelier, étape 3) : le chasseur est découpé en morceaux qu'on choisit (et qu'on enlève) d'un seul
+# coup dans l'atelier : une aile avec son réacteur, ses propulseurs et ses plaques d'air ; le canon avec ses
+# munitions ; un propulseur avec sa buse… Chaque pièce porte le nom de son module (« module »).
+MODULES = {
+    "fuselage": "Fuselage et coque",
+    "cockpit": "Cockpit",
+    "aile_haut_gauche": "Aile haut gauche", "aile_haut_droit": "Aile haut droite",
+    "aile_bas_gauche": "Aile bas gauche", "aile_bas_droit": "Aile bas droite",
+    "moteur_central": "Moteur central et tuyère",
+    "moteurs_levage": "Moteurs de levage",
+    "canons": "Canons",
+    "equipements": "Équipements de bord",
+    "droide": "Droïde et son logement",
+    "train_avant": "Train avant",
+    "train_arriere_gauche": "Train arrière gauche", "train_arriere_droit": "Train arrière droit",
+    "buses": "Buses encastrées",
+}
+for _p in ("nez_haut", "nez_bas", "nez_gauche", "nez_droit", "queue_haut", "queue_bas", "queue_gauche", "queue_droit"):
+    MODULES["rcs_" + _p] = "Propulseur " + _p.replace("_", " ")
+
+PREFIXES_MODULE = [   # début du nom de la pièce → module (le premier qui convient)
+    ("Cockpit", "cockpit"), ("Ecran", "cockpit"), ("Levier", "cockpit"), ("Manche", "cockpit"),
+    ("Pedale", "cockpit"), ("Poignee", "cockpit"), ("Verriere", "cockpit"), ("Masse_pilote", "cockpit"),
+    ("Canons", "canons"), ("Masse_canons", "canons"),
+    ("Moteur_central", "moteur_central"), ("Masse_moteur_central", "moteur_central"), ("Tuyere", "moteur_central"),
+    ("moteur_central", "moteur_central"),
+    ("Moteur_levage", "moteurs_levage"), ("moteur_levage", "moteurs_levage"), ("Masse_moteurs_levage", "moteurs_levage"),
+    ("Puits_moteur_levage", "moteurs_levage"), ("Trappe_levage", "moteurs_levage"),
+    ("Masse_avionique", "equipements"), ("Masse_survie", "equipements"), ("Masse_droide", "droide"),
+    ("Emplacement_droide", "droide"),
+    ("Jambe_avant", "train_avant"), ("Fourche_avant", "train_avant"), ("Roue_avant", "train_avant"),
+    ("roue_avant", "train_avant"), ("Trappe_avant", "train_avant"), ("Puits_train_avant", "train_avant"),
+    ("RCS_integres", "buses"), ("buse_", "buses"),
+]
+
+
+def module_de(p, rcs_points):
+    """Module d'une pièce du chasseur."""
+    id_ = p["id"]
+    art = p.get("articulation", "")
+    if art.startswith("aile_"):
+        return art
+    for cote in ("gauche", "droit"):
+        if id_.endswith("arriere_" + cote) and not id_.startswith("coque_"):
+            return "train_arriere_" + cote
+    if id_.startswith("rcs_"):
+        return id_
+    if id_.startswith("RCS_") and id_ != "RCS_integres":
+        # le dessin de chaque propulseur : le plus proche (les noms haut / bas du nez sont inversés dans le
+        # modèle Blender, la position ne trompe pas)
+        c = p["centre"]
+        return min(rcs_points, key=lambda k: sum((a - b) ** 2 for a, b in zip(rcs_points[k], c)))
+    for debut, m in PREFIXES_MODULE:
+        if id_.startswith(debut):
+            return m
+    return "fuselage"
+
+
 # ---------------------------------------------------------------------------------------------------
 # Ailes (anciennes constantes AILES) : charnière parallèle à l'axe avant-arrière (axe Z), angle en
 # degrés autour de +Z, de « replié » (commande 0) à « ouvert » (commande 1).
@@ -177,6 +235,10 @@ def plan():
         pieces.append({"id": "air_derive_" + cote, "type": "surface_air", "point": [x, 1.2, 3.0],
                        "normale": [1.0, 0.0, 0.0], "surface_m2": 1.2, "allongement": 1.4, "groupe": "derive_" + cote})
 
+    rcs_points = {p["id"]: p["point"] for p in pieces if p["id"].startswith("rcs_") and not p["id"].startswith("rcs_bout")}
+    for p in pieces:
+        p["module"] = module_de(p, rcs_points)
+
     articulations = []
     for nom, (ch, replie, ouvert) in AILES.items():
         articulations.append({"id": "aile_" + nom, "type": "charniere", "nom": "aile " + nom.replace("_", " "),
@@ -202,6 +264,7 @@ def plan():
             "train": {"nom": "train d'atterrissage", "duree_s": 3.0, "depart": 0.0, "reference": 0.0},
             "vertical": {"nom": "vol vertical", "duree_s": 4.0, "depart": 0.0, "reference": 0.0},
         },
+        "modules": MODULES,
         "articulations": articulations,
         "coque": {"longueur_m": 10.3, "rayon_nez_m": 0.3, "capacite_thermique_j_m2_k": 25000.0, "emissivite": 0.85,
                   "temperature_limite_k": 1900.0, "raideur_n_m": 1500000.0, "amorti_n_s_m": 60000.0,

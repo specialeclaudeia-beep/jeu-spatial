@@ -219,6 +219,8 @@ func _construire() -> void:
 			"poussee_n": float(p["poussee_n"]), "poussee_max": float(p["poussee_n"]), "actuel": 0.0, "aile": aile,
 			"articulation": art if articulations.has(art) else "", "pos_ref": p["point"], "dir_ref": p["direction"],
 			"seulement_sorti": bool(p.get("seulement_sorti", false))}
+		if p.has("nom_ajout"):
+			e["nom_ajout"] = String(p["nom_ajout"])   # pièce posée dans l'atelier : son nom (« Moteur ionique 1 droite »)
 		if t == "moteur":
 			e["consigne"] = 0.0
 			e["role"] = String(p.get("role", "principal"))
@@ -244,6 +246,9 @@ static func _inverse_3x3(m: PackedFloat64Array) -> PackedFloat64Array:
 	var c01 := m[5] * m[6] - m[3] * m[8]
 	var c02 := m[3] * m[7] - m[4] * m[6]
 	var det := m[0] * c00 + m[1] * c01 + m[2] * c02
+	if absf(det) < 1e-12:
+		# (vaisseau vide, ou toute sa masse en un point : il ne peut pas tourner)
+		return PackedFloat64Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 	return PackedFloat64Array([c00 / det, (m[2] * m[7] - m[1] * m[8]) / det, (m[1] * m[5] - m[2] * m[4]) / det,
 		c01 / det, (m[0] * m[8] - m[2] * m[6]) / det, (m[2] * m[3] - m[0] * m[5]) / det,
 		c02 / det, (m[1] * m[6] - m[0] * m[7]) / det, (m[0] * m[4] - m[1] * m[3]) / det])
@@ -269,7 +274,8 @@ const SEUIL_ROTATION := 0.6
 
 
 func _trouver_roles() -> void:
-	var giration := Vector3(sqrt(inertie.x / masse), sqrt(inertie.y / masse), sqrt(inertie.z / masse))
+	var m := maxf(masse, 1e-6)   # (un vaisseau de l'atelier peut être vide)
+	var giration := Vector3(maxf(sqrt(inertie.x / m), 1e-6), maxf(sqrt(inertie.y / m), 1e-6), maxf(sqrt(inertie.z / m), 1e-6))
 	for t in rcs:
 		var bras: Vector3 = ((t["pos_ref"] as Vector3) - centre_gravite).cross(t["dir_ref"])   # couple par newton (m)
 		var effet := Vector3(absf(bras.x) / giration.x, absf(bras.y) / giration.y, absf(bras.z) / giration.z)
@@ -354,6 +360,28 @@ func sortie_levage() -> float:
 
 func angle_tuyere() -> float:
 	return float(_tuyere["angle_1_deg"]) * progression(_tuyere) if not _tuyere.is_empty() else 0.0
+
+
+## Déplacement d'une articulation entre la pose de référence du plan et la pose actuelle (repère du
+## vaisseau) : une pièce posée sur elle est à transformation_articulation(id) × (sa place dans le plan).
+## Sert à l'atelier (une pièce posée sur une aile repliée) ; la tuyère est comptée d'un seul bloc.
+func transformation_articulation(id: String) -> Transform3D:
+	if not articulations.has(id):
+		return Transform3D.IDENTITY
+	var a: Dictionary = articulations[id]
+	var p := progression(a)
+	match String(a["type"]):
+		"charniere":
+			var rot := Basis(a["axe"], deg_to_rad(lerpf(float(a["angle_0_deg"]), float(a["angle_1_deg"]), p) - float(a["angle_ref"])))
+			var c: Vector3 = a["point"]
+			return Transform3D(rot, c - rot * c)
+		"tuyere_anneaux":
+			var rot2 := Basis(a["axe"], deg_to_rad(float(a["angle_1_deg"]) * (p - float(a["progression_ref"]))))
+			var c2: Vector3 = a["pivot"]
+			return Transform3D(rot2, c2 - rot2 * c2)
+		"verin":
+			return Transform3D(Basis.IDENTITY, (a["course"] as Vector3) * (p - float(a["progression_ref"])))
+	return Transform3D.IDENTITY
 
 
 ## Place les propulseurs posés sur une pièce mobile (aile, tuyère, vérin) selon les commandes actuelles.
@@ -479,7 +507,7 @@ func _preparer_repartition() -> void:
 		if (absf(d0.x) > 1e-6 or absf(d0.y) > 1e-6) and float(t["poussee_max"]) > 0.0:
 			f_cote = minf(f_cote, float(t["poussee_max"]))
 	if f_cote == INF:
-		f_cote = _poussee_borne
+		f_cote = maxf(_poussee_borne, 1.0)   # (un vaisseau sans aucun propulseur : échelle de 1 N)
 	_echelle_force = f_cote
 	_colonnes.clear()
 	_niveaux.resize(_tous.size())
@@ -487,9 +515,11 @@ func _preparer_repartition() -> void:
 		var t = _tous[i]
 		var f: Vector3 = (t["direction"] as Vector3) * float(t["poussee_max"])
 		var c2: Vector3 = (t["position"] as Vector3 - centre_gravite).cross(f)
+		# (un vaisseau de l'atelier peut n'avoir aucun propulseur pour tourner sur un axe : 1 N·m d'échelle)
 		_colonnes.append(PackedFloat64Array([
 			f.x / f_cote, f.y / f_cote, f.z / f_cote,
-			POIDS_ROTATION * c2.x / couple_max.x, POIDS_ROTATION * c2.y / couple_max.y, POIDS_ROTATION * c2.z / couple_max.z]))
+			POIDS_ROTATION * c2.x / maxf(couple_max.x, 1.0), POIDS_ROTATION * c2.y / maxf(couple_max.y, 1.0),
+			POIDS_ROTATION * c2.z / maxf(couple_max.z, 1.0)]))
 		_niveaux[i] = 0.0
 
 
@@ -1772,7 +1802,9 @@ func poser_au_sol(haut_planete: Vector3, avant_planete: Vector3, duree_calage :=
 	var cx := sx + n.x * e
 	var cy := sy + n.y * e
 	var cz := sz + n.z * e
-	var roues_corps: Array = roues.map(func(r): return (r as Vector3) - centre_gravite)
+	# (un vaisseau de l'atelier sans roues se pose sur sa coque, ou sur son centre s'il n'a rien d'autre)
+	var appuis: Array = roues if not roues.is_empty() else (coque_points if not coque_points.is_empty() else [centre_gravite])
+	var roues_corps: Array = appuis.map(func(r): return (r as Vector3) - centre_gravite)
 	var n_roues := _normale_points(roues_corps, Vector3.UP)
 	for essai in 6:
 		var ecart_min := INF

@@ -8,6 +8,7 @@ extends RefCounted
 ##    "commandes": {"ailes": {…}, "train": {…}, "vertical": {…}},   durées des mouvements
 ##    "articulations": [ … ],                                          pièces mobiles (charnières, vérins…)
 ##    "coque": {…}, "air": {…},                                        réglages d'ensemble de la coque
+##    "modules": {clé: nom lisible},                                   morceaux du vaisseau (atelier)
 ##    "pieces": [ {"id": …, "type": …, …}, … ]}
 ## Les types de pièces et d'articulations sont décrits dans scripts/atelier/catalogue.gd.
 ##
@@ -21,7 +22,9 @@ extends RefCounted
 
 const Catalogue = preload("res://scripts/atelier/catalogue.gd")
 const FORMAT := "plan-vaisseau"
-const VERSION := 1
+## Version 2 (atelier, étape 3) : pièces toutes faites (ensembles avec « modele » et « reglages »), type
+## « bloc », modules. Un plan de version 1 se lit toujours.
+const VERSION := 2
 const PLAN_PAR_DEFAUT := "res://vaisseaux/chasseur_v27.plan.json"
 
 var donnees := {}                  # le plan tel qu'il est écrit
@@ -175,7 +178,13 @@ func _aplatir(liste: Array, arts: Array, xf: Transform3D, prefixe: String, art_h
 			if bool(p.get("miroir_x", false)):
 				b = b * Basis(Vector3(-1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1))
 			var xf2 := xf * Transform3D(b, Catalogue.vecteur(p.get("position", [0.0, 0.0, 0.0])))
+			var debut := pieces.size()
 			_aplatir(sous_pieces, sous_arts, xf2, id + "/", art, profondeur + 1)
+			if p.has("modele"):
+				# pièce toute faite posée dans l'atelier : ses morceaux savent de quelle pièce ils viennent
+				for k in range(debut, pieces.size()):
+					pieces[k]["ajout"] = id
+					pieces[k]["nom_ajout"] = String(p.get("nom", id))
 			continue
 		pieces.append(_placer_piece(p, xf, id, art))
 

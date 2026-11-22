@@ -7,8 +7,11 @@ extends RefCounted
 ## Rien n'est recopié : tout vient du plan (scripts/atelier/plan.gd) et de la physique du vaisseau
 ## (scripts/physique/vaisseau_physique.gd), construite à partir de ce plan exactement comme dans le jeu.
 ## Pas de carburant : la masse ne change jamais.
+## Étape 3 : les pièces toutes faites posées dans l'atelier (catégorie « Pièces ajoutées ») et les modules
+## du chasseur ont aussi leur fiche.
 
 const Catalogue = preload("res://scripts/atelier/catalogue.gd")
+const Pieces = preload("res://scripts/atelier/pieces_toutes_faites.gd")
 const Plan = preload("res://scripts/atelier/plan.gd")
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
 
@@ -25,6 +28,7 @@ const CATEGORIES := [
 	["equipements", "Équipements (masses)"],
 	["air", "Surfaces d'air"],
 	["contact", "Points de contact de la coque"],
+	["ajouts", "Pièces ajoutées"],
 ]
 
 ## Pièces de structure (venues de Blender) : catégorie d'après le début de leur nom.
@@ -46,12 +50,17 @@ const MOTS := {
 	"integres": "intégrés", "systeme": "système", "rcs": "RCS", "d": "droit", "g": "gauche",
 }
 
+## Morceaux d'une pièce toute faite (scripts/atelier/pieces_toutes_faites.gd) → mots affichés.
+const MORCEAUX := {"corps": "corps", "poussee": "poussée", "air": "surface d'air", "poutre": "poutre",
+	"plaque": "plaque", "boite": "boîte", "reservoir": "réservoir"}
+
 var plan
 var v               # physique du vaisseau (comme dans le jeu, sans planète : pose de référence)
 var masse_totale := 0.0
 var _par_id := {}   # id → pièce du plan (mise à plat)
 var _rcs_par_id := {}
 var _moteur_par_id := {}
+var ajouts := {}    # id d'une pièce posée dans l'atelier → son ensemble dans le plan (modèle, réglages…)
 
 
 func _init(p_plan = null) -> void:
@@ -60,6 +69,9 @@ func _init(p_plan = null) -> void:
 	masse_totale = v.masse
 	for p in plan.pieces:
 		_par_id[p["id"]] = p
+	for e in plan.donnees.get("pieces", []):
+		if e is Dictionary and e.has("modele"):
+			ajouts[String(e["id"])] = e
 	for t in v.rcs:
 		_rcs_par_id[t["id"]] = t
 	for m in v.moteurs:
@@ -143,6 +155,8 @@ static func _texte_couple(t: Dictionary) -> String:
 # CATALOGUE : CATÉGORIES, NOMS, RECHERCHE
 # =====================================================================
 static func categorie(p: Dictionary) -> String:
+	if p.has("ajout"):
+		return "ajouts"
 	match String(p.get("type", "")):
 		"moteur":
 			return "moteurs"
@@ -184,6 +198,9 @@ func pieces_par_categorie() -> Dictionary:
 
 ## « Aile_haut_gauche » → « Aile haut gauche » ; moteurs et propulseurs : leur nom du plan.
 static func nom_lisible(p: Dictionary) -> String:
+	if p.has("ajout"):
+		var morceau := String(p.get("id", "")).get_file()
+		return "%s : %s" % [String(p.get("nom_ajout", p["ajout"])), String(MORCEAUX.get(morceau, _mots(morceau)))]
 	var t := String(p.get("type", ""))
 	var id := String(p.get("id", "")).get_file()
 	var nom := String(p.get("nom", ""))
@@ -295,6 +312,10 @@ func fiche_piece(id: String) -> Dictionary:
 	var art := String(p.get("articulation", ""))
 	if art != "" and plan.articulations.has(art):
 		lignes.append(["Pièce mobile", _texte_articulation(plan.articulations[art])])
+	if p.has("module"):
+		lignes.append(["Module", nom_module(String(p["module"]))])
+	if p.has("ajout"):
+		lignes.append(["Fait partie de", String(p.get("nom_ajout", p["ajout"]))])
 	match t:
 		"moteur":
 			var e: Dictionary = _moteur_par_id.get(id, {})
@@ -340,6 +361,121 @@ func fiche_piece(id: String) -> Dictionary:
 			lignes.append(["Point", vecteur_txt(p["point"]) + " m"])
 			lignes.append(["Rôle", "endroit de la coque qui peut toucher le sol (sans le train)"])
 	return {"titre": nom_lisible(p), "sous_titre": id, "lignes": lignes, "note": String(p.get("note", ""))}
+
+
+## Masse (kg) et centre (repère du plan) d'une liste de pièces mises à plat.
+func _masse_de(ids: Array) -> Array:
+	var m := 0.0
+	var c := Vector3.ZERO
+	for i in ids:
+		var mp: Dictionary = piece(i).get("masse_calculee", {})
+		if mp.is_empty():
+			continue
+		m += float(mp["masse"])
+		c += (mp["centre"] as Vector3) * float(mp["masse"])
+	return [m, c / m if m > 0.0 else c]
+
+
+## Les morceaux (pièces mises à plat) d'une pièce posée dans l'atelier.
+func pieces_ajout(id: String) -> Array:
+	var ids := []
+	for p in plan.pieces:
+		if String(p.get("ajout", "")) == id:
+			ids.append(p["id"])
+	return ids
+
+
+## Les pièces d'un module du chasseur (ailes, train, cockpit…).
+func pieces_module(cle: String) -> Array:
+	var ids := []
+	for p in plan.pieces:
+		if not p.has("ajout") and String(p.get("module", "")) == cle:
+			ids.append(p["id"])
+	return ids
+
+
+func nom_module(cle: String) -> String:
+	return String((plan.donnees.get("modules", {}) as Dictionary).get(cle, _majuscule(_mots(cle))))
+
+
+## Nom d'une pièce de premier niveau du plan (pièce posée ou pièce du chasseur).
+func nom_element(id: String) -> String:
+	if ajouts.has(id):
+		return String(ajouts[id].get("nom", id))
+	if _par_id.has(id):
+		return nom_lisible(_par_id[id])
+	return ""
+
+
+## Masse d'une pièce posée (kg).
+func masse_ajout(id: String) -> float:
+	return float(_masse_de(pieces_ajout(id))[0])
+
+
+## Fiche d'une pièce posée dans l'atelier (pièce toute faite).
+func fiche_ajout(id: String) -> Dictionary:
+	var e: Dictionary = ajouts.get(id, {})
+	if e.is_empty():
+		return {"titre": id, "sous_titre": "pièce inconnue", "lignes": [], "note": ""}
+	var modele := String(e["modele"])
+	var r: Dictionary = Pieces.reglages_complets(modele, e.get("reglages", {}))
+	var ids := pieces_ajout(id)
+	var mc := _masse_de(ids)
+	var lignes := []
+	lignes.append(["Pièce toute faite", Pieces.nom(modele)])
+	lignes.append(["Masse", "%s kg (%s %% du vaisseau)" % [nombre(mc[0], 1), nombre(100.0 * float(mc[0]) / masse_totale, 2)]])
+	lignes.append(["Centre de la pièce", vecteur_txt(mc[1]) + " m"])
+	for i in ids:
+		var p := piece(i)
+		match String(p["type"]):
+			"moteur", "propulseur":
+				var f: Vector3 = (p["direction"] as Vector3) * float(p["poussee_n"])
+				var couple: Vector3 = ((p["point"] as Vector3) - v.centre_gravite).cross(f)
+				lignes.append(["Poussée maximale", "%s kN" % nombre(float(p["poussee_n"]) / 1000.0, 1)])
+				lignes.append(["Pousse vers", _direction_txt(p["direction"])])
+				if p["type"] == "moteur":
+					lignes.append(["Rôle", "moteur de levage (vol vertical)" if String(p.get("role", "")) == "levage" else "moteur principal"])
+					lignes.append(["Puissance du jet", "%s MW (électricité : plus tard)" % nombre(float(p["poussee_n"]) * Pieces.VITESSE_JET * 0.5 / 1.0e6)])
+				else:
+					lignes.append(["Rôle (trouvé par le calcul)", role_propulseur(_rcs_par_id.get(i, {}))])
+				lignes.append(["Couple à pleine poussée", "%s kN·m autour du centre de gravité" % nombre(couple.length() / 1000.0, 1)])
+			"surface_air":
+				lignes.append(["Surface d'air", "%s m² (allongement %s)" % [nombre(float(p["surface_m2"]), 2), nombre(float(p["allongement"]), 1)]])
+	if modele == "reservoir":
+		lignes.append(["Contenu", "%s (%s kg)" % [String(Pieces.CONTENUS[String(r["contenu"])]["nom"]),
+			nombre(float(r["volume_l"]) / 1000.0 * float(Pieces.CONTENUS[String(r["contenu"])]["densite"]))]])
+	var support := String(e.get("fixe_a", ""))
+	var nom_support := nom_element(support)
+	lignes.append(["Posée sur", nom_support if nom_support != "" else "rien (elle flotte)"])
+	var art := String(e.get("articulation", ""))
+	if art != "" and plan.articulations.has(art):
+		lignes.append(["Pièce mobile", _texte_articulation(plan.articulations[art])])
+	var sym := String(e.get("symetrique", ""))
+	if sym != "" and ajouts.has(sym):
+		lignes.append(["Jumelle (symétrie)", nom_element(sym)])
+	return {"titre": String(e.get("nom", id)), "sous_titre": "pièce posée · " + id, "lignes": lignes,
+		"note": String(Pieces.MODELES[modele]["description"]) if Pieces.existe(modele) else ""}
+
+
+## Fiche d'un module du chasseur.
+func fiche_module(cle: String, peut_enlever := true) -> Dictionary:
+	var ids := pieces_module(cle)
+	var mc := _masse_de(ids)
+	var poussee := 0.0
+	var n_propulseurs := 0
+	for i in ids:
+		var p := piece(i)
+		if p["type"] == "moteur" or p["type"] == "propulseur":
+			poussee += float(p["poussee_n"])
+			n_propulseurs += 1
+	var lignes := [["Pièces", str(ids.size())],
+		["Masse", "%s kg (%s %% du vaisseau)" % [nombre(mc[0], 1), nombre(100.0 * float(mc[0]) / masse_totale, 1)]],
+		["Centre du module", vecteur_txt(mc[1]) + " m"]]
+	if n_propulseurs > 0:
+		lignes.append(["Moteurs et propulseurs", "%d (%s kN en tout)" % [n_propulseurs, nombre(poussee / 1000.0, 1)]])
+	lignes.append(["Enlever", "oui : touche Suppr" if peut_enlever else "non : le pilote est dedans"])
+	return {"titre": nom_module(cle), "sous_titre": "module du chasseur", "lignes": lignes,
+		"note": "Un module est un morceau du chasseur qu'on enlève d'un bloc (ses pièces sont en orange). Les pièces posées dessus restent, mais ne touchent plus rien. Déplacer un module du chasseur viendra plus tard."}
 
 
 ## Rôle d'un petit propulseur, tel que la physique l'a trouvé (par le calcul du couple).

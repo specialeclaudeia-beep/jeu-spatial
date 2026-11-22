@@ -21,6 +21,7 @@ const Toile = preload("res://scripts/einstein/toile.gd")
 const Atmosphere = preload("res://scripts/physique/atmosphere.gd")
 const MoteurAudio = preload("res://scripts/son/moteur_audio.gd")
 const ModeleVaisseau = preload("res://scripts/modele_vaisseau.gd")
+const DessinVaisseau = preload("res://scripts/dessin_vaisseau.gd")
 const Partie = preload("res://scripts/partie.gd")
 const Plan = preload("res://scripts/atelier/plan.gd")
 
@@ -125,6 +126,7 @@ var camera: Camera3D
 var exterieur: Node3D                # coque, ailes, train (visible dans les deux vues)
 var cockpit: Node3D                  # intérieur du cockpit et grande verrière (vue intérieure seulement)
 var modele                           # le dessin du vaisseau mis dans la pose de sa physique (modele_vaisseau.gd)
+var dessin                           # modules enlevés et pièces posées dans l'atelier (dessin_vaisseau.gd)
 var maillages_exterieurs: Array = [] # pour couper leurs ombres en vue cockpit
 var caches_en_cockpit: Array = []    # pièces du nez (train avant, moteurs de levage) qui bouchent la vue du pilote
 var lueurs: Array = []               # [nœud, matériau, propulseur de la physique, couleur faible, couleur forte, énergie min, énergie max]
@@ -480,6 +482,9 @@ func _creer_pilote_et_cockpit() -> void:
 		logement.add_child(modele_droide)
 	# ailes, train, trappes, moteurs de levage, tuyère, amortisseurs : le même code que l'atelier
 	modele = ModeleVaisseau.new(exterieur, vaisseau)
+	# vaisseau fait dans l'atelier : modules enlevés cachés, pièces posées dessinées (même code que l'atelier)
+	dessin = DessinVaisseau.new(exterieur, modele, modele_droide)
+	dessin.construire(vaisseau.plan, vaisseau)
 	_trouver_lueurs()
 	var oeil := cockpit.find_child("Oeil_pilote", true, false) as Node3D
 	if oeil != null:
@@ -567,11 +572,17 @@ func _trouver_lueurs() -> void:
 	var num := {}
 	for m in vaisseau.moteurs:
 		num["Point_moteur_" + String(m["nom"]).replace(" ", "_")] = m
+	# pièces posées dans l'atelier : leurs lueurs et jets disent quel moteur de la physique ils montrent
+	var par_id := {}
+	for t in vaisseau.moteurs + vaisseau.rcs:
+		par_id[String(t["id"])] = t
 	for n in exterieur.find_children("*", "MeshInstance3D", true, false):
 		var e = n.get_meta("extras", {})
 		if not (e is Dictionary):
 			continue
 		var i = num.get(e.get("moteur", ""))
+		if i == null and e.has("id_physique"):
+			i = par_id.get(String(e["id_physique"]))
 		if i == null and String(e.get("moteur", "")).begins_with("Point_rcs_"):
 			# petite buse : on prend le propulseur de la physique le plus proche de la lueur
 			# (les noms haut/bas des buses du nez sont inversés dans le modèle, la position ne trompe pas)
@@ -1425,6 +1436,20 @@ func _etat(valeur: float, consigne: float, plein: String, vide: String) -> Strin
 	return "en mouvement (%d %%)" % int(round(valeur * 100.0))
 
 
+## « HG », « C », « G »… pour les moteurs du chasseur ; le nom de la pièce pour un moteur posé dans l'atelier.
+static func _nom_court_moteur(mo: Dictionary) -> String:
+	var noms := {"moteur_haut_gauche": "HG", "moteur_haut_droit": "HD", "moteur_bas_gauche": "BG", "moteur_bas_droit": "BD",
+		"moteur_central": "C", "moteur_levage_gauche": "G ", "moteur_levage_droit": "D "}
+	var id := String(mo["id"])
+	if noms.has(id):
+		return String(noms[id])
+	# moteur posé dans l'atelier : son nom, raccourci (« Moteur ionique 1 droite » → « ion.1 D »)
+	var nom := String(mo.get("nom_ajout", id.get_slice("/", 0)))
+	for r in [["Moteur ionique ", "ion."], ["Moteur de levage ", "lev."], [" droite", " D"], [" gauche", " G"]]:
+		nom = nom.replace(r[0], r[1])
+	return nom
+
+
 func _barre(x: float) -> String:
 	var n := int(round(clampf(x, 0.0, 1.0) * 10.0))
 	return "#".repeat(n) + ".".repeat(10 - n)
@@ -1453,9 +1478,18 @@ func _mettre_a_jour_hud() -> void:
 	lignes.append(_ligne_air())
 	lignes.append("RESSENTI      %.2f g" % (vaisseau.acceleration_ressentie.length() / VaisseauPhysique.G0))
 	lignes.append("GAZ           %s %3d %%" % [_barre(gaz), int(round(gaz * 100.0))])
-	lignes.append("MOTEURS       HG %s  HD %s" % [_barre(m[0]["actuel"]), _barre(m[1]["actuel"])])
-	lignes.append("              BG %s  BD %s   C %s" % [_barre(m[2]["actuel"]), _barre(m[3]["actuel"]), _barre(m[4]["actuel"])])
-	lignes.append("LEVAGE        G  %s  D  %s" % [_barre(m[5]["actuel"]), _barre(m[6]["actuel"])])
+	# moteurs : ceux du plan, quels qu'ils soient (l'atelier peut en enlever ou en ajouter)
+	var principaux := PackedStringArray()
+	var levage := PackedStringArray()
+	for mo in m:
+		var b := "%s %s" % [_nom_court_moteur(mo), _barre(mo["actuel"])]
+		if String(mo.get("role", "")) == "levage":
+			levage.append(b)
+		else:
+			principaux.append(b)
+	for k in range(0, maxi(principaux.size(), 1), 3):
+		lignes.append(("MOTEURS       " if k == 0 else "              ") + ("  ".join(principaux.slice(k, k + 3)) if principaux.size() > 0 else "aucun"))
+	lignes.append("LEVAGE        " + ("  ".join(levage) if levage.size() > 0 else "aucun"))
 	lignes.append("ROTATION      tangage %+.1f°/s   lacet %+.1f°/s   roulis %+.1f°/s" % [w.x, w.y, w.z])
 	lignes.append("AILES         %s      TRAIN %s      VUE %s" % [_etat(vaisseau.ailes, vaisseau.ailes_consigne, "ouvertes", "repliées"),
 		_etat(vaisseau.train, vaisseau.train_consigne, "sorti", "rentré"), "cockpit" if vue_interieure else "extérieure"])

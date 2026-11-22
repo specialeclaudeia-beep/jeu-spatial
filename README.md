@@ -16,7 +16,7 @@ choses qui ne sont pas dans le dépôt (trop lourdes) : l'extension `addons/nobo
 Le jeu s'ouvre sur l'**écran d'accueil** (provisoire) : **Atelier**, **Jouer** (le dernier vaisseau,
 posé au sol devant le hangar) et **Charger un vaisseau**.
 
-## Atelier (étape 2)
+## Atelier (étapes 2 et 3)
 L'atelier est un écran à part : le jeu (planète, lumière, son) n'est chargé qu'au clic sur **Lancer**,
 et il est libéré quand on revient (F3 dans le jeu). Le vaisseau est posé dans un hangar, sur ses roues
 (même physique que le jeu : ses amortisseurs s'écrasent sous son poids), ailes repliées.
@@ -36,7 +36,34 @@ et il est libéré quand on revient (F3 dans le jeu). Le vaisseau est posé dans
 - Cases à cocher : centre de gravité (boule à damier), flèches de poussée, fond neutre (vue technique).
 - **▶ LANCER** : le vol commence posé au sol, à l'arrêt, devant le hangar (de jour, sur un terrain presque
   plat). Le bâtiment du hangar n'est pas encore dessiné dans le jeu.
-Le visuel (hangar, menus, couleurs) est provisoire ; la physique est la vraie.
+
+### Poser des pièces (étape 3)
+- Section **PIÈCES À POSER** du catalogue : moteurs ioniques (petit 100 kN, moyen 200 kN, gros 400 kN ;
+  la poussée se règle de 50 à 600 kN, et plus il pousse, plus il est gros et lourd : 4,5 kg par kN),
+  moteur de levage, propulseur d'orientation, aile, poutre, plaque de coque, bouclier thermique, boîte
+  d'équipement, réservoirs d'eau et d'air (pas de carburant : la masse ne change jamais).
+- Un clic sur une pièce du catalogue : elle **suit la souris** (fantôme vert) et se colle à la surface du
+  vaisseau, sur une **grille de 10 cm** (Ctrl : sans la grille). **R / T / E** : la tourner de 15°
+  (Maj : dans l'autre sens). **Clic** : la poser (Maj + clic : en poser d'autres). Échap ou clic droit :
+  annuler. Posée sur une aile, elle suit l'aile quand elle s'ouvre ou se replie.
+- **Symétrie** (case en haut, ou touche **M**) : une pièce posée d'un côté a sa **jumelle** en miroir de
+  l'autre côté ; régler ou déplacer l'une change l'autre (la fiche permet de les séparer).
+- Une pièce posée se choisit d'un clic : sa fiche donne ses **réglages** (poussée, taille, matière,
+  contenu…), sa place et sa rotation au chiffre près. **G** : la déplacer, **Maj + D** : la dupliquer,
+  **Suppr** : l'enlever.
+- Le chasseur est découpé en **modules** (section MODULES DU CHASSEUR : ailes, train avant, canons,
+  petits propulseurs…) qu'on peut **enlever** (Suppr). Le cockpit reste (le pilote est dedans).
+- Une pièce qui ne touche rien (ou un module qui ne tient plus : sans fuselage, tout tombe) est **en
+  rouge**, et **Lancer** est refusé tant qu'il y en a.
+- **Ctrl + Z / Ctrl + Y** : annuler / refaire. **Ctrl + S** ou **Enregistrer** : le vaisseau est rangé
+  sous son nom (case en haut à gauche, on le renomme là) ; **Copie** en fait un autre. Le vaisseau du jeu
+  n'est jamais écrasé : changé, il devient « Chasseur v27 modifié ». Sauvegarde automatique toutes les
+  2 minutes, et en quittant. Les vaisseaux sont dans le dossier de sauvegarde de Godot (`vaisseaux/`).
+- Le tableau ingénieur suit tout de suite : poser deux gros moteurs en haut des ailes, par exemple, fait
+  cabrer le vaisseau (« TROP pour les propulseurs » : la poussée est au-dessus du centre de gravité).
+- Dans le jeu, les pièces posées sont dessinées comme dans l'atelier, et leurs moteurs ont leur ligne au
+  tableau (MOTEURS).
+Le visuel (hangar, menus, couleurs, formes des pièces) est provisoire ; la physique est la vraie.
 
 ## Commandes
 Toutes les commandes se changent dans le jeu : **F2** (ou **Options** sur la manette) ouvre l'écran
@@ -369,7 +396,11 @@ façon Star Wars (jet de 3 000 m/s), qui suit de vraies lois là où elles exist
   partir du modèle Blender. `scripts/tests_atelier.gd` : ses tests (`res://scenes/tests_atelier.tscn`).
   L'écran de l'atelier : `atelier.gd` (scène `scenes/atelier.tscn`), `analyse.gd` (tableau ingénieur,
   catégories, recherche, fiches), `camera_atelier.gd`, `hangar.gd` et `style.gd` (visuel provisoire).
-  `outils/captures_atelier.gd` : captures d'écran de l'accueil, de l'atelier et du départ.
+  `pieces_toutes_faites.gd` : les pièces à poser (réglages, masse, dessin) ; `edition.gd` : les changements
+  du plan (poser, symétrie, régler, enlever, annuler / refaire, enregistrer).
+  `outils/captures_atelier.gd` et `captures_atelier_etape3.gd` : captures d'écran de l'atelier et du départ.
+- `scripts/dessin_vaisseau.gd` : le dessin du vaisseau d'après son plan (modules enlevés cachés, pièces
+  posées dessinées) ; le même dans l'atelier et dans le jeu.
 - `scripts/accueil.gd` (scène `scenes/accueil.tscn`, scène de départ) : l'écran d'accueil.
   `scripts/partie.gd` : ce qui passe d'un écran à l'autre (vaisseau choisi, lieu de départ).
 - `scripts/modele_vaisseau.gd` : le modèle 3D suit la physique (ailes, train, trappes, tuyère,
