@@ -10,7 +10,14 @@ extends RefCounted
 ##   - les pièces qui AGISSENT : moteur, propulseur, roue, contact_coque (point de la coque qui peut toucher
 ##     le sol), surface_air (plaque qui porte dans l'air) ;
 ##   - ensemble : un petit plan dans le plan (une aile avec ses moteurs, par exemple), qu'on peut déplacer,
-##     tourner, retourner en miroir, et sauvegarder seul pour le réutiliser.
+##     tourner, retourner en miroir, et sauvegarder seul pour le réutiliser. Une PIÈCE TOUTE FAITE posée
+##     dans l'atelier (étape 3 : moteur, propulseur, boîte, poutre…) est un ensemble avec un « modele »
+##     (scripts/atelier/pieces_toutes_faites.gd) et ses « reglages » ; ses pièces sont fabriquées à partir
+##     d'eux ;
+##   - bloc : masse donnée, de forme simple (boîte ou cylindre) dont on calcule l'inertie (le corps d'un
+##     moteur, une boîte d'équipement…).
+## Toute pièce peut aussi avoir un « module » : le morceau du vaisseau dont elle fait partie (une aile avec
+## son réacteur et ses plaques d'air…), qu'on choisit ou qu'on enlève d'un seul coup dans l'atelier.
 ## Toute pièce peut aussi avoir une masse (masse_kg + centre) : un moteur du futur atelier pèsera lui-même.
 ## Dans le plan du chasseur v27, les masses viennent des pièces de Blender, et les moteurs, propulseurs,
 ## roues et surfaces d'air n'ajoutent rien (leur masse est déjà comptée dans les pièces de Blender).
@@ -19,16 +26,16 @@ extends RefCounted
 ## ou qui sonne, scripts/son/pieces_sonores.gd). Densités : valeurs habituelles des fiches techniques.
 const MATIERES := {
 	"aluminium_lithium": {"nom": "alliage aluminium-lithium", "densite": 2590.0, "son": "aluminium",
-		"usage": "coque, trappes"},
-	"aluminium": {"nom": "aluminium", "densite": 2700.0, "son": "aluminium", "usage": "habillage du cockpit"},
+		"usage": "coque, trappes", "couleur": [0.72, 0.74, 0.77], "metal": 0.75},
+	"aluminium": {"nom": "aluminium", "densite": 2700.0, "son": "aluminium", "usage": "habillage du cockpit", "couleur": [0.8, 0.81, 0.83], "metal": 0.8},
 	"titane": {"nom": "titane (Ti-6Al-4V)", "densite": 4430.0, "son": "titane",
-		"usage": "tuyères, moteurs, carters chauds"},
-	"acier": {"nom": "acier haute résistance", "densite": 7850.0, "son": "acier", "usage": "trains d'atterrissage"},
-	"composite_carbone": {"nom": "composite fibre de carbone", "densite": 1600.0, "son": "composite", "usage": "ailes"},
+		"usage": "tuyères, moteurs, carters chauds", "couleur": [0.56, 0.57, 0.6], "metal": 0.85},
+	"acier": {"nom": "acier haute résistance", "densite": 7850.0, "son": "acier", "usage": "trains d'atterrissage", "couleur": [0.44, 0.45, 0.47], "metal": 0.9},
+	"composite_carbone": {"nom": "composite fibre de carbone", "densite": 1600.0, "son": "composite", "usage": "ailes", "couleur": [0.17, 0.18, 0.2], "metal": 0.1},
 	"verre_aluminosilicate": {"nom": "verre aluminosilicate feuilleté", "densite": 2460.0, "son": "verre",
-		"usage": "verrière, vitres"},
+		"usage": "verrière, vitres", "couleur": [0.45, 0.6, 0.7], "metal": 0.0},
 	"ceramique": {"nom": "céramique de bouclier thermique (tuiles de silice)", "densite": 144.0, "son": "verre",
-		"usage": "bouclier thermique (pas encore utilisé)"},
+		"usage": "bouclier thermique", "couleur": [0.9, 0.89, 0.86], "metal": 0.0},
 }
 
 ## Types de pièces. « champs » : réglages obligatoires ; « facultatifs » : réglages possibles (toute pièce
@@ -40,6 +47,10 @@ const TYPES := {
 	"structure": {"nom": "pièce de structure", "pese": true,
 		"description": "Pièce modélisée (dans Blender) : sa masse, son centre et son inertie propre sont donnés.",
 		"champs": ["masse_kg", "centre", "inertie_propre"], "facultatifs": ["matiere", "surface_m2", "articulation", "note"]},
+	"bloc": {"nom": "bloc", "pese": true,
+		"description": "Masse donnée, de forme simple (boîte ou cylindre le long de son axe Z local) : son inertie est calculée.",
+		"champs": ["masse_kg", "position", "forme", "dimensions_m"],
+		"facultatifs": ["rotation_deg", "matiere", "articulation", "note"]},
 	"masse": {"nom": "masse ponctuelle", "pese": true,
 		"description": "Équipement compté comme une masse en un point (ordinateurs, pilote, réservoir d'air…).",
 		"champs": ["masse_kg", "centre"], "facultatifs": ["articulation", "note"]},
@@ -74,7 +85,7 @@ const TYPES := {
 	"ensemble": {"nom": "ensemble", "pese": true,
 		"description": "Un petit plan dans le plan : ses pièces bougent ensemble.",
 		"champs": [], "facultatifs": ["pieces", "plan", "articulations", "position", "rotation_deg", "miroir_x",
-			"articulation", "nom", "note"]},
+			"articulation", "nom", "note", "modele", "reglages", "fixe_a", "symetrique"]},
 }
 
 ## Types d'articulations (pièces mobiles) : ce qui fait bouger une pièce par rapport au vaisseau.
@@ -112,6 +123,25 @@ static func masse_piece(p: Dictionary) -> Dictionary:
 				Vector3(0, 0, m / 12.0 * (a * a + b * b)))
 			var r := rotation(p.get("rotation_deg", [0.0, 0.0, 0.0]))
 			return {"masse": m, "centre": vecteur(p["position"]), "inertie": de_basis(r * local * r.transposed())}
+		"bloc":
+			var m := float(p["masse_kg"])
+			var dim: Array = p["dimensions_m"]
+			var local: Basis
+			if String(p["forme"]) == "cylindre":
+				# cylindre plein : diamètre, longueur (le long de Z local)
+				var r := float(dim[0]) * 0.5
+				var l := float(dim[1])
+				var ix := m * (3.0 * r * r + l * l) / 12.0
+				local = Basis(Vector3(ix, 0, 0), Vector3(0, ix, 0), Vector3(0, 0, m * r * r * 0.5))
+			else:
+				# boîte pleine : x, y, z
+				var a := float(dim[0])
+				var b := float(dim[1])
+				var c := float(dim[2])
+				local = Basis(Vector3(m / 12.0 * (b * b + c * c), 0, 0), Vector3(0, m / 12.0 * (a * a + c * c), 0),
+					Vector3(0, 0, m / 12.0 * (a * a + b * b)))
+			var rb := rotation(p.get("rotation_deg", [0.0, 0.0, 0.0]))
+			return {"masse": m, "centre": vecteur(p["position"]), "inertie": de_basis(rb * local * rb.transposed())}
 	if p.has("masse_kg") and p.has("centre"):
 		return {"masse": float(p["masse_kg"]), "centre": vecteur(p["centre"]), "inertie": zero}
 	return {"masse": 0.0, "centre": Vector3.ZERO, "inertie": zero}
