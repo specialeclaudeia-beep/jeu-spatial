@@ -262,6 +262,29 @@ que **lire** la physique, il ne la change jamais (un test le vérifie). Tout est
 - Sans la partie C++ (ou avec `-- --son-boucles`) : pas de sons brefs ni de sons du sol, seulement les boucles.
 - Extraits à écouter : `outils/extraits_son.gd` (extraits 5 à 7 : se poser et freiner, train et ailes, sur le ventre).
 
+## Son (phase 4 : la tension des pièces, la poussière de l'espace, le côté des sons)
+- **Charges de chaque pièce** (`scripts/son/charges.gd`, 120 fois par seconde, lecture seule) : 16 attaches (ailes,
+  réacteurs, moteur central, dérives, jambes du train, verrière, nez), avec les vraies forces de la physique
+  (principe de d'Alembert : moteurs, air, sol, gravité de marée, rotation). La résistance de chaque pièce vient des
+  cas de calcul des avions (ressource à 9 g, pleine poussée x1,25, posé à 3 m/s, cabine à 1,33 fois sa pression…)
+  × 1,5. Pleine poussée normale : 0,53 de la rupture pour les supports des réacteurs.
+- **Craquements** (`scripts/son/tension_son.gd`, émission acoustique) : une pièce craque quand sa charge dépasse
+  tout ce qu'elle a déjà connu (effet Kaiser). Chaque pièce a été « éprouvée » à 0,67 de sa rupture avant le premier
+  vol : un vaisseau en bon état ne craque donc qu'en surcharge (moteurs x10, atterrissage plus dur que 3 m/s, air trop
+  dense à trop grande vitesse). Aussi : relâchements (charge qui tombe d'un coup), tics de la coque qui chauffe ou
+  refroidit (un tic par 1,5 degré), et « chant » de la structure quand la charge varie.
+- **Poussière et gaz de l'espace** (`scripts/son/poussiere_son.gd`, idée de Gwenaël) : vrais grains (flux de Grün près
+  du Soleil, grains de l'espace entre les étoiles), vent solaire, gaz entre les étoiles, et un nuage inventé autour de
+  la planète. Chaque grain a sa masse et sa vitesse ; l'énergie (γ − 1) m c² devient du son sur la verrière ou la
+  coque. En orbite : de rares « tic » ; à 0,5 c : une pluie ; à 0,9 c : un souffle continu et quelques gros coups.
+- **Côté des sons** (`scripts/son/cote_son.gd`, demande de Gwenaël) : chaque moteur, chaque petit propulseur et
+  chaque pièce qui chante a sa place. Le son arrive par la coque, depuis le point de fixation : les parois de son côté
+  vibrent plus fort, la tête fait de l'ombre à l'autre oreille dans les aigus, un son venu de derrière perd un peu
+  d'aigus. La partie C++ donne à chaque tiers d'octave sa part à gauche. Si le pilote tourne la tête, le son reste
+  à sa place dans le cockpit. Les sons brefs aussi.
+- Extraits à écouter : 8 à 16 (virage serré, montée hors de l'air, coque qui refroidit, orbite, 0,5 c, 0,9 c,
+  propulseur gauche puis droite, moteurs x10, atterrissage dur).
+
 ## Organisation
 - `scripts/physique/vaisseau_physique.gd` : toute la physique (indépendante de l'affichage).
 - `scripts/physique/atmosphere.gd` et `aerodynamique.gd` : l'air de la planète et ce qu'il fait au vaisseau.

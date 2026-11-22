@@ -21,6 +21,9 @@
 // La voie droite est la même que la gauche, passée par 4 filtres « passe-tout » (même énergie, même couleur,
 // mais décalée dans le temps différemment selon la fréquence) : comme dans un vrai cockpit où le son vient de
 // toutes les parois, les deux oreilles n'entendent pas exactement la même chose dans les aigus.
+// Côté (phase 4) : chaque bande a sa part d'énergie à gauche (0,5 = au milieu, 1 = tout à gauche) ; une résonance
+// prend la part de sa bande. Un propulseur à gauche fait donc sonner plus fort l'oreille gauche dans ses
+// fréquences à lui, pendant que le reste du son reste au milieu. Presque gratuit : un gain de plus par bande.
 //
 // AnalyseSon : outil des tests (craquements, niveau, spectre) ; il ne sert pas pendant le jeu.
 #pragma once
@@ -59,6 +62,7 @@ public:
 	void regler_modes(const PackedFloat32Array &p_frequences, const PackedFloat32Array &p_pertes);
 	void regler_energie_modes(const PackedFloat32Array &p_energies);
 	void regler_raie(int p_i, double p_frequence, double p_energie);
+	void regler_gauche(const PackedFloat32Array &p_parts);   // part à gauche par bande (0..1), 0,5 = au milieu
 	void couper();   // toutes les cibles à zéro
 
 	void set_lissage(double p_s);
@@ -91,6 +95,7 @@ protected:
 
 private:
 	std::atomic<float> cible_bandes[BANDES];
+	std::atomic<float> cible_gauche[BANDES];
 	std::atomic<float> cible_modes[MODES];
 	std::atomic<float> modes_f[MODES];
 	std::atomic<float> modes_perte[MODES];
@@ -146,6 +151,9 @@ private:
 		double e = 0.0;                      // énergie lissée
 		double g = 0.0;                      // gain appliqué (amplitude)
 		double gc = 0.0;                     // gain visé à la fin du bloc en cours
+		double w = 0.5;                      // part de l'énergie à gauche, lissée
+		double pl = 1.0, pr = 1.0;           // gains gauche et droite (√(2w), √(2(1 − w)))
+		double plc = 1.0, prc = 1.0;         // visés à la fin du bloc
 	};
 	struct Mode {
 		bool actif = false;
@@ -153,6 +161,7 @@ private:
 		double y1 = 0.0, y2 = 0.0;
 		uint32_t hasard = 1;
 		double e = 0.0, b = 0.0, bc = 0.0;
+		int bande = 0;                       // tiers d'octave de sa fréquence (pour le côté)
 	};
 	struct Raie {
 		double f = 0.0;              // Hz, lissée
@@ -179,11 +188,14 @@ private:
 	Mode modes[SyntheSon::MODES];
 	Raie raies[SyntheSon::RAIES];
 	double pas_g[SyntheSon::BANDES];
+	double pas_pl[SyntheSon::BANDES], pas_pr[SyntheSon::BANDES];
+	bool au_milieu = true;               // toutes les bandes au milieu : un seul calcul pour les deux oreilles
 	double pas_b[SyntheSon::MODES];
 	double pas_a[SyntheSon::RAIES];
 	double rot_re[SyntheSon::RAIES], rot_im[SyntheSon::RAIES];
 	PasseTout passe_tout[4];
-	std::vector<float> mono;
+	std::vector<float> mono;     // voie gauche (ou les deux, si tout est au milieu)
+	std::vector<float> droite;
 
 	void preparer();
 	void preparer_modes();

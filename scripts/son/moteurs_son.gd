@@ -17,9 +17,14 @@ extends RefCounted
 ##
 ## Événements (sons brefs) : vanne d'un petit propulseur qui s'ouvre ou se ferme, moteur qui s'allume ou se
 ## coupe (la structure se relâche).
+##
+## Côté (phase 4) : chaque propulseur a sa place. Son grondement par la structure vient de son point de fixation,
+## le bruit de son jet par l'air vient de là où il naît (quelques mètres derrière la buse) ; cote_son.gd en tire,
+## octave par octave, ce que reçoit chaque oreille. Un petit propulseur à gauche s'entend à gauche.
 
 const Capteurs = preload("res://scripts/son/capteurs.gd")
 const Fluides = preload("res://scripts/son/fluides_son.gd")
+const CoteSon = preload("res://scripts/son/cote_son.gd")
 
 const VITESSE_JET := 3000.0        # m/s, pour le son seulement
 const RENDEMENT_JET := 0.005       # part de la puissance d'un jet très rapide qui devient du bruit (0,2 à 1 %)
@@ -72,6 +77,17 @@ var _k_rcs := PackedFloat64Array()
 var _k30_moteur := PackedFloat64Array()
 var _k30_rcs := PackedFloat64Array()
 var regime := 0.0                # 0..1 : poussée des moteurs / poussée maximale réelle (x1)
+## Côté de chaque couche (cote_son.gd : part à gauche et facteur, par octave).
+var cote_structure := CoteSon.milieu()
+var cote_rcs := CoteSon.milieu()
+var cote_jet := CoteSon.milieu()
+var cote_jet_rcs := CoteSon.milieu()
+var tete := Basis.IDENTITY       # orientation de la tête du pilote (repère du modèle), donnée par le chef d'orchestre
+var _tete_connue := Basis.IDENTITY
+var _t_structure: Array = []     # table de côté de chaque propulseur : par la structure…
+var _t_air: Array = []           # … et pour le bruit de son jet, par l'air
+var _allumes := PackedByteArray()  # propulseurs allumés au dernier calcul des côtés
+var _compte_cote := 0
 
 
 func _init() -> void:
@@ -93,6 +109,18 @@ func _preparer(c: Capteurs, oreille: Vector3) -> void:
 	for i in c.nombre:
 		var d := (c.positions[i] - oreille).length()
 		attenuation[i] = ATTENUATION_STRUCTURE * d + (JONCTION_AILE_DB if c.sur_aile[i] else 0.0)
+	_preparer_cotes(c, oreille)
+
+
+## Tables de côté (refaites quand les ailes bougent ou que la tête tourne de plus de 2°).
+func _preparer_cotes(c: Capteurs, oreille: Vector3) -> void:
+	_tete_connue = tete
+	_allumes.resize(0)   # côtés à refaire tout de suite
+	_t_structure.resize(c.nombre)
+	_t_air.resize(c.nombre)
+	for i in c.nombre:
+		_t_structure[i] = CoteSon.table(c.positions[i], oreille, tete, CoteSon.PROCHE_STRUCTURE_DB)
+		_t_air[i] = CoteSon.table(c.positions[i] - c.directions[i] * ECART_SOURCE, oreille, tete, CoteSon.PROCHE_AIR_DB)
 
 
 ## Niveaux continus. oreille : tête du pilote (repère du modèle) ; transm : Fluides.transmissions() pour
@@ -100,6 +128,25 @@ func _preparer(c: Capteurs, oreille: Vector3) -> void:
 func calculer(c: Capteurs, oreille: Vector3, transm: PackedFloat64Array) -> void:
 	if c.geometrie != _geometrie or attenuation.size() != c.nombre:
 		_preparer(c, oreille)
+	elif Quaternion(_tete_connue.inverse() * tete).get_angle() > deg_to_rad(2.0):
+		_preparer_cotes(c, oreille)
+	# côtés : refaits quand un propulseur s'allume ou s'éteint, sinon 15 fois par seconde (ils changent lentement)
+	_compte_cote += 1
+	var refaire := _compte_cote >= 4 or _allumes.size() != c.nombre
+	if not refaire:
+		for i in c.nombre:
+			if (c.forces[i] > 0.0) != (_allumes[i] == 1):
+				refaire = true
+				break
+	if refaire:
+		_compte_cote = 0
+		_allumes.resize(c.nombre)
+		for i in c.nombre:
+			_allumes[i] = 1 if c.forces[i] > 0.0 else 0
+	var a_struct := CoteSon.vide()
+	var a_rcs := CoteSon.vide()
+	var a_jet := CoteSon.vide()
+	var a_jet_rcs := CoteSon.vide()
 	var p_struct := 0.0
 	var p_rcs := 0.0
 	var f_moteurs := 0.0
@@ -119,16 +166,26 @@ func calculer(c: Capteurs, oreille: Vector3, transm: PackedFloat64Array) -> void
 			continue
 		var rcs := c.types[i] == Capteurs.TYPE_RCS
 		if rcs:
-			p_rcs += pow(10.0, (STRUCTURE_RCS_DB - attenuation[i]) / 10.0) * (f / F_REF_RCS) * (f / F_REF_RCS)
+			var e := pow(10.0, (STRUCTURE_RCS_DB - attenuation[i]) / 10.0) * (f / F_REF_RCS) * (f / F_REF_RCS)
+			p_rcs += e
+			if refaire:
+				CoteSon.cumuler(a_rcs, _t_structure[i], e)
 		else:
-			p_struct += pow(10.0, (STRUCTURE_MOTEUR_DB - attenuation[i]) / 10.0) * pow(f / c.poussee_reference, 2.0)
+			var e := pow(10.0, (STRUCTURE_MOTEUR_DB - attenuation[i]) / 10.0) * pow(f / c.poussee_reference, 2.0)
+			p_struct += e
+			if refaire:
+				CoteSon.cumuler(a_struct, _t_structure[i], e)
 			f_moteurs += f
 		if dans_air:
 			var p2 := _jet_par_air(c, i, oreille, son)
 			if rcs:
 				p2_rcs += p2
+				if refaire:
+					CoteSon.cumuler(a_jet_rcs, _t_air[i], p2)
 			else:
 				p2_moteurs += p2
+				if refaire:
+					CoteSon.cumuler(a_jet, _t_air[i], p2)
 	# même forme pour tous les moteurs (et pour tous les petits propulseurs) : on multiplie une seule fois
 	for b in 10:
 		bandes_jet[b] = p2_moteurs * _k_moteur[b] if dans_air else 0.0
@@ -136,6 +193,11 @@ func calculer(c: Capteurs, oreille: Vector3, transm: PackedFloat64Array) -> void
 	for t in 30:
 		tiers_jet[t] = p2_moteurs * _k30_moteur[t] if dans_air else 0.0
 		tiers_jet_rcs[t] = p2_rcs * _k30_rcs[t] if dans_air else 0.0
+	if refaire:
+		cote_structure = CoteSon.finir(a_struct, p_struct)
+		cote_rcs = CoteSon.finir(a_rcs, p_rcs)
+		cote_jet = CoteSon.finir(a_jet, p2_moteurs)
+		cote_jet_rcs = CoteSon.finir(a_jet_rcs, p2_rcs)
 	niveau_structure = _db(p_struct)
 	niveau_rcs = _db(p_rcs)
 	niveau_jet = _niveau_bandes(bandes_jet)

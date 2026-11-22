@@ -881,6 +881,9 @@ var prise_fn := PackedFloat64Array([0, 0, 0, 0, 0, 0, 0, 0, 0])         # N (som
 var prise_roule := PackedFloat64Array([0, 0, 0])               # m/s (somme) : vitesse de roulement des roues
 var prise_glisse := PackedFloat64Array([0, 0, 0, 0, 0, 0, 0, 0, 0])     # m/s (somme) : vitesse de glissement (dérapage, raclage)
 var prise_frein := PackedFloat64Array([0, 0, 0])               # (somme) serrage des freins d'une roue qui roule
+## Phase 4 : force du sol sur chaque point (N, somme, repère du vaisseau), pour la tension des jambes du train.
+var prise_f_sol := PackedVector3Array([Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO,
+	Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO])
 var _prise_butee := PackedByteArray([0, 0, 0])                 # amortisseur déjà en bout de course (pour la prise)
 
 
@@ -891,6 +894,7 @@ func vider_prise_sol() -> void:
 		a.fill(0.0)
 	for a in [prise_butee, prise_roule, prise_frein]:
 		a.fill(0.0)
+	prise_f_sol.fill(Vector3.ZERO)
 var compression_roues := PackedFloat64Array([0.0, 0.0, 0.0])   # m, écrasement de chaque amortisseur (pour le dessin)
 
 
@@ -1083,6 +1087,7 @@ func _forces_sol(base: Basis) -> Array:
 			prise_frein[k_roue] += serrage
 		prise_fn[k_roue if roue else cle - 7] += fn   # prise du son (lecture seule)
 		var f: Vector3 = n * fn + ft
+		prise_f_sol[k_roue if roue else cle - 7] += f * base   # prise du son (lecture seule) : repère du vaisseau
 		f_monde += f
 		couple += r_corps.cross(base.inverse() * f)
 	return [f_monde, couple]

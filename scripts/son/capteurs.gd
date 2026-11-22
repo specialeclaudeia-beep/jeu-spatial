@@ -57,8 +57,48 @@ var braquage := 0.0                               # rad : roue avant
 var vertical := 0.0                               # 0 = vol normal, 1 = vol vertical (tuyère tournée)
 var vertical_consigne := 0.0
 
+# --- phase 4 : mouvement du vaisseau (tension des pièces : scripts/son/charges.gd) ---
+var masse := 0.0                                  # kg
+var inertie := Vector3.ZERO                       # kg·m² (axes principaux)
+var omega := Vector3.ZERO                         # rad/s : rotation, repère du vaisseau
+var alpha := Vector3.ZERO                         # rad/s² : variation de la rotation entre deux photos
+var acceleration := Vector3.ZERO                  # m/s² : ce que sent le pilote (sans la gravité), repère du vaisseau
+var maree_k := 0.0                                # s⁻² : G·M / r³ de l'astre qui étire le plus le vaisseau
+var maree_dir := Vector3.ZERO                     # direction de cet astre, repère du vaisseau
+var aile_de := PackedInt32Array()                 # n° de l'aile de chaque propulseur (0 à 3, comme ci-dessous ; −1 = aucune)
+var poussee_levage := 0.0                         # N : un moteur de levage à pleine puissance
+## Les 4 ailes, dans l'ordre haut gauche, haut droit, bas gauche, bas droit : charnière et angle (degrés).
+var charnieres := PackedVector3Array()
+var angles_ailes := PackedFloat64Array()
+var angles_ailes_ouvertes := PackedFloat64Array()
+var angle_tuyere := 0.0                           # degrés (vol vertical)
+var pivot_tuyere := Vector3.ZERO
+var amorti_train := PackedFloat64Array()          # N·s/m : amortisseur de chaque jambe (cas de calcul du train)
+## Air : force (N) et couple autour du centre de gravité (N·m) sur chaque surface (repère du vaisseau) :
+## 0-3 ailes, 4-5 dérives gauche et droite, 6 fuselage, 7 nez, 8 train.
+var air_f := PackedVector3Array()
+var air_c := PackedVector3Array()
+var sol_f := PackedVector3Array()                 # N : force moyenne du sol sur chaque point qui touche
+var pression_dehors := 0.0                        # Pa (0 dans le vide)
+var temps_physique := 0.0                         # s : temps de l'univers écoulé depuis la photo précédente
+# --- phase 4 : où l'on est (poussière et gaz de l'espace : scripts/son/poussiere_son.gd) ---
+var vitesse := 0.0                                # m/s, par rapport à l'astre du repère (toujours < c)
+var gamma := 1.0                                  # facteur de Lorentz
+var direction := Vector3.ZERO                     # sens du mouvement, repère du vaisseau
+var dist_etoile := INF                            # m : étoile (ou trou noir) la plus proche
+var dist_astre := INF                             # m : centre de la planète ou de la lune la plus proche
+var rayon_astre := 0.0                            # m : son rayon
+
+const NOMS_AILES := ["haut_gauche", "haut_droit", "bas_gauche", "bas_droit"]
+const GM_ETOILE := 1.0e18                         # m³/s² : au-dessus, c'est une étoile (Soleil : 1,3e20 ; Jupiter : 1,3e17)
+const R_AIR := 287.05
+
 var _ailes := -1.0
 var _vertical := -1.0
+var _omega_avant := Vector3.ZERO
+var _t_univers := NAN
+var _base_avant := Basis.IDENTITY
+var _base_lue := false
 
 
 func lire(v, dt: float) -> void:
@@ -72,8 +112,19 @@ func lire(v, dt: float) -> void:
 		positions.resize(n)
 		directions.resize(n)
 		sur_aile.resize(n)
+		aile_de.resize(n)
 		centre_gravite = v.CENTRE_GRAVITE
 		poussee_reference = v.POUSSEE_MOTEUR
+		poussee_levage = v.POUSSEE_LEVAGE
+		pivot_tuyere = v.PIVOT_TUYERE
+		amorti_train = PackedFloat64Array(v.AMORTI_TRAIN)
+		charnieres.resize(4)
+		angles_ailes.resize(4)
+		angles_ailes_ouvertes.resize(4)
+		for k in 4:
+			var a: Dictionary = v.AILES[NOMS_AILES[k]]
+			charnieres[k] = a["charniere"]
+			angles_ailes_ouvertes[k] = float(a["ouvert"])
 		_ailes = -1.0
 	# positions et directions : seulement quand les ailes ou le vol vertical bougent
 	var bouge: bool = v.ailes != _ailes or v.vertical != _vertical
@@ -81,6 +132,9 @@ func lire(v, dt: float) -> void:
 		_ailes = v.ailes
 		_vertical = v.vertical
 		geometrie += 1
+		for k in 4:
+			angles_ailes[k] = v.angle_aile(NOMS_AILES[k])
+		angle_tuyere = v.angle_tuyere()
 	var facteur: float = v.facteur_poussee
 	for i in n:
 		var t: Dictionary = v.moteurs[i] if i < n_m else v.rcs[i - n_m]
@@ -96,6 +150,7 @@ func lire(v, dt: float) -> void:
 			positions[i] = t["position"]
 			directions[i] = t["direction"]
 			sur_aile[i] = 1 if String(t["aile"]) != "" else 0
+			aile_de[i] = NOMS_AILES.find(String(t["aile"]))
 	densite = v.densite_air
 	temperature = v.temperature_air
 	vitesse_air = v.vitesse_air
@@ -107,7 +162,78 @@ func lire(v, dt: float) -> void:
 		vent = Vector3.ZERO
 	au_sol = v.au_sol
 	ecrase = v.ecrase
+	_lire_mouvement(v, dt)
+	_lire_lieu(v)
 	_lire_sol(v)
+
+
+## Phase 4 : rotation, accélération ressentie, marée, air sur chaque surface (lecture seule).
+func _lire_mouvement(v, dt: float) -> void:
+	masse = v.masse
+	inertie = v.inertie
+	var base := Basis(v.orientation)
+	omega = v.omega
+	# temps de l'univers écoulé depuis la photo précédente (temps accéléré compris)
+	if is_nan(_t_univers):
+		temps_physique = dt
+		_omega_avant = omega
+	else:
+		temps_physique = maxf(float(v.temps_univers) - _t_univers, 0.0)
+	_t_univers = v.temps_univers
+	alpha = (omega - _omega_avant) / temps_physique if temps_physique > 0.0 else Vector3.ZERO
+	_omega_avant = omega
+	# la physique calcule l'accélération ressentie AVANT de tourner le vaisseau pendant le pas : on la lit dans
+	# l'orientation du début du pas (celle de la photo précédente), sinon 0,1 % de la poussée partirait de côté
+	acceleration = (_base_avant if _base_lue else base).inverse() * v.acceleration_ressentie
+	_base_avant = base
+	_base_lue = true
+	pression_dehors = densite * R_AIR * temperature if densite > 0.0 else 0.0
+	air_f = v.aero.prise_f.duplicate()
+	air_c = v.aero.prise_c.duplicate()
+	# marée : l'astre qui étire le plus (G·M / r³ le plus grand)
+	maree_k = 0.0
+	if v.gm != 0.0:
+		var r: float = v.distance_centre()
+		maree_k = v.gm / (r * r * r)
+		maree_dir = base.inverse() * Vector3(-v.px, -v.py, -v.pz).normalized()
+	for a in v.autres_astres:
+		var dx: float = float(a["x"]) - v.px
+		var dy: float = float(a["y"]) - v.py
+		var dz: float = float(a["z"]) - v.pz
+		var d := sqrt(dx * dx + dy * dy + dz * dz)
+		var k: float = float(a["gm"]) / (d * d * d)
+		if k > maree_k:
+			maree_k = k
+			maree_dir = base.inverse() * Vector3(dx / d, dy / d, dz / d)
+
+
+## Phase 4 : vitesse et distances aux astres (densité de poussière et de gaz de l'endroit).
+func _lire_lieu(v) -> void:
+	vitesse = v.vitesse()
+	gamma = v.gamma()
+	direction = Basis(v.orientation).inverse() * Vector3(v.vx, v.vy, v.vz).normalized() if vitesse > 0.0 else Vector3.ZERO
+	dist_etoile = INF
+	dist_astre = INF
+	rayon_astre = 0.0
+	var r_c: float = v.distance_centre()
+	if v.gm >= GM_ETOILE:
+		dist_etoile = r_c
+	elif v.gm > 0.0:
+		dist_astre = r_c
+		rayon_astre = v.rayon_planete
+	for a in v.autres_astres:
+		var dx: float = float(a["x"]) - v.px
+		var dy: float = float(a["y"]) - v.py
+		var dz: float = float(a["z"]) - v.pz
+		var d := sqrt(dx * dx + dy * dy + dz * dz)
+		if float(a["gm"]) >= GM_ETOILE:
+			dist_etoile = minf(dist_etoile, d)
+		else:
+			var ra: float = float(a.get("rayon", 0.0))
+			# la plus proche, rapportée à sa taille
+			if ra > 0.0 and (rayon_astre <= 0.0 or d / ra < dist_astre / rayon_astre):
+				dist_astre = d
+				rayon_astre = ra
 
 
 ## Phase 3 : la prise du sol (moyennes sur les petits pas de physique depuis la photo précédente), puis on
@@ -124,6 +250,7 @@ func _lire_sol(v) -> void:
 			a.resize(np)
 		for a in [sol_butee, sol_roule, sol_frein]:
 			a.resize(3)
+		sol_f.resize(np)
 	poids = v.masse * 9.81
 	var n: int = maxi(v.prise_n, 1)
 	for k in np:
@@ -131,6 +258,7 @@ func _lire_sol(v) -> void:
 		sol_choc_cote[k] = v.prise_choc_cote[k]
 		sol_fn[k] = v.prise_fn[k] / n
 		sol_glisse[k] = v.prise_glisse[k] / n
+		sol_f[k] = v.prise_f_sol[k] / n if v.prise_n > 0 else Vector3.ZERO
 	for k in 3:
 		sol_butee[k] = v.prise_butee[k]
 		sol_roule[k] = v.prise_roule[k] / n

@@ -52,6 +52,17 @@ const SECTION_MAX := 2.8
 const FROTTEMENT_PLAQUE := 0.004                    # par face (couche limite turbulente)
 const TRAIN_SURFACE := 0.9                          # m², roues et jambes face au vent (Cx ≈ 1)
 
+## Son, phase 4 : « prise » des forces de chaque surface, en LECTURE SEULE (rien de ce qui est noté ici ne
+## sert à la physique). Force (N) et couple autour du centre de gravité (N·m), repère du vaisseau, du dernier
+## calcul. 0-3 : ailes haut gauche, haut droit, bas gauche, bas droit ; 4-5 : dérives gauche, droite ;
+## 6 : fuselage ; 7 : nez ; 8 : train. Le son en tire la tension de chaque pièce (scripts/son/charges.gd).
+const PRISE_SURFACES := 9
+var prise_f := PackedVector3Array([Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO,
+	Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO])
+var prise_c := PackedVector3Array([Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO,
+	Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO])
+var _surface := 6   # surface en cours (prise du son)
+
 ## Dernières valeurs (affichage, tests).
 var mach := 0.0
 var pression_dyn := 0.0          # Pa : ½ ρ v²
@@ -104,6 +115,8 @@ static func cx_face(m: float) -> float:
 func forces(vent_corps: Vector3, omega: Vector3, rho: float, son: float, ailes: float, train: float) -> Array:
 	_f_cumul = Vector3.ZERO
 	_c_cumul = Vector3.ZERO
+	prise_f.fill(Vector3.ZERO)   # prise du son (lecture seule)
+	prise_c.fill(Vector3.ZERO)
 	var v := vent_corps.length()
 	pression_dyn = 0.5 * rho * v * v
 	mach = v / maxf(son, 1.0)
@@ -120,6 +133,7 @@ func forces(vent_corps: Vector3, omega: Vector3, rho: float, son: float, ailes: 
 	# 1. Les 4 ailes, 3 bandes chacune. Ailes repliées l'une sur l'autre, ou très proches : elles se gênent
 	#    (biplan) ; l'écart entre l'aile du haut et celle du bas, rapporté à la corde, dit de combien.
 	var ouverture := deg_to_rad(OUVERT * ailes)
+	_surface = 0
 	for nom in ["haut_gauche", "haut_droit", "bas_gauche", "bas_droit"]:
 		var gauche: bool = nom.ends_with("gauche")
 		var haut: bool = nom.begins_with("haut")
@@ -139,10 +153,13 @@ func forces(vent_corps: Vector3, omega: Vector3, rho: float, son: float, ailes: 
 			var ecart := 2.0 * absf(float(b[0])) * sin(ouverture)
 			var gene := 0.5 + 0.35 * clampf(ecart / corde, 0.0, 1.0)
 			_plaque(p, normale, surface, ALLONGEMENT_AILES, gene, vent_corps, omega, rho, son, libre)
+		_surface += 1
 	# 2. Les dérives
 	for d in DERIVES:
 		_plaque(d[0], d[1], d[2], d[3], 1.0, vent_corps, omega, rho, son, libre)
+		_surface += 1
 	# 3. Le fuselage. Vent vu par son centre (la rotation compte aussi).
+	_surface = 6
 	var r_c := CENTRE_FUSELAGE - CENTRE_GRAVITE
 	var w := vent_corps - omega.cross(r_c)
 	var q := 0.5 * rho
@@ -157,12 +174,14 @@ func forces(vent_corps: Vector3, omega: Vector3, rho: float, son: float, ailes: 
 	# portance du nez effilé (corps élancé : 2 × surface de face × angle), seulement en fluide
 	var r_n := NEZ - CENTRE_GRAVITE
 	var wn := vent_corps - omega.cross(r_n)
+	_surface = 7
 	if wn.z > 0.0 and libre < 1.0:
 		var vn := wn.length()
 		var f_nez := Vector3(wn.x, wn.y, 0.0) * (q * 2.0 * SECTION_MAX * vn * absf(wn.z) / maxf(vn, 1e-6) * (1.0 - libre))
 		# l'air qui arrive par en dessous pousse le nez vers le haut (même sens que la vitesse de travers)
 		_ajouter(r_n, f_nez)
 	# 4. Le train sorti
+	_surface = 8
 	if train > 0.0:
 		var r_t := Vector3(0.0, -1.3, -1.0) - CENTRE_GRAVITE
 		var wt := vent_corps - omega.cross(r_t)
@@ -209,6 +228,8 @@ func _plaque(p: Vector3, n: Vector3, surface: float, ar: float, gene: float, ven
 func _ajouter(r: Vector3, f: Vector3) -> void:
 	_f_cumul += f
 	_c_cumul += r.cross(f)
+	prise_f[_surface] += f              # prise du son (lecture seule)
+	prise_c[_surface] += r.cross(f)
 
 
 var _f_cumul := Vector3.ZERO
