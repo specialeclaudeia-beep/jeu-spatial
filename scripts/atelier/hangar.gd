@@ -4,6 +4,8 @@ extends Node3D
 ## qu'il sort, et le vol commence « devant le hangar ».
 ## Le sol porte une grille comme celle de Blender (1 m, 5 m, axes rouge et vert) et la zone de montage.
 ## « Fond neutre » (vue technique) : murs et toit cachés, fond gris uni, il ne reste que la grille.
+## Étape 4 : la SALLE À PART. Le hangar disparaît (sol, murs, dehors) ; à sa place, une salle sombre avec
+## un plateau rond éclairé, juste sous la pièce qu'on y a emmenée seule pour l'analyser.
 
 const LARGEUR := 64.0       # m (x)
 const ARRIERE := 26.0       # m : mur du fond à z = +26
@@ -13,6 +15,39 @@ const PORTE_LARGEUR := 34.0
 const PORTE_HAUTEUR := 15.0
 const FOND_JOUR := Color(0.5, 0.6, 0.74)   # dehors, vu par la porte
 const FOND_NEUTRE := Color(0.235, 0.235, 0.24)
+const FOND_SALLE := Color(0.055, 0.066, 0.09)
+
+## Le plateau de la salle à part : métal sombre, cercles tous les mètres, rayons tous les 30°, bord lumineux.
+const SHADER_PLATEAU := """
+shader_type spatial;
+render_mode diffuse_burley, specular_schlick_ggx;
+uniform float rayon = 5.0;
+varying vec3 pos_local;
+
+void vertex() {
+	pos_local = VERTEX;
+}
+
+float trait(float x, float largeur) {
+	float fw = fwidth(x) * 0.9;
+	return 1.0 - smoothstep(largeur * 0.5, largeur * 0.5 + fw, abs(x));
+}
+
+void fragment() {
+	vec2 p = pos_local.xz * rayon;
+	float r = length(p);
+	float a = atan(p.y, p.x);
+	vec3 c = vec3(0.13, 0.145, 0.17);
+	c = mix(c, vec3(0.24, 0.29, 0.35), 0.8 * trait(fract(r + 0.5) - 0.5, 0.025));
+	c = mix(c, vec3(0.22, 0.27, 0.33), 0.6 * trait(fract(a / 0.5235988 + 0.5) - 0.5, 0.03 / max(r, 0.3)) * step(0.6, r));
+	float bord = smoothstep(rayon - 0.35, rayon - 0.08, r);
+	c = mix(c, vec3(0.3, 0.75, 1.0), bord * 0.85);
+	ALBEDO = c;
+	EMISSION = vec3(0.3, 0.75, 1.0) * bord * 0.9;
+	ROUGHNESS = 0.55;
+	METALLIC = 0.4;
+}
+"""
 
 const SHADER_SOL := """
 shader_type spatial;
@@ -81,6 +116,10 @@ var environnement: Environment
 var lumiere_toit: DirectionalLight3D
 var lumiere_douce: DirectionalLight3D
 var technique := false
+var en_salle := false        # la salle à part est montrée (le hangar est caché)
+var salle: Node3D            # la salle à part : son plateau
+var plateau: MeshInstance3D
+var materiau_plateau: ShaderMaterial
 
 
 func _ready() -> void:
@@ -253,11 +292,59 @@ func _creer_equipements() -> void:
 ## Fond neutre (vue technique, façon logiciel de dessin) ou hangar.
 func vue_technique(oui: bool) -> void:
 	technique = oui
-	decor.visible = not oui
-	dehors.visible = not oui
-	materiau_sol.set_shader_parameter("technique", 1.0 if oui else 0.0)
-	environnement.background_color = FOND_NEUTRE if oui else FOND_JOUR
-	environnement.ambient_light_energy = 0.75 if oui else 0.55
+	_appliquer()
+
+
+## La salle à part (oui) ou le hangar (non). centre : sous quoi poser le plateau (repère du monde) ;
+## bas : hauteur du dessus du plateau ; rayon : du plateau (m).
+func salle_a_part(oui: bool, centre := Vector3.ZERO, bas := 0.0, rayon := 4.0) -> void:
+	en_salle = oui
+	if oui:
+		if salle == null:
+			_creer_salle()
+		rayon = clampf(rayon, 2.0, 30.0)
+		salle.position = Vector3(centre.x, bas, centre.z)
+		salle.scale = Vector3(rayon, 1.0, rayon)
+		materiau_plateau.set_shader_parameter("rayon", rayon)
+	_appliquer()
+
+
+func _appliquer() -> void:
+	sol.visible = not en_salle
+	decor.visible = not technique and not en_salle
+	dehors.visible = not technique and not en_salle
+	if salle != null:
+		salle.visible = en_salle
+	materiau_sol.set_shader_parameter("technique", 1.0 if technique else 0.0)
+	if en_salle:
+		environnement.background_color = FOND_SALLE
+		environnement.ambient_light_energy = 0.7
+	else:
+		environnement.background_color = FOND_NEUTRE if technique else FOND_JOUR
+		environnement.ambient_light_energy = 0.75 if technique else 0.55
+
+
+func _creer_salle() -> void:
+	salle = Node3D.new()
+	salle.name = "Salle_a_part"
+	add_child(salle)
+	materiau_plateau = ShaderMaterial.new()
+	var sh := Shader.new()
+	sh.code = SHADER_PLATEAU
+	materiau_plateau.shader = sh
+	var c := CylinderMesh.new()
+	c.top_radius = 1.0
+	c.bottom_radius = 1.0
+	c.height = 0.06
+	c.radial_segments = 64
+	c.rings = 1
+	plateau = MeshInstance3D.new()
+	plateau.name = "Plateau"
+	plateau.mesh = c
+	plateau.position = Vector3(0.0, -0.03, 0.0)
+	plateau.material_override = materiau_plateau
+	plateau.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	salle.add_child(plateau)
 
 
 func _boite(parent: Node3D, taille: Vector3, position: Vector3, matiere: Material) -> MeshInstance3D:
