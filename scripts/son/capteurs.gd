@@ -125,16 +125,16 @@ func lire(v, dt: float) -> void:
 		directions.resize(n)
 		sur_aile.resize(n)
 		aile_de.resize(n)
-		centre_gravite = v.CENTRE_GRAVITE
-		poussee_reference = v.POUSSEE_MOTEUR
-		poussee_levage = v.POUSSEE_LEVAGE
-		pivot_tuyere = v.PIVOT_TUYERE
-		amorti_train = PackedFloat64Array(v.AMORTI_TRAIN)
+		centre_gravite = v.centre_gravite
+		poussee_reference = v.poussee_moteur_nominale
+		poussee_levage = v.poussee_levage_nominale
+		pivot_tuyere = v.pivot_tuyere
+		amorti_train = PackedFloat64Array(v.amorti_train)
 		charnieres.resize(4)
 		angles_ailes.resize(4)
 		angles_ailes_ouvertes.resize(4)
 		for k in 4:
-			var a: Dictionary = v.AILES[NOMS_AILES[k]]
+			var a: Dictionary = v.ailes_def[NOMS_AILES[k]]
 			charnieres[k] = a["charniere"]
 			angles_ailes_ouvertes[k] = float(a["ouvert"])
 		_ailes = -1.0
@@ -259,17 +259,17 @@ func _lire_lieu(v) -> void:
 ## Phase 3 : la prise du sol (moyennes sur les petits pas de physique depuis la photo précédente), puis on
 ## la vide. C'est la seule chose que le son « écrit » : des compteurs que la physique ne lit jamais.
 func _lire_sol(v) -> void:
-	var np: int = v.PRISE_POINTS
+	var np: int = v.prise_points
 	if points_sol.size() != np:
 		points_sol.clear()
-		for p in v.ROUES:
+		for p in v.roues:
 			points_sol.append(p)
-		for p in v.COQUE:
+		for p in v.coque_points:
 			points_sol.append(p)
 		for a in [sol_choc, sol_choc_cote, sol_fn, sol_glisse]:
 			a.resize(np)
 		for a in [sol_butee, sol_roule, sol_frein]:
-			a.resize(3)
+			a.resize(v.roues.size())
 		sol_f.resize(np)
 	poids = v.masse * 9.81
 	var n: int = maxi(v.prise_n, 1)

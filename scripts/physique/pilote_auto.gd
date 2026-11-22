@@ -199,13 +199,13 @@ func _etat(v) -> Etat:
 	e.pos = Vector3(v.px, v.py, v.pz)
 	e.r = v.distance_centre()
 	e.h = v.altitude()
-	e.hs = e.h - VaisseauPhysiqueH.HAUTEUR_TRAIN
+	e.hs = e.h - v.hauteur_train
 	# près du sol, la roue la plus basse au-dessus du sol qui est sous ELLE (sur une pente, la roue côté
 	# montée touche avant que le centre soit à 1,6 m du sol : sans cela, il touchait trop vite)
 	if e.hs < 50.0 and v.rayon_planete > 0.0 and v.relief.is_valid():
 		var b := Basis(v.orientation)
-		for r in VaisseauPhysiqueH.ROUES:
-			var q: Vector3 = b * ((r as Vector3) - VaisseauPhysiqueH.CENTRE_GRAVITE)
+		for r in v.roues:
+			var q: Vector3 = b * ((r as Vector3) - v.centre_gravite)
 			var qx: float = v.px + q.x
 			var qy: float = v.py + q.y
 			var qz: float = v.pz + q.z
@@ -277,7 +277,7 @@ func _calculer_arret(v, duree_s: float) -> void:
 	# poussée que le pilote peut demander (pour décider) : vol vertical ou gros moteurs
 	var a_t: float
 	if urgence:
-		a_t = v.poussee_moteur() * 5.0 / v.masse
+		a_t = v.poussee_principale() / v.masse
 	else:
 		a_t = UTILISATION_V * v.poussee_verticale_max / v.masse
 
@@ -536,17 +536,17 @@ func _vitesse_impact_prevue(v, e: Etat, gros_moteurs: bool, marge: float) -> flo
 	var poussee: Vector3 = Basis(v.orientation) * v.direction_poussee()
 	if gros_moteurs:
 		# le nez doit monter jusqu'à la verticale, tuyère à plat
-		var a_m: float = v.poussee_moteur() * 5.0 / v.masse
+		var a_m: float = v.poussee_principale() / v.masse
 		cap = UTILISATION_URGENCE * (a_m - e.g_sol)
 		var nez: Vector3 = Basis(v.orientation) * Vector3(0.0, 0.0, -1.0)
 		t = T_REPONSE_MOTEURS + T_PIVOT * nez.angle_to(e.haut)
 		if v.vertical > 0.01:
-			t += VaisseauPhysiqueH.DUREE_VERTICAL * v.vertical * 0.5   # la tuyère revient en arrière
+			t += v.duree_vertical * v.vertical * 0.5   # la tuyère revient en arrière
 	else:
 		var a_vol: float = UTILISATION_V * v.poussee_verticale_max / v.masse
 		cap = UTILISATION_URGENCE / marge * (a_vol - e.g_sol)
 		var inclinaison := poussee.angle_to(e.haut) if v.vertical >= 0.99 else 0.0
-		t = maxf(VaisseauPhysiqueH.DUREE_VERTICAL * (1.0 - v.vertical), T_REPONSE_MOTEURS + T_PIVOT * inclinaison)
+		t = maxf(v.duree_vertical * (1.0 - v.vertical), T_REPONSE_MOTEURS + T_PIVOT * inclinaison)
 		if v.vertical < 0.99 and poussee.angle_to(e.haut) < 0.8:
 			t = T_REPONSE_MOTEURS + 1.0        # déjà porté nez en haut : la tuyère tourne sans lâcher la poussée
 	if cap < 0.5:
