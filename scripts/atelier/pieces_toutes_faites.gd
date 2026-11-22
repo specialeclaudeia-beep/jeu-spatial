@@ -316,11 +316,12 @@ static func _nombre(x: float, decimales := 0) -> String:
 ##   forme : "boite" (taille = côtés), "cylindre" (taille = rayon en haut, rayon en bas, hauteur ; axe Y de
 ##   xf), "gelule" (rayon, hauteur ; axe Y de xf) ;
 ##   role : "" (pièce), "lueur" (sortie qui s'allume dans le jeu), "panache" (jet ; taille = rayon au départ,
-##   rayon au bout, longueur, le long de l'axe +Y de xf, en partant de son origine).
+##   rayon au bout, longueur, le long de l'axe +Y de xf, en partant de son origine) ;
+##   vitre : vrai pour une plaque en verre (dessinée transparente ; dans le jeu, une vraie vitre).
 static func dessin(modele: String, reglages: Dictionary) -> Array:
 	var r := reglages_complets(modele, reglages)
 	var titane := Color(0.56, 0.57, 0.6)
-	var sombre := Color(0.13, 0.135, 0.15)
+	var sombre := Color(0.2, 0.205, 0.22)   # (albédo 3 % : métal noirci ; plus sombre n'existe pas, étape 5)
 	var vers_z := Basis(Vector3.RIGHT, PI * 0.5)    # axe Y du cylindre → axe +Z de la pièce
 	var vers_bas := Basis(Vector3.RIGHT, PI)        # axe Y → −Y
 	match modele:
@@ -365,8 +366,11 @@ static func dessin(modele: String, reglages: Dictionary) -> Array:
 			var sc := _f(r, "section_m")
 			return [_forme("boite", Vector3(sc, sc, _f(r, "longueur_m")), Transform3D.IDENTITY, _couleur(String(r["matiere"])), _metal(String(r["matiere"])), 0.45)]
 		"plaque":
-			return [_forme("boite", Vector3(_f(r, "largeur_m"), _f(r, "epaisseur_m"), _f(r, "longueur_m")), Transform3D.IDENTITY,
-				_couleur(String(r["matiere"])), _metal(String(r["matiere"])), 0.5)]
+			# une plaque en verre est une vitre (transparente ; le jeu en fait une vraie vitre, étape 5)
+			var vitre := _forme("boite", Vector3(_f(r, "largeur_m"), _f(r, "epaisseur_m"), _f(r, "longueur_m")), Transform3D.IDENTITY,
+				_couleur(String(r["matiere"])), _metal(String(r["matiere"])), 0.5)
+			vitre["vitre"] = String(r["matiere"]) == "verre_aluminosilicate"
+			return [vitre]
 		"boite":
 			var t2 := Vector3(_f(r, "largeur_m"), _f(r, "hauteur_m"), _f(r, "longueur_m"))
 			return [
@@ -385,7 +389,7 @@ static func dessin(modele: String, reglages: Dictionary) -> Array:
 
 
 static func _forme(forme: String, taille: Vector3, xf: Transform3D, couleur: Color, metal: float, rugosite: float, role := "") -> Dictionary:
-	return {"forme": forme, "taille": taille, "xf": xf, "couleur": couleur, "metal": metal, "rugosite": rugosite, "role": role}
+	return {"forme": forme, "taille": taille, "xf": xf, "couleur": couleur, "metal": metal, "rugosite": rugosite, "role": role, "vitre": false}
 
 
 static func _couleur(matiere: String) -> Color:

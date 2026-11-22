@@ -3,11 +3,15 @@ extends Control
 ##   - Atelier : ouvre l'atelier avec le dernier vaisseau ;
 ##   - Jouer : lance le jeu tout de suite avec le dernier vaisseau, posé au sol devant le hangar ;
 ##   - Charger un vaisseau : liste des plans de vaisseau (ceux du jeu, puis les tiens), ouvert dans l'atelier.
+## « Jouer » passe d'abord par le CONTRÔLE AVANT LE VOL (atelier, étape 5 : scripts/atelier/controle_vol.gd) :
+## ce qui casserait le jeu est refusé (avec « Ouvrir l'atelier ») ; un avertissement propose « Jouer quand même ».
 ## Rien de lourd ici : ni planète, ni lumière, ni son. Le fond étoilé est dessiné en 2D.
 ## Lancé avec « -- --mesure » (mesure de vitesse), on passe directement au jeu, en orbite, comme avant.
 
 const Partie = preload("res://scripts/partie.gd")
 const Style = preload("res://scripts/atelier/style.gd")
+const Plan = preload("res://scripts/atelier/plan.gd")
+const ControleVol = preload("res://scripts/atelier/controle_vol.gd")
 
 var _etoiles := PackedVector3Array()   # x, y (0..1), éclat
 var liste_plans: ItemList
@@ -15,6 +19,8 @@ var panneau_charger: PanelContainer
 var chargement: Label
 var _plans: Array = []
 var texte_vaisseau: Label
+var controle                           # dernier contrôle avant le vol (ControleVol)
+var fenetre_controle: Control          # sa fenêtre, ouverte par « Jouer » (ou null)
 
 
 func _ready() -> void:
@@ -160,12 +166,37 @@ func ouvrir_plan(i: int) -> void:
 
 
 func ouvrir_atelier() -> void:
+	fermer_fenetre_controle()
 	_changer("Ouverture de l'atelier…", func(): Partie.aller_atelier(get_tree()))
 
 
-func jouer_maintenant() -> void:
+## « Jouer » : le contrôle avant le vol, puis le jeu (forcer : malgré un avertissement).
+func jouer_maintenant(forcer := false) -> bool:
+	if chargement.visible:
+		return false
+	fermer_fenetre_controle()
+	var chemin := Partie.plan_choisi()
+	var plan = Plan.par_defaut()
+	if chemin != Plan.PLAN_PAR_DEFAUT:
+		plan = Plan.new()
+		plan.charger(chemin)
+	controle = ControleVol.new(plan)
+	if controle.bloque() or (controle.avertit() and not forcer):
+		var boutons := [["Ouvrir l'atelier", ouvrir_atelier, controle.bloque()], ["Revenir", fermer_fenetre_controle, false]]
+		if not controle.bloque():
+			boutons.append(["▶  Jouer quand même", func(): jouer_maintenant(true), true])
+		fenetre_controle = controle.fenetre(boutons)
+		add_child(fenetre_controle)
+		return false
 	_changer("Chargement du jeu…\nLe vaisseau part posé au sol, devant le hangar.\nDans le jeu, F3 ouvre l'atelier.",
 		func(): Partie.lancer_jeu(get_tree(), Partie.DEPART_HANGAR))
+	return true
+
+
+func fermer_fenetre_controle() -> void:
+	if fenetre_controle != null and is_instance_valid(fenetre_controle):
+		fenetre_controle.queue_free()
+	fenetre_controle = null
 
 
 ## Affiche « Chargement… » pendant deux images, puis change d'écran.

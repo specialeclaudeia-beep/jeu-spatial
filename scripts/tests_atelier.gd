@@ -10,6 +10,10 @@ extends Node
 ## Étape 4 : l'analyse ingénieur (scripts/atelier/analyse.gd : répartition des masses, poussées et couple
 ## axe par axe, défauts de symétrie, analyse d'une sélection et « le vaisseau sans elle »), et dans l'écran :
 ## plusieurs pièces à la fois (Ctrl + clic), tuiles cliquables, flèche du couple, salle à part.
+## Étape 5 : le jeu dessine TOUT le plan (scripts/dessin_vaisseau.gd : pièces faites à la main, vraies vitres,
+## pièces posées fusionnées par matière, compte de ce que la carte graphique dessine) et le CONTRÔLE AVANT LE
+## VOL (scripts/atelier/controle_vol.gd : vitesse du PC, lumière, au sol, en vol, symétrie), et dans l'écran :
+## la tuile AVANT LE VOL, sa page, la fenêtre de « Lancer » (atelier) et de « Jouer » (accueil).
 ## Ligne de commande :
 ##   Godot_console.exe --headless --path . res://scenes/tests_atelier.tscn
 ## Les valeurs « d'avant » viennent du code d'avant l'atelier (vaisseau écrit en dur), gardées dans
@@ -29,6 +33,9 @@ const Pieces = preload("res://scripts/atelier/pieces_toutes_faites.gd")
 const DessinVaisseau = preload("res://scripts/dessin_vaisseau.gd")
 const ModeleVaisseau = preload("res://scripts/modele_vaisseau.gd")
 const AtelierScript = preload("res://scripts/atelier/atelier.gd")
+const ControleVol = preload("res://scripts/atelier/controle_vol.gd")
+const Objets = preload("res://scripts/lumiere/objets.gd")
+const SCENE_ACCUEIL := "res://scenes/accueil.tscn"
 const DOSSIER_ESSAI := "user://essais_atelier_etape3/"
 const SCENE_ATELIER := "res://scenes/atelier.tscn"
 ## Mêmes valeurs que scripts/jeu.gd (le test ne charge pas le jeu, trop lourd)
@@ -72,6 +79,8 @@ func _ready() -> void:
 	_tests_vaisseaux_limites()
 	_tests_pose_calcul()
 	_tests_analyse_etape4()
+	_tests_dessin_etape5()
+	_tests_controle_vol()
 	# l'écran de l'atelier s'ouvre sur le chasseur de départ, et ce que les tests enregistrent ne touche pas
 	# aux vaisseaux ni au dernier vaisseau ouvert du joueur
 	var partie_avant = Engine.get_meta("partie") if Engine.has_meta("partie") else null
@@ -80,6 +89,7 @@ func _ready() -> void:
 	await _tests_ecran_atelier()
 	await _tests_ecran_etape3()
 	await _tests_ecran_etape4()
+	await _tests_ecran_etape5()
 	if partie_avant != null:
 		Engine.set_meta("partie", partie_avant)
 	else:
@@ -1436,13 +1446,13 @@ func _tests_ecran_etape4() -> void:
 	_resultat(sous != "" and avec and sans, "Écran : Ctrl + clic dans la vue", "sous la souris : « %s » ; ajoutée : %s, retirée : %s" % [sous, avec, sans])
 	at.camera.vue("trois_quarts")
 	# 2. un clic sur une tuile ouvre sa page détaillée
-	var tuiles_ok: bool = at.tableau.get_child_count() == 8
+	var tuiles_ok: bool = at.tableau.get_child_count() == 9   # (étape 5 : 9e tuile, AVANT LE VOL)
 	(at.tableau.get_child(7) as Control).gui_input.emit(_clic_gauche())
 	var page_sym: bool = at.selection == {"genre": "analyse", "id": "symetrie"} and at.fiche.visible and at.fiche_titre.text == "Symétrie gauche-droite"
 	var manche_orange: bool = not at.maillages.has("Manche_piece") or (at.maillages["Manche_piece"][0] as MeshInstance3D).material_overlay == at._materiau_surligne
 	(at.tableau.get_child(0) as Control).gui_input.emit(_clic_gauche())
 	var page_masses: bool = at.fiche_titre.text == "Répartition des masses" and at.fiche_sections.get_child_count() > 20
-	_resultat(tuiles_ok and page_sym and manche_orange and page_masses, "Écran : tuiles cliquables", "8 tuiles : %s ; « Symétrie » ouvre « %s » (manche en orange : %s) ; « Masse » ouvre « %s » (%d lignes)" % [
+	_resultat(tuiles_ok and page_sym and manche_orange and page_masses, "Écran : tuiles cliquables", "9 tuiles : %s ; « Symétrie » ouvre « %s » (manche en orange : %s) ; « Masse » ouvre « %s » (%d lignes)" % [
 		tuiles_ok, "Symétrie gauche-droite" if page_sym else at.fiche_titre.text, manche_orange, at.fiche_titre.text, at.fiche_sections.get_child_count()])
 	# un clic sur une ligne de la page choisit ces pièces dans le vaisseau
 	var lignes: Array = at.fiche_sections.get_children().filter(func(c): return c is PanelContainer and (c as Control).mouse_filter == Control.MOUSE_FILTER_STOP)
@@ -1552,4 +1562,455 @@ func _tests_ecran_etape4() -> void:
 	ok = enleve and at.plan.pieces.size() == n_avant and at.edition.ajouts().size() == 2 and not at.analyse.pieces_module("canons").is_empty()
 	_resultat(ok, "Écran : enlever une sélection d'un coup", "« %s » ; un Ctrl + Z : %d pièces (avant : %d)" % [texte_avis, at.plan.pieces.size(), n_avant])
 	at.queue_free()
+	await get_tree().process_frame
+
+
+
+# =====================================================================
+# ÉTAPE 5 — A. LE JEU DESSINE TOUT LE PLAN
+# =====================================================================
+## Un plan pour les essais : le chasseur de départ (moins des modules), plus des pièces posées
+## ([modèle, réglages, position, rotation en degrés]) et des pièces écrites à la main (sans ensemble).
+static func _plan_essai(poses: Array, bruts := [], enlever := []):
+	var ed = _ed_depart()
+	if not enlever.is_empty():
+		ed.supprimer(enlever.map(func(m): return "module:" + m))
+	var d: Dictionary = ed.donnees.duplicate(true)
+	var n := 0
+	for a in poses:
+		n += 1
+		var id := "essai_%d" % n
+		var r := Pieces.reglages_complets(String(a[0]), a[1])
+		var e := {"id": id, "type": "ensemble", "modele": a[0], "nom": "%s %d" % [Pieces.nom(String(a[0])), n], "reglages": r}
+		var rot: Vector3 = a[3] if a.size() > 3 else Vector3.ZERO
+		Edition.ecrire_xf(e, Transform3D(Basis.from_euler(rot * PI / 180.0), a[2]))
+		e["pieces"] = Pieces.pieces(String(a[0]), r, id)
+		(d["pieces"] as Array).append(e)
+	for b in bruts:
+		(d["pieces"] as Array).append(b)
+	var p = Plan.new()
+	p.lire_dictionnaire(d)
+	return p
+
+
+## Les pièces d'un modèle tout fait, écrites à la main au premier niveau du plan (déplacées de « dx »).
+static func _pieces_brutes(modele: String, reglages: Dictionary, prefixe: String, dx: Vector3) -> Array:
+	var liste := []
+	for q in Pieces.pieces(modele, Pieces.reglages_complets(modele, reglages), ""):
+		var c: Dictionary = (q as Dictionary).duplicate(true)
+		c["id"] = prefixe + String(c["id"]).trim_prefix("/")
+		for k in ["centre", "point", "position"]:
+			if c.has(k):
+				var v := _v(c[k]) + dx
+				c[k] = [v.x, v.y, v.z]
+		liste.append(c)
+	return liste
+
+
+## Une pièce du chasseur de départ (écrite dans son fichier), d'un type donné, copiée sous un autre nom.
+static func _copie_piece_depart(type: String, id: String, dx: Vector3) -> Dictionary:
+	var pile: Array = (Plan.par_defaut().donnees["pieces"] as Array).duplicate()
+	while not pile.is_empty():
+		var q = pile.pop_front()
+		if not (q is Dictionary):
+			continue
+		if String(q.get("type", "")) == type and not q.has("articulation"):
+			var c: Dictionary = (q as Dictionary).duplicate(true)
+			c["id"] = id
+			for k in ["centre", "point", "position"]:
+				if c.has(k):
+					var v := _v(c[k]) + dx
+					c[k] = [v.x, v.y, v.z]
+			return c
+		pile.append_array(q.get("pieces", []))
+	return {}
+
+
+## Ce que dessine un modèle : surfaces et triangles de chaque maillage (même ceux des jets, cachés au repos).
+static func _compte_reel(racine: Node) -> Dictionary:
+	var r := {"surfaces": 0, "triangles": 0, "maillages": 0}
+	for n in racine.find_children("*", "MeshInstance3D", true, false):
+		var m := n as MeshInstance3D
+		if m.mesh == null or m.is_queued_for_deletion():
+			continue
+		r["maillages"] += 1
+		for s in m.mesh.get_surface_count():
+			r["surfaces"] += 1
+			var a := m.mesh.surface_get_arrays(s)
+			var ix = a[Mesh.ARRAY_INDEX]
+			r["triangles"] += ((ix as PackedInt32Array).size() if ix != null else (a[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()) / 3
+	return r
+
+
+## Sens des triangles (rapport des faces tournées vers leurs normales) : 1 = toutes, comme une boîte.
+static func _faces_dehors(m: Mesh, signe_ref: float) -> float:
+	var bons := 0
+	var tous := 0
+	for s in m.get_surface_count():
+		var a := m.surface_get_arrays(s)
+		var vs: PackedVector3Array = a[Mesh.ARRAY_VERTEX]
+		var ns: PackedVector3Array = a[Mesh.ARRAY_NORMAL]
+		var ix: PackedInt32Array = a[Mesh.ARRAY_INDEX]
+		for k in range(0, ix.size() - 2, 3):
+			var c := (vs[ix[k + 1]] - vs[ix[k]]).cross(vs[ix[k + 2]] - vs[ix[k]])
+			if c.length() < 1e-9:
+				continue
+			var n := ns[ix[k]] + ns[ix[k + 1]] + ns[ix[k + 2]]
+			tous += 1
+			if signf(c.dot(n)) == signe_ref:
+				bons += 1
+	return float(bons) / maxf(tous, 1.0)
+
+
+static func _signe_boite() -> float:
+	var a := BoxMesh.new().get_mesh_arrays()
+	var vs: PackedVector3Array = a[Mesh.ARRAY_VERTEX]
+	var ns: PackedVector3Array = a[Mesh.ARRAY_NORMAL]
+	var ix: PackedInt32Array = a[Mesh.ARRAY_INDEX]
+	return signf((vs[ix[1]] - vs[ix[0]]).cross(vs[ix[2]] - vs[ix[0]]).dot(ns[ix[0]]))
+
+
+func _nouveau_dessin(p, v) -> Array:
+	var ext: Node3D = (load("res://modeles/vaisseau/vaisseau_exterieur.glb") as PackedScene).instantiate()
+	var mv = ModeleVaisseau.new(ext, v)
+	var d = DessinVaisseau.new(ext, mv, null)
+	return [ext, d]
+
+
+func _tests_dessin_etape5() -> void:
+	# 1. des pièces écrites à la main (sans dessin Blender) : chacune est dessinée, là où la physique la voit
+	var bruts := []
+	bruts.append_array(_pieces_brutes("boite", {}, "brut_boite", Vector3(0.0, 2.0, 1.0)))
+	bruts.append_array(_pieces_brutes("reservoir", {}, "brut_reservoir", Vector3(1.5, 1.6, 2.0)))
+	bruts.append_array(_pieces_brutes("poutre", {}, "brut_poutre", Vector3(-1.5, 1.6, 2.0)))
+	bruts.append_array(_pieces_brutes("plaque", {"matiere": "verre_aluminosilicate"}, "brut_vitre", Vector3(0.0, 2.6, 2.5)))
+	bruts.append_array(_pieces_brutes("aile", {}, "brut_aile", Vector3(3.0, 1.0, 3.0)))
+	bruts.append_array(_pieces_brutes("propulseur", {}, "brut_rcs", Vector3(0.0, 2.2, 4.0)))
+	bruts.append_array(_pieces_brutes("moteur_ionique", {}, "brut_moteur", Vector3(0.0, 2.0, 6.0)))
+	bruts.append(_copie_piece_depart("roue", "brut_roue", Vector3(0.0, 0.0, -2.0)))
+	bruts.append(_copie_piece_depart("structure", "brut_structure", Vector3(0.0, 3.0, 0.0)))
+	var p = _plan_essai([["plaque", {"matiere": "verre_aluminosilicate"}, Vector3(0.0, 1.2, 1.5)]], bruts)
+	var v = VaisseauPhysique.new(p)
+	var r := _nouveau_dessin(p, v)
+	var ext: Node3D = r[0]
+	var d = r[1]
+	d.construire(p, v)
+	var attendus := []
+	for b in bruts:
+		if DessinVaisseau.TYPES_DESSINES.has(String(b.get("type", ""))):
+			attendus.append(String(b["id"]))
+	var manquent := attendus.filter(func(id): return not d.bruts.has(id) or (d.maillages_bruts[id] as Array).is_empty())
+	var types := {}
+	for id in d.bruts:
+		types[String(p.pieces.filter(func(q): return q["id"] == id)[0]["type"])] = true
+	# chaque bloc, poutre ou plaque est dessiné centré sur son centre de masse (celui de la physique)
+	var ecart_max := 0.0
+	for q in p.pieces:
+		if d.bruts.has(String(q["id"])) and String(q["type"]) in ["bloc", "poutre", "plaque"]:
+			var mi: MeshInstance3D = d.maillages_bruts[String(q["id"])][0]
+			var c: Vector3 = DessinVaisseau._relatif(mi, ext) * mi.get_aabb().get_center()
+			ecart_max = maxf(ecart_max, c.distance_to(q["masse_calculee"]["centre"]))
+	var par_id := {}
+	for t in v.moteurs + v.rcs:
+		par_id[String(t["id"])] = t
+	var relies := 0
+	var brillants := 0
+	for id in d.lueurs_bruts:
+		for mi in d.lueurs_bruts[id]:
+			brillants += 1
+			if par_id.has(String((mi as Node).get_meta("extras", {}).get("id_physique", ""))):
+				relies += 1
+	var ok: bool = p.valide() and manquent.is_empty() and types.size() >= 8 and ecart_max < 0.005 and brillants >= 4 and relies == brillants
+	_resultat(ok, "Dessin (étape 5) : chaque pièce du plan est dessinée", "%d pièces écrites à la main dessinées (%s) ; manquent : %s ; écart au centre de masse %.1f mm ; %d lueurs et jets reliés à la physique sur %d" % [
+		d.bruts.size(), ", ".join(types.keys()), manquent, ecart_max * 1000.0, relies, brillants])
+	# 2. une plaque en verre est une VITRE : transparente, sans ombre ; le système de lumière en fait une vraie
+	#    vitre (loi de Fresnel, comme la verrière)
+	var vitres := []
+	for dico in [d.maillages_bruts, d.maillages_ajouts]:
+		for id in dico:
+			for mi in dico[id]:
+				if bool((mi as Node).get_meta("vitre", false)):
+					vitres.append(mi)
+	var transparentes := vitres.filter(func(mi): return ((mi as MeshInstance3D).mesh.surface_get_material(0) as BaseMaterial3D).transparency != BaseMaterial3D.TRANSPARENCY_DISABLED \
+		and (mi as MeshInstance3D).cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF).size()
+	var obj = Objets.new()
+	obj.convertir(ext, ext)
+	var vraies := vitres.filter(func(mi): return (mi as MeshInstance3D).get_surface_override_material(0) is ShaderMaterial \
+		and ((mi as MeshInstance3D).get_surface_override_material(0) as ShaderMaterial).shader == Objets.ShaderVitre).size()
+	obj.liberer()
+	ok = vitres.size() == 2 and transparentes == 2 and vraies == 2 and int(DessinVaisseau.compter(p)["vitres"]) == 2
+	_resultat(ok, "Dessin (étape 5) : une plaque en verre est une vraie vitre", "%d vitres (une posée, une écrite à la main) : transparentes et sans ombre %d, vraies vitres du système de lumière %d" % [
+		vitres.size(), transparentes, vraies])
+	ext.free()
+	# 3. FUSION (jeu) : les pièces posées de même matière ne font plus qu'un maillage ; les triangles sont les
+	#    mêmes, une pièce vue en miroir (jumelle) garde ses faces dehors, et les lueurs restent reliées
+	var ed = _ed_depart()
+	for k in 12:
+		ed.ajouter("boite", {}, Transform3D(Basis.IDENTITY, Vector3(-1.5 + 0.25 * k, 1.4, 1.0 + 0.1 * k)), "Fuselage")
+	ed.ajouter("poutre", {}, Transform3D(Basis.from_euler(Vector3(0.3, 0.5, 0.2)), Vector3(1.2, 1.0, 2.0)), "Fuselage", "", true)
+	ed.ajouter("reservoir", {}, Transform3D(Basis.from_euler(Vector3(0.0, 0.4, 0.0)), Vector3(1.4, 0.4, 3.0)), "Fuselage", "", true)
+	ed.ajouter("moteur_ionique", {"poussee_kn": 150.0}, Transform3D(Basis.IDENTITY, Vector3(2.6, -0.45, 2.4)), "Aile_bas_droit", "aile_bas_droit", true)
+	ed.ajouter("plaque", {"matiere": "verre_aluminosilicate"}, Transform3D(Basis.IDENTITY, Vector3(0.0, 1.3, 2.5)), "Fuselage")
+	var p2 = ed.plan()
+	var v2 = VaisseauPhysique.new(p2)
+	var r1 := _nouveau_dessin(p2, v2)
+	var r2 := _nouveau_dessin(p2, v2)
+	(r1[1]).construire(p2, v2)
+	(r2[1]).construire(p2, v2, true)
+	var c1 := _compte_reel(r1[0])
+	var c2 := _compte_reel(r2[0])
+	var d2 = r2[1]
+	var signe := _signe_boite()
+	var pire := 1.0
+	for fm in d2.fusions:
+		pire = minf(pire, _faces_dehors((fm as MeshInstance3D).mesh, signe))
+	var lueurs_ok := true
+	var nb_lueurs := 0
+	for id in d2.lueurs_ajouts:
+		for mi in d2.lueurs_ajouts[id]:
+			nb_lueurs += 1
+			lueurs_ok = lueurs_ok and is_instance_valid(mi) and not (mi as Node).is_queued_for_deletion() and (mi as Node).get_meta("extras", {}).has("id_physique")
+	var pieces_posees: int = ed.ajouts().size()
+	var gain: int = int(c1["surfaces"]) - int(c2["surfaces"])
+	ok = c1["triangles"] == c2["triangles"] and gain >= pieces_posees and pire > 0.999 and lueurs_ok and nb_lueurs == 4 and d2.fusions.size() < pieces_posees
+	_resultat(ok, "Dessin (étape 5) : le jeu fusionne les pièces posées", "%d pièces posées : %d surfaces → %d (%d maillages fusionnés), triangles %d → %d ; faces dehors (jumelles en miroir comprises) : %.1f %% ; %d lueurs et jets toujours reliés : %s" % [
+		pieces_posees, c1["surfaces"], c2["surfaces"], d2.fusions.size(), c1["triangles"], c2["triangles"], pire * 100.0, nb_lueurs, lueurs_ok])
+	# 4. le COMPTE (contrôle avant le vol) dit exactement ce que la carte graphique dessinera, avec et sans fusion
+	var k1: Dictionary = DessinVaisseau.compter(p2, false)
+	var k2: Dictionary = DessinVaisseau.compter(p2, true)
+	var k0: Dictionary = DessinVaisseau.compter(Plan.par_defaut())
+	var r0 := _nouveau_dessin(Plan.par_defaut(), VaisseauPhysique.new(Plan.par_defaut()))
+	var c0 := _compte_reel(r0[0])
+	ok = k1["surfaces"] == c1["surfaces"] and k1["triangles"] == c1["triangles"] and k2["surfaces"] == c2["surfaces"] and k2["triangles"] == c2["triangles"] \
+		and k0["surfaces"] == c0["surfaces"] and k0["triangles"] == c0["triangles"]
+	_resultat(ok, "Dessin (étape 5) : le compte des surfaces et triangles est exact", "chasseur %d surfaces / %d triangles (dessiné : %d / %d) ; avec les pièces posées : sans fusion %d / %d (dessiné %d / %d), fusionné %d / %d (dessiné %d / %d)" % [
+		k0["surfaces"], k0["triangles"], c0["surfaces"], c0["triangles"], k1["surfaces"], k1["triangles"], c1["surfaces"], c1["triangles"],
+		k2["surfaces"], k2["triangles"], c2["surfaces"], c2["triangles"]])
+	for x in [r0, r1, r2]:
+		(x[0] as Node).free()
+
+
+# =====================================================================
+# ÉTAPE 5 — B. LE CONTRÔLE AVANT LE VOL
+# =====================================================================
+static func _trouve(c, niveau: String, debut: String) -> Dictionary:
+	for e in c.elements:
+		if e["niveau"] == niveau and String(e["titre"]).begins_with(debut):
+			return e
+	return {}
+
+
+static func _resume(c) -> String:
+	return "; ".join(c.elements.filter(func(e): return e["niveau"] != ControleVol.OK).map(func(e): return "%s %s" % [ControleVol.symbole(e["niveau"]), e["titre"]]))
+
+
+func _tests_controle_vol() -> void:
+	# 1. le chasseur de départ : prêt (ni blocage ni avertissement), environ 60 images/s, il tient sur ses roues
+	var t0 := Time.get_ticks_msec()
+	var c = ControleVol.new(Plan.par_defaut())
+	var duree := Time.get_ticks_msec() - t0
+	var parts: Array = c.sol.get("parts", [])
+	var ok: bool = not c.bloque() and not c.avertit() and c.tuile()[1] == "prêt" and float(c.charge["ips"]) >= 59.0 and bool(c.sol["stable"]) \
+		and parts.size() == 3 and absf(float(parts[0]) + float(parts[1]) + float(parts[2]) - 1.0) < 1e-6 and float(parts[0]) < float(parts[1])
+	_resultat(ok, "Contrôle avant le vol : le chasseur de départ est prêt", "%s ; ≈ %d images/s ; part du poids sur les roues %s ; pour information : %s (%d ms)" % [
+		c.tuile()[1], roundi(float(c.charge["ips"])), parts.map(func(x): return "%.0f %%" % (100.0 * x)), _resume(c), duree])
+	# 2. les couleurs de toutes les matières, et celles des pièces toutes faites, existent sous une vraie
+	#    lumière (entre le charbon et la neige) : poser une pièce du catalogue ne fait jamais d'avertissement
+	var hors := []
+	var couleurs := []
+	for m in Catalogue.MATIERES:
+		couleurs.append([m, Pieces._couleur(m)])
+	for modele in Pieces.MODELES:
+		for fo in Pieces.dessin(modele, {}):
+			if String(fo["role"]) == "":
+				couleurs.append([modele, fo["couleur"]])
+	for cc in couleurs:
+		var col := (cc[1] as Color).srgb_to_linear()
+		var y := 0.2126 * col.r + 0.7152 * col.g + 0.0722 * col.b
+		if y < ControleVol.ALBEDO_MIN or y > ControleVol.ALBEDO_MAX:
+			hors.append("%s %.3f" % [cc[0], y])
+	_resultat(hors.is_empty(), "Contrôle avant le vol : les couleurs sont possibles", "%d couleurs (%d matières, et les pièces toutes faites) entre %.2f et %.2f d'albédo ; hors bornes : %s" % [
+		couleurs.size(), Catalogue.MATIERES.size(), ControleVol.ALBEDO_MIN, ControleVol.ALBEDO_MAX, hors])
+	# 3. AU SOL : un lest à l'arrière le fait basculer ; un lest énorme écrase les amortisseurs ; deux roues, pas de train
+	var cg: Vector3 = VaisseauPhysique.new(Plan.par_defaut()).centre_gravite
+	var lest_arriere := {"id": "lest", "type": "masse", "masse_kg": 40000.0, "centre": [0.0, 0.0, 10.0]}
+	var c_bascule = ControleVol.new(_plan_essai([], [lest_arriere]))
+	var lest_lourd := {"id": "lest", "type": "masse", "masse_kg": 80000.0, "centre": [cg.x, cg.y, cg.z]}
+	var c_butee = ControleVol.new(_plan_essai([], [lest_lourd]))
+	var c_deux = ControleVol.new(_plan_essai([], [], ["train_avant"]))
+	var c_sans = ControleVol.new(_plan_essai([], [], ["train_avant", "train_arriere_gauche", "train_arriere_droit"]))
+	var bascule := _trouve(c_bascule, ControleVol.AVERTIT, "Il bascule vers l'arrière")
+	var butees: int = c_butee.elements.filter(func(e): return e["niveau"] == ControleVol.AVERTIT and String(e["titre"]).ends_with("amortisseur en butée")).size()
+	ok = not bascule.is_empty() and butees == 3 and not _trouve(c_deux, ControleVol.AVERTIT, "Seulement 2 roues").is_empty() \
+		and not _trouve(c_sans, ControleVol.AVERTIT, "Pas de train").is_empty() and not c_bascule.bloque() and not c_sans.bloque()
+	_resultat(ok, "Contrôle avant le vol : au sol", "lest de 40 t à l'arrière : « %s » (%s) ; 80 t au centre : %d amortisseurs en butée ; sans train avant : %s ; sans train : %s" % [
+		bascule.get("titre", "RIEN"), bascule.get("valeur", ""), butees, _resume(c_deux), _resume(c_sans)])
+	# 4. LUMIÈRE : une boîte posée sur le nez, devant la verrière : la vue du pilote est cachée
+	var c_vue = ControleVol.new(_plan_essai([["boite", {"hauteur_m": 0.6}, Vector3(0.0, 0.7, -2.4)]]))
+	var vue := _trouve(c_vue, ControleVol.AVERTIT, "Boîte")
+	var c_cote = ControleVol.new(_plan_essai([["boite", {}, Vector3(0.0, -0.8, 3.5)]]))
+	ok = not vue.is_empty() and String(vue["titre"]).ends_with("devant la verrière") and String(vue["choix"].get("id", "")) == "essai_1" \
+		and _trouve(c_cote, ControleVol.AVERTIT, "Boîte").is_empty() and not c_cote.avertit()
+	_resultat(ok, "Contrôle avant le vol : une pièce devant la verrière", "boîte sur le nez : « %s » ; boîte sous le ventre : %s" % [
+		vue.get("titre", "RIEN"), _resume(c_cote) if c_cote.avertit() else "rien à dire"])
+	# 5. EN VOL : sans ailes (et leurs moteurs), ni moteur central, ni levage : aucun moteur principal, et il ne
+	#    quitte pas le sol ; sans le seul moteur central, il ne décolle plus à la verticale (pour information)
+	var c_sol = ControleVol.new(_plan_essai([], [], ["aile_haut_gauche", "aile_haut_droit", "aile_bas_gauche", "aile_bas_droit", "moteurs_levage", "moteur_central"]))
+	var sol_e := _trouve(c_sol, ControleVol.AVERTIT, "Il ne peut pas quitter le sol")
+	var sans_m := _trouve(c_sol, ControleVol.AVERTIT, "Aucun moteur principal")
+	var c_moteur = ControleVol.new(_plan_essai([], [], ["moteur_central"]))
+	ok = not sol_e.is_empty() and not sans_m.is_empty() and not c_sol.bloque() and c_moteur.nombre_de(ControleVol.BLOQUE) == 0 \
+		and not _trouve(c_moteur, ControleVol.INFO, "Pas de décollage vertical").is_empty()
+	_resultat(ok, "Contrôle avant le vol : en vol", "sans ailes, moteur central ni levage : %s (« %s ») ; sans moteur central : %s" % [_resume(c_sol), sol_e.get("texte", "RIEN"), _resume(c_moteur)])
+	# 6. VITESSE DU PC : 520 petites boîtes de même matière (fusionnées : le PC suit) ; un vaisseau de 33 m ;
+	#    1 000 plaques de verre (chaque vitre coûte : trop lourd, le vol est bloqué)
+	var poses := []
+	for k in 520:
+		poses.append(["boite", {"largeur_m": 0.2, "hauteur_m": 0.2, "longueur_m": 0.2, "masse_kg": 5.0},
+			Vector3(-5.0 + 0.5 * (k % 21), -2.0 - 0.3 * (k / 210), -6.0 + 0.5 * ((k / 21) % 10))])
+	t0 = Time.get_ticks_msec()
+	var c_520 = ControleVol.new(_plan_essai(poses))
+	var duree_520 := Time.get_ticks_msec() - t0
+	var e520 := _trouve(c_520, ControleVol.AVERTIT, "520 pièces posées")
+	var c_long = ControleVol.new(_plan_essai([["boite", {}, Vector3(0.0, 0.5, 18.0)], ["boite", {}, Vector3(0.0, 0.5, -14.0)]]))
+	var e_long := _trouve(c_long, ControleVol.AVERTIT, "33")
+	var vitres := []
+	for k in 1000:
+		vitres.append(["plaque", {"matiere": "verre_aluminosilicate", "longueur_m": 0.3, "largeur_m": 0.3}, Vector3(-5.0 + 0.4 * (k % 25), 3.0 + 0.2 * (k / 250), -5.0 + 0.4 * ((k / 25) % 10))])
+	var c_vitres = ControleVol.new(_plan_essai(vitres))
+	var trop := _trouve(c_vitres, ControleVol.BLOQUE, "Trop lourd")
+	var compte: Dictionary = c_520.charge["compte"]
+	var sans_fusion: Dictionary = c_520.charge["sans_fusion"]
+	ok = not e520.is_empty() and float(c_520.charge["ips"]) >= ControleVol.IPS_AVERTIT and not c_520.bloque() and int(compte["surfaces"]) * 5 < int(sans_fusion["surfaces"]) \
+		and not e_long.is_empty() and not trop.is_empty() and c_vitres.bloque() and float(c_vitres.charge["ips"]) < float(c_520.charge["ips"]) \
+		and c_vitres.tuile()[1] == "BLOQUÉ"
+	_resultat(ok, "Contrôle avant le vol : vitesse du PC", "520 boîtes : « %s », ≈ %d images/s (%d surfaces au lieu de %d grâce à la fusion, contrôle en %d ms) ; %s ; 1 000 vitres : « %s »" % [
+		e520.get("titre", "RIEN"), roundi(float(c_520.charge["ips"])), compte["surfaces"], sans_fusion["surfaces"], duree_520, e_long.get("titre", "RIEN"), trop.get("titre", "RIEN")])
+	# 7. PLAN : un plan illisible, et des pièces qui flottent (vues par l'atelier, ou enregistrées par lui)
+	var illisible = Plan.new()
+	illisible.lire_texte("{\"format\": \"plan-vaisseau\", \"pieces\": [{\"id\": \"x\", \"type\": \"inconnu\"}]}")
+	var c_ill = ControleVol.new(illisible)
+	var c_flotte = ControleVol.new(_plan_essai([["boite", {}, Vector3(0.0, 6.0, 0.0)]]), null, {"flottantes": ["essai_1"]})
+	var p_enr = _plan_essai([["boite", {}, Vector3(0.0, 6.0, 0.0)]])
+	p_enr.donnees["atelier"] = {"flottantes": ["essai_1"]}
+	var c_enr = ControleVol.new(p_enr)
+	var c_fuselage = ControleVol.new(_plan_essai([], [], ["fuselage"]))
+	var fl := _trouve(c_flotte, ControleVol.BLOQUE, "1 pièce ne touche rien")
+	ok = c_ill.bloque() and c_ill.tuile()[1] == "BLOQUÉ" and not fl.is_empty() and String(fl["choix"].get("id", "")) == "essai_1" and c_enr.bloque() \
+		and c_fuselage.bloque() and not ControleVol.new(_plan_essai([["boite", {}, Vector3(0.0, 6.0, 0.0)]])).bloque()
+	_resultat(ok, "Contrôle avant le vol : ce qui bloque le départ", "plan illisible : %s ; boîte qui flotte : « %s » ; enregistrée par l'atelier : %s ; sans fuselage : %s" % [
+		_resume(c_ill), fl.get("titre", "RIEN"), _resume(c_enr), _resume(c_fuselage).left(90)])
+	# 8. la page du contrôle : une section par sujet, chaque ligne expliquée
+	var f: Dictionary = c_vue.fiche()
+	var titres: Array = (f["sections"] as Array).map(func(sct): return sct["titre"])
+	var expliquees := true
+	for sct in f["sections"]:
+		for l in sct["liste"]:
+			expliquees = expliquees and String(l.get("detail", "")) != "" and l.has("couleur")
+	ok = f["titre"] == "Contrôle avant le vol" and titres.has("VITESSE DU PC") and titres.has("LUMIÈRE") and titres.has("AU SOL") and titres.has("EN VOL") and expliquees
+	_resultat(ok, "Contrôle avant le vol : sa page", "« %s » : %s ; chaque ligne expliquée : %s" % [f["titre"], ", ".join(titres), expliquees])
+
+
+# =====================================================================
+# ÉTAPE 5 — C. DANS L'ÉCRAN : tuile, page, fenêtre de Lancer, Jouer de l'accueil
+# =====================================================================
+static func _boutons(n: Node) -> Array:
+	return n.find_children("*", "Button", true, false).map(func(b): return (b as Button).text)
+
+
+func _tests_ecran_etape5() -> void:
+	_vider_dossier(DOSSIER_ESSAI)
+	Engine.set_meta("partie", {"plan": Plan.PLAN_PAR_DEFAUT, "depart": "", "plan_lu": true})
+	var at = (load(SCENE_ATELIER) as PackedScene).instantiate()
+	at.dossier_vaisseaux = DOSSIER_ESSAI
+	add_child(at)
+	await _attendre_atelier()
+	at.case_symetrie.button_pressed = false
+	# 1. la 9e tuile : AVANT LE VOL, « prêt » pour le chasseur de départ ; un clic ouvre la page du contrôle
+	var tuile: Control = at.tableau.get_child(8)
+	var textes: Array = tuile.find_children("*", "Label", true, false).map(func(l): return (l as Label).text)
+	tuile.gui_input.emit(_clic_gauche())
+	var ok: bool = at.tableau.get_child_count() == 9 and textes[0] == "AVANT LE VOL" and textes[1] == "prêt" and at.fiche_titre.text == "Contrôle avant le vol" \
+		and at.fiche_sections.get_child_count() > 8
+	_resultat(ok, "Écran (étape 5) : la tuile AVANT LE VOL", "« %s » ; un clic ouvre « %s » (%d lignes)" % [" / ".join(textes), at.fiche_titre.text, at.fiche_sections.get_child_count()])
+	# 2. une boîte posée (à la souris) sur le nez, devant la verrière : la tuile avertit, « Lancer » ouvre la
+	#    fenêtre du contrôle (avec « Lancer quand même »), sans partir
+	at.commencer_pose("boite", {"hauteur_m": 0.6})
+	var haut: Vector3 = at.corps.global_transform * Vector3(0.0, 6.0, -2.4)
+	at.calculer_pose_rayon(haut, -(at.corps.global_transform.basis.y.normalized()))
+	var touche: bool = bool(at.pose.get("touche", false))
+	at.valider_pose()
+	await _attendre_atelier()
+	await _attendre_atelier()
+	textes = (at.tableau.get_child(8) as Control).find_children("*", "Label", true, false).map(func(l): return (l as Label).text)
+	at.deselectionner()
+	var lance: bool = await at.lancer_jeu()
+	var fenetre: Control = at.fenetre_controle
+	var boutons: Array = _boutons(fenetre) if fenetre != null else []
+	ok = touche and at.nb_flottantes == 0 and textes[1] == "1 avertissement" and not lance and fenetre != null and fenetre.is_inside_tree() \
+		and boutons.has("▶  Lancer quand même") and not at.chargement.visible
+	_resultat(ok, "Écran (étape 5) : Lancer avec un avertissement", "boîte posée sur le nez (touche : %s, flotte : %d) ; tuile « %s » ; Lancer : %s ; fenêtre : %s" % [
+		touche, at.nb_flottantes, textes[1], "PARTI" if lance else "pas parti", boutons])
+	# « Voir le détail » ferme la fenêtre et ouvre la page ; la boîte est en orange
+	var voir: Button = null
+	for b in fenetre.find_children("*", "Button", true, false):
+		if (b as Button).text == "Voir le détail":
+			voir = b
+	var a_voir := voir != null
+	if a_voir:
+		voir.pressed.emit()   # (le bouton part avec la fenêtre)
+	await get_tree().process_frame
+	var boite_id := ""
+	for e in at.edition.ajouts():
+		boite_id = String(e["id"])
+	var orange: bool = at.maillages.has(boite_id) and (at.maillages[boite_id][0] as MeshInstance3D).material_overlay == at._materiau_surligne
+	ok = a_voir and at.fenetre_controle == null and at.fiche_titre.text == "Contrôle avant le vol" and orange
+	_resultat(ok, "Écran (étape 5) : la fenêtre mène au détail", "fiche « %s » ; boîte en orange : %s" % [at.fiche_titre.text, orange])
+	# 3. une boîte dans le vide : « Lancer » refusé, la fenêtre n'a pas de « Lancer quand même »
+	at.commencer_pose("boite", {})
+	at.calculer_pose_rayon(at.corps.global_transform * Vector3(9.0, 6.0, 0.0) - Vector3(0, 0, 40.0), Vector3(0, 0, 1))
+	at.valider_pose()
+	await _attendre_atelier()
+	await _attendre_atelier()
+	lance = await at.lancer_jeu()
+	boutons = _boutons(at.fenetre_controle) if at.fenetre_controle != null else []
+	textes = (at.tableau.get_child(8) as Control).find_children("*", "Label", true, false).map(func(l): return (l as Label).text)
+	ok = not lance and at.nb_flottantes == 1 and at.fenetre_controle != null and not boutons.has("▶  Lancer quand même") and textes[1] == "BLOQUÉ" and at.avis.visible
+	_resultat(ok, "Écran (étape 5) : Lancer refusé (pièce qui flotte)", "tuile « %s » ; fenêtre : %s" % [textes[1], boutons])
+	# Échap ferme la fenêtre
+	var ev := InputEventKey.new()
+	ev.keycode = KEY_ESCAPE
+	ev.pressed = true
+	at._unhandled_input(ev)
+	var fermee: bool = at.fenetre_controle == null
+	# 4. enregistrer : le fichier garde ce que l'atelier voit flotter (pour « Jouer » de l'accueil)
+	at.enregistrer()
+	var j = JSON.parse_string(FileAccess.get_file_as_string(at.edition.chemin))
+	var gardees: Array = (j.get("atelier", {}) as Dictionary).get("flottantes", []) if j is Dictionary else []
+	var chemin: String = at.edition.chemin
+	ok = fermee and gardees.size() == 1 and String(gardees[0]).begins_with("boite_")
+	_resultat(ok, "Écran (étape 5) : le vaisseau enregistré garde ses pièces qui flottent", "Échap ferme la fenêtre : %s ; dans le fichier : %s" % [fermee, gardees])
+	at.queue_free()
+	await get_tree().process_frame
+	# 5. l'accueil : « Jouer » avec ce vaisseau est refusé (fenêtre avec « Ouvrir l'atelier ») ; avec seulement
+	#    un avertissement, « Jouer quand même » est proposé
+	Partie.choisir_plan(chemin)
+	var ac = (load(SCENE_ACCUEIL) as PackedScene).instantiate()
+	add_child(ac)
+	await get_tree().process_frame
+	var joue: bool = ac.jouer_maintenant()
+	var b1: Array = _boutons(ac.fenetre_controle) if ac.fenetre_controle != null else []
+	# même vaisseau, la boîte qui flotte enlevée : il reste l'avertissement de la verrière
+	var ed = Edition.new(j, chemin)
+	var flotte_id := String(gardees[0]) if not gardees.is_empty() else ""
+	ed.supprimer([flotte_id])
+	ed.donnees["atelier"] = {"flottantes": []}
+	ed.enregistrer(DOSSIER_ESSAI)
+	Partie.choisir_plan(ed.chemin)
+	var joue2: bool = ac.jouer_maintenant()
+	var b2: Array = _boutons(ac.fenetre_controle) if ac.fenetre_controle != null else []
+	ok = not joue and b1.has("Ouvrir l'atelier") and not b1.has("▶  Jouer quand même") and not joue2 and b2.has("▶  Jouer quand même") and not ac.chargement.visible
+	_resultat(ok, "Écran (étape 5) : Jouer (accueil) passe par le contrôle", "boîte qui flotte : %s, fenêtre %s ; avertissement seul : %s, fenêtre %s" % [
+		"PARTI" if joue else "refusé", b1, "PARTI" if joue2 else "pas parti", b2])
+	ac.queue_free()
 	await get_tree().process_frame

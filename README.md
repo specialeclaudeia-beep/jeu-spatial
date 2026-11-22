@@ -16,7 +16,7 @@ choses qui ne sont pas dans le dépôt (trop lourdes) : l'extension `addons/nobo
 Le jeu s'ouvre sur l'**écran d'accueil** (provisoire) : **Atelier**, **Jouer** (le dernier vaisseau,
 posé au sol devant le hangar) et **Charger un vaisseau**.
 
-## Atelier (étapes 2 à 4)
+## Atelier (étapes 2 à 5)
 L'atelier est un écran à part : le jeu (planète, lumière, son) n'est chargé qu'au clic sur **Lancer**,
 et il est libéré quand on revient (F3 dans le jeu). Le vaisseau est posé dans un hangar, sur ses roues
 (même physique que le jeu : ses amortisseurs s'écrasent sous son poids), ailes repliées.
@@ -89,6 +89,35 @@ et il est libéré quand on revient (F3 dans le jeu). Le vaisseau est posé dans
   donne alors les chiffres du morceau seul (masse, centre de gravité, inertie, poussée, surface d'air, le
   vaisseau sans lui). On peut y **poser des pièces** (elles restent dans la salle) et tout analyser.
   **↩ Remettre en place** (I, ou Échap quand rien n'est choisi) : tout revient, avec ce qui a été posé.
+
+### Le jeu dessine le vaisseau construit, contrôle avant le vol (étape 5)
+- Le jeu dessine **chaque pièce du plan** : les pièces posées, et aussi celles d'un plan écrit à la main
+  (blocs, poutres, plaques, structures, moteurs, propulseurs, roues, surfaces d'air), là où la physique
+  les voit. Une **plaque en verre** est une vraie vitre (transparente, sans ombre ; dans le jeu, le
+  système de lumière en fait une vitre comme la verrière, qui renvoie la lumière selon l'angle).
+- Pour que le PC suive, le jeu **fusionne** les pièces posées de même matière (sous une même charnière) :
+  une seule surface à dessiner pour la carte graphique au lieu d'une par pièce (520 petites boîtes :
+  172 surfaces au lieu de 1 210). Les lueurs et les jets des moteurs restent à part (ils suivent la poussée).
+- Le tableau ingénieur a une 9e tuile, **AVANT LE VOL** : « prêt », « N avertissements » ou « BLOQUÉ »,
+  et les images par seconde estimées sur le PC. Un clic ouvre la page du **contrôle avant le vol** :
+  - **Vitesse du PC** : ce que la carte graphique dessinera (surfaces, triangles, vitres, comptés comme
+    le jeu les dessine) et le calcul des poussées (il grandit avec le nombre de moteurs) → images par
+    seconde estimées, à partir du chasseur de départ (environ 60 sur le PC de Gwenaël). En dessous de 20 :
+    le vol est **bloqué** ; en dessous de 50 : avertissement. Plus de **500 pièces posées** ou plus de
+    **30 m** de long (les limites prévues au début) : avertissement, on peut essayer quand même.
+  - **Lumière** : couleur impossible sous une vraie lumière (plus blanche que la neige, plus noire que le
+    charbon), vitres, lueurs des moteurs posés (elles brillent mais n'éclairent pas la coque : deux lampes
+    seulement), et pièce **devant la verrière** (vue de la place du pilote : elle cache le ciel).
+  - **Au sol** (départ devant le hangar) : il tient sur ses roues ? (centre de gravité au-dessus du
+    triangle des roues, sinon « il bascule vers l'arrière »…), part du poids sur chaque roue, amortisseur
+    qui arriverait en butée, train enlevé.
+  - **En vol** : moteur principal, décollage (vertical, ou en roulant avec des ailes), rotation sur les
+    trois axes, poussée réduite par un couple. **Symétrie** : pour information.
+- **▶ LANCER** : ce qui casserait le jeu (pièce qui flotte, plan avec des erreurs, vaisseau trop lourd pour
+  le PC) est refusé ; un simple avertissement ouvre une fenêtre qui l'explique, avec **Voir le détail**,
+  **Revenir** et **▶ Lancer quand même**. Le chasseur de départ part tout de suite, comme avant.
+  **Jouer** (accueil) passe par le même contrôle (avec **Ouvrir l'atelier**).
+- Mesurer la vitesse avec un vaisseau de l'atelier : `-- --mesure --plan user://vaisseaux/<nom>.plan.json`.
 Le visuel (hangar, menus, couleurs, formes des pièces) est provisoire ; la physique est la vraie.
 
 ## Commandes
@@ -424,10 +453,12 @@ façon Star Wars (jet de 3 000 m/s), qui suit de vraies lois là où elles exist
   (tableau ingénieur, catégories, recherche, fiches, pages d'analyse : masses, poussées, symétrie), `camera_atelier.gd`, `hangar.gd` et `style.gd` (visuel provisoire).
   `pieces_toutes_faites.gd` : les pièces à poser (réglages, masse, dessin) ; `edition.gd` : les changements
   du plan (poser, symétrie, régler, enlever, annuler / refaire, enregistrer).
-  `outils/captures_atelier.gd`, `captures_atelier_etape3.gd` et `captures_atelier_etape4.gd` : captures
-  d'écran de l'atelier et du départ.
-- `scripts/dessin_vaisseau.gd` : le dessin du vaisseau d'après son plan (modules enlevés cachés, pièces
-  posées dessinées) ; le même dans l'atelier et dans le jeu.
+  `controle_vol.gd` : le contrôle avant le vol (vitesse du PC, lumière, au sol, en vol, symétrie).
+  `outils/captures_atelier.gd`, `captures_atelier_etape3.gd`, `captures_atelier_etape4.gd` et
+  `captures_atelier_etape5.gd` : captures d'écran de l'atelier et du départ.
+- `scripts/dessin_vaisseau.gd` : le dessin du vaisseau d'après son plan (modules enlevés cachés, chaque
+  pièce du plan dessinée, pièces posées fusionnées dans le jeu, compte des surfaces et triangles) ; le
+  même dans l'atelier et dans le jeu.
 - `scripts/accueil.gd` (scène `scenes/accueil.tscn`, scène de départ) : l'écran d'accueil.
   `scripts/partie.gd` : ce qui passe d'un écran à l'autre (vaisseau choisi, lieu de départ).
 - `scripts/modele_vaisseau.gd` : le modèle 3D suit la physique (ailes, train, trappes, tuyère,

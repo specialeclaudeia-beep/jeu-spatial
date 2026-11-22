@@ -276,6 +276,11 @@ func _ready() -> void:
 	# le vaisseau : construit à partir de son plan (celui choisi dans l'atelier, sinon le chasseur de départ)
 	var plan = Plan.par_defaut()
 	var chemin_plan := Partie.plan_choisi()
+	# « -- --mesure --plan <fichier> » : mesurer la vitesse avec un autre vaisseau (atelier, étape 5)
+	var args := OS.get_cmdline_user_args()
+	var k_plan := args.find("--plan")
+	if k_plan >= 0 and k_plan + 1 < args.size():
+		chemin_plan = args[k_plan + 1]
 	if chemin_plan != Plan.PLAN_PAR_DEFAUT:
 		var autre = Plan.new()
 		if autre.charger(chemin_plan):
@@ -482,9 +487,11 @@ func _creer_pilote_et_cockpit() -> void:
 		logement.add_child(modele_droide)
 	# ailes, train, trappes, moteurs de levage, tuyère, amortisseurs : le même code que l'atelier
 	modele = ModeleVaisseau.new(exterieur, vaisseau)
-	# vaisseau fait dans l'atelier : modules enlevés cachés, pièces posées dessinées (même code que l'atelier)
+	# vaisseau fait dans l'atelier : modules enlevés cachés, chaque pièce du plan dessinée (même code que
+	# l'atelier) ; dans le jeu, les pièces posées de même matière sont FUSIONNÉES (moins d'appels de dessin
+	# pour la carte graphique : étape 5)
 	dessin = DessinVaisseau.new(exterieur, modele, modele_droide)
-	dessin.construire(vaisseau.plan, vaisseau)
+	dessin.construire(vaisseau.plan, vaisseau, true)
 	_trouver_lueurs()
 	var oeil := cockpit.find_child("Oeil_pilote", true, false) as Node3D
 	if oeil != null:
