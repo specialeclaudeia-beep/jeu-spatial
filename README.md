@@ -13,6 +13,31 @@ choses qui ne sont pas dans le dépôt (trop lourdes) : l'extension `addons/nobo
 2. Dans le gestionnaire de projets : **Importer**, puis choisis le fichier `project.godot` de ce dossier.
 3. Appuie sur **Lecture ▶** (en haut à droite) ou **F5**.
 
+Le jeu s'ouvre sur l'**écran d'accueil** (provisoire) : **Atelier**, **Jouer** (le dernier vaisseau,
+posé au sol devant le hangar) et **Charger un vaisseau**.
+
+## Atelier (étape 2)
+L'atelier est un écran à part : le jeu (planète, lumière, son) n'est chargé qu'au clic sur **Lancer**,
+et il est libéré quand on revient (F3 dans le jeu). Le vaisseau est posé dans un hangar, sur ses roues
+(même physique que le jeu : ses amortisseurs s'écrasent sous son poids), ailes repliées.
+- Caméra comme dans Blender : **clic molette** (ou Alt + clic gauche) pour tourner, **Maj + clic molette**
+  pour déplacer, **molette** (ou Ctrl + clic molette) pour le zoom ; pavé numérique 1 / 3 / 7 : face,
+  côté, dessus (Ctrl : l'autre côté), 5 : sans perspective, « , » ou F : cadrer le choix, Origine : tout
+  voir. Le menu **Caméra ▾** règle la vitesse de la caméra (×0,25 à ×4).
+- À gauche, le **catalogue** : les pièces du vaisseau par catégories, les types de pièces et les matières,
+  avec une recherche (sans accents : « tuyere » trouve « Tuyère »).
+- **Clic sur une pièce** (dans la vue ou dans la liste) : elle s'allume en orange et sa **fiche** s'ouvre à
+  droite (masse, matière, position, distance au centre de gravité, poussée, rôle calculé d'un propulseur…).
+  Les pièces sans dessin à elles (moteurs, propulseurs, roues, surfaces d'air) sont montrées par une
+  flèche ou un point. Échap : ne plus rien choisir.
+- En haut, le **tableau ingénieur** : masse, poussée vers l'avant, poussée / poids, décollage vertical,
+  couple des moteurs, rotation possible avec les propulseurs, centre de gravité. Tout est calculé par la
+  physique du jeu à partir du plan du vaisseau (pas de carburant : la masse ne change pas).
+- Cases à cocher : centre de gravité (boule à damier), flèches de poussée, fond neutre (vue technique).
+- **▶ LANCER** : le vol commence posé au sol, à l'arrêt, devant le hangar (de jour, sur un terrain presque
+  plat). Le bâtiment du hangar n'est pas encore dessiné dans le jeu.
+Le visuel (hangar, menus, couleurs) est provisoire ; la physique est la vraie.
+
 ## Commandes
 Toutes les commandes se changent dans le jeu : **F2** (ou **Options** sur la manette) ouvre l'écran
 de configuration. On clique sur une case (ou on la choisit avec la croix directionnelle puis Croix),
@@ -52,6 +77,7 @@ Disposition par défaut :
 | toile de l'espace : la courbure d'Einstein (oui / non) | Y | — (à choisir avec F2) |
 | saut d'essai vers le trou noir Gaia BH1 | M | — (à choisir avec F2) |
 | saut d'essai devant le trou de ver (vers Alpha du Centaure) | W | — (à choisir avec F2) |
+| retour à l'atelier (recharge l'atelier) | F3 | — (à choisir avec F2) |
 | tests de physique | F1 (Échap pour revenir) | Rond pour revenir |
 | configurer les commandes | F2 | Options |
 
@@ -341,6 +367,13 @@ façon Star Wars (jet de 3 000 m/s), qui suit de vraies lois là où elles exist
   centre de gravité, inertie) et le catalogue des matières et des types de pièces (`catalogue.gd`).
   `vaisseaux/` : les plans (celui du chasseur de départ). `outils/plan/` : comment refaire le plan à
   partir du modèle Blender. `scripts/tests_atelier.gd` : ses tests (`res://scenes/tests_atelier.tscn`).
+  L'écran de l'atelier : `atelier.gd` (scène `scenes/atelier.tscn`), `analyse.gd` (tableau ingénieur,
+  catégories, recherche, fiches), `camera_atelier.gd`, `hangar.gd` et `style.gd` (visuel provisoire).
+  `outils/captures_atelier.gd` : captures d'écran de l'accueil, de l'atelier et du départ.
+- `scripts/accueil.gd` (scène `scenes/accueil.tscn`, scène de départ) : l'écran d'accueil.
+  `scripts/partie.gd` : ce qui passe d'un écran à l'autre (vaisseau choisi, lieu de départ).
+- `scripts/modele_vaisseau.gd` : le modèle 3D suit la physique (ailes, train, trappes, tuyère,
+  amortisseurs) ; partagé par le jeu et l'atelier.
 - `scripts/physique/atmosphere.gd` et `aerodynamique.gd` : l'air de la planète et ce qu'il fait au vaisseau.
 - `scripts/physique/reperes.gd` : les systèmes d'étoile, leurs repères et les transformations de Lorentz entre eux.
 - `scripts/physique/lentille.gd` : Einstein B, la lumière courbée par un trou noir (tables pour le ciel et les étoiles).
