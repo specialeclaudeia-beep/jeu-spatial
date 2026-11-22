@@ -5,8 +5,15 @@ extends SceneTree
 ## Ajouter `--son-boucles` après le dossier pour entendre l'ancienne version (boucles de la phase 1) :
 ## on peut ainsi comparer avant / après la phase 2 (sons fabriqués en direct par la partie C++).
 ## Phase 3 : extraits 5 à 7 (se poser, rouler, freiner ; train et ailes ; sur le ventre).
+## Phase 4 : extraits 8 à 13 (virage serré : la structure chante et craque ; montée hors de l'air : la verrière se
+## charge ; coque qui refroidit après une rentrée : tics ; orbite basse : rares grains de poussière ; 0,5 c et 0,9 c
+## entre les étoiles : pluie de grains puis souffle du gaz). Pour 9 (altitude) et 12-13 (vitesse), le script
+## force la position ou la vitesse ; 10 part d'une coque à 1 100 K et la laisse refroidir toute seule.
+## Phase 4 aussi : 14 (petit propulseur à gauche, puis à droite : on entend de quel côté il souffle), 15 (moteurs
+## poussés à x10 : la structure, surchargée, craque), 16 (atterrissage dur à 3,2 m/s : le train craque).
 ## Chaque extrait est une petite scène jouée en vrai (la physique du vaisseau tourne, le moteur audio
 ## l'écoute) ; ce qui sort du bus Master est enregistré dans un fichier .wav.
+## `--seul=14` après le dossier : n'enregistre que les extraits dont le nom commence par « 14 ».
 ## Les commandes (gaz, manche) sont rejouées par le script ; seul l'extrait « souffle » force la vitesse.
 
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
@@ -25,9 +32,20 @@ const EXTRAITS := [
 	["5-sol-pose-roulage-freins", 14.0, "sol"],
 	["6-vide-train-et-ailes", 13.0, "vide"],
 	["7-sol-sur-le-ventre", 8.0, "ventre"],
+	# phase 4 : la tension des pièces et la poussière de l'espace
+	["8-air-virage-serre", 11.0, "air_haut"],
+	["9-montee-hors-de-l-air", 14.0, "air_montee"],
+	["10-vide-coque-qui-refroidit", 14.0, "vide_chaud"],
+	["11-orbite-basse-poussiere", 45.0, "orbite"],
+	["12-espace-0-5-c", 10.0, "relativiste"],
+	["13-espace-0-9-c", 10.0, "relativiste"],
+	["14-espace-propulseur-gauche-puis-droite", 12.0, "vide"],
+	["15-espace-poussee-x10-la-structure-craque", 10.0, "vide"],
+	["16-sol-atterrissage-dur", 8.0, "sol_dur"],
 ]
 
 var dossier := "res://extraits"
+var seul := ""
 
 
 class Pilotage extends Node:
@@ -41,6 +59,8 @@ class Pilotage extends Node:
 		var tangage := 0.0
 		var lacet := 0.0
 		var roulis := 0.0
+		var cote := Vector3.ZERO
+		var seul := ""
 		match nom:
 			"1-espace-petits-propulseurs":
 				# petits coups de manche, puis les 5 moteurs à 30 % pendant 3 s
@@ -64,18 +84,58 @@ class Pilotage extends Node:
 				# posé à 1,2 m/s en roulant à 50 m/s, roue avant qui braque un peu, freins à 5 s, arrêt
 				v.braquage_consigne = 0.3 * sin(t * 0.8)
 				v.frein = 0.6 if t > 5.0 else 0.0
+			"16-sol-atterrissage-dur":
+				# posé à 3,2 m/s (un peu plus que le cas de calcul du train, 3 m/s), freins à 3 s
+				v.frein = 0.6 if t > 3.0 else 0.0
 			"6-vide-train-et-ailes":
 				if t > 0.5 and t < 0.6: v.sortir_train(true)
 				if t > 4.5 and t < 4.6: v.ouvrir_ailes(false)
 				if t > 8.0 and t < 8.1: v.ouvrir_ailes(true)
 				if t > 11.0 and t < 11.1: v.sortir_train(false)
-		v.commander(gaz, tangage, lacet, roulis)
+			"8-air-virage-serre":
+				# 3 km, 220 m/s : on tire à fond sur le manche en virant, puis on relâche d'un coup
+				gaz = 0.6
+				if t > 2.0 and t < 7.0:
+					tangage = 1.0
+					roulis = 0.4 if t < 3.0 else 0.0
+			"9-montee-hors-de-l-air":
+				# de 2 à 40 km en 12 s, vaisseau immobile : la pression du dehors tombe, la verrière se charge
+				v.px = R + 2000.0 + 38000.0 * clampf((t - 1.0) / 12.0, 0.0, 1.0)
+				v.vx = 0.0
+				v.vy = 0.0
+				v.vz = 0.0
+			"14-espace-propulseur-gauche-puis-droite":
+				# un seul petit propulseur à la fois (allumé à la main, après la commande) : bout de l'aile gauche
+				# pendant 2 s, puis bout de l'aile droite ; puis petits coups des propulseurs du flanc du cockpit,
+				# gauche puis droite, et encore les bouts d'aile
+				if t > 1.0 and t < 3.0: seul = "bout aile haut gauche"
+				elif t > 4.0 and t < 6.0: seul = "bout aile haut droit"
+				elif t > 7.0 and t < 7.4: seul = "lateral gauche"
+				elif t > 7.9 and t < 8.3: seul = "lateral droit"
+				elif t > 8.8 and t < 9.2: seul = "bout aile haut gauche"
+				elif t > 9.7 and t < 10.1: seul = "bout aile haut droit"
+			"15-espace-poussee-x10-la-structure-craque":
+				# moteurs imaginaires x10 (touche du jeu) : 120 g, bien au-delà de ce que la structure supporte
+				if t < 0.1: v.regler_poussee(10.0)
+				if t > 1.0 and t < 4.0: gaz = clampf((t - 1.0) / 2.0, 0.0, 1.0)
+				elif t > 5.5 and t < 8.5: gaz = 1.0
+			"12-espace-0-5-c":
+				v.vz = -0.5 * 299792458.0
+			"13-espace-0-9-c":
+				v.vz = -0.9 * 299792458.0
+		v.commander(gaz, tangage, lacet, roulis, cote)
+		if seul != "":
+			for r in v.rcs:
+				if r["nom"] == seul:
+					r["actuel"] = 1.0
 		v.pas(delta)
 
 
 func _initialize() -> void:
 	for a in OS.get_cmdline_user_args():
-		if not a.begins_with("--"):
+		if a.begins_with("--seul="):
+			seul = a.substr(7)
+		elif not a.begins_with("--"):
 			dossier = a   # (--son-boucles est lu par le moteur audio lui-même)
 	DirAccess.make_dir_recursive_absolute(dossier)
 	_tout()
@@ -89,6 +149,8 @@ func _tout() -> void:
 	rec.format = AudioStreamWAV.FORMAT_16_BITS
 	AudioServer.add_bus_effect(master, rec)
 	for e in EXTRAITS:
+		if seul != "" and not String(e[0]).begins_with(seul + "-"):
+			continue
 		var v = VaisseauPhysique.new()
 		match String(e[2]):
 			"air_bas", "air_souffle":
@@ -97,16 +159,33 @@ func _tout() -> void:
 				v.atmosphere = Atmosphere.new(R, 0.0)
 				v.px = R + (100.0 if e[2] == "air_bas" else 1000.0)
 				v.orientation = Quaternion(Vector3.BACK, deg_to_rad(-90.0))
-			"sol", "ventre":
+			"air_haut", "air_montee":
+				v.gm = 0.0
+				v.rayon_planete = R
+				v.atmosphere = Atmosphere.new(R, 0.0)
+				v.px = R + (3000.0 if e[2] == "air_haut" else 2000.0)
+				v.vz = -220.0 if e[2] == "air_haut" else 0.0
+				v.orientation = Quaternion(Vector3.BACK, deg_to_rad(-90.0))
+			"vide_chaud":
+				v.temperature_nez = 1100.0   # juste après une rentrée dans l'air
+			"orbite":
+				# 250 km au-dessus de la planète, en orbite (moteurs coupés : on n'entend presque rien)
+				v.gm = GM
+				v.rayon_planete = R
+				v.atmosphere = Atmosphere.new(R, 0.0)
+				v.px = R + 250000.0
+				v.vz = -sqrt(GM / (R + 250000.0))
+				v.orientation = Quaternion(Vector3.BACK, deg_to_rad(-90.0))
+			"sol", "ventre", "sol_dur":
 				v.gm = GM
 				v.rayon_planete = R
 				v.orientation = Quaternion(Vector3(0, 0, 1), -PI / 2)
-				if e[2] == "sol":
+				if e[2] != "ventre":
 					v.sortir_train(true)
 					v.train = 1.0
-				v.px = R + (1.86 if e[2] == "sol" else 1.15)
-				v.vx = -1.2 if e[2] == "sol" else -0.8
-				v.vz = -50.0 if e[2] == "sol" else -20.0
+				v.px = R + (1.15 if e[2] == "ventre" else 1.86)
+				v.vx = {"sol": -1.2, "ventre": -0.8, "sol_dur": -3.2}[e[2]]
+				v.vz = {"sol": -50.0, "ventre": -20.0, "sol_dur": -40.0}[e[2]]
 		var p := Node3D.new()
 		root.add_child(p)
 		var pil := Pilotage.new()
@@ -122,7 +201,9 @@ func _tout() -> void:
 		var w: AudioStreamWAV = rec.get_recording()
 		var chemin := dossier.path_join(String(e[0]) + ".wav")
 		w.save_to_wav(chemin)
-		print("%s : %.1f s, son %.2f ms par image, %d sons brefs" % [chemin, w.get_length(), s.ms_par_image, s.joues])
+		print("%s : %.1f s, son %.2f ms par image, %d sons brefs (craquements %d, relâchements %d, tics %d, grains %d)" % [chemin,
+			w.get_length(), s.ms_par_image, s.joues, s.tension.craquements, s.tension.relachements, s.tension.tics,
+			s.poussiere.grains_joues])
 		s.queue_free()
 		pil.queue_free()
 		p.queue_free()

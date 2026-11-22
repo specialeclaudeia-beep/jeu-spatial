@@ -16,7 +16,10 @@ extends RefCounted
 ## L'intensité (0 à 1, donnée par sol_son.gd et moteurs_son.gd depuis la vitesse du choc) change donc le
 ## timbre ; le NIVEAU, lui, vient de l'énergie de déformation ½ m v² (idée de Gwenaël, voir sol_son.gd).
 ##
-## Clés : matiere (aluminium, acier, caoutchouc, roche), perte (facteur de perte de la pièce et de ses
+## Phase 4 : craquements, relâchements et tics de la coque (tension_son.gd), grains de poussière (poussiere_son.gd).
+## « trajet » (m de structure jusqu'au pilote) assombrit le son : les aigus se perdent en route.
+##
+## Clés : matiere (aluminium, acier, caoutchouc, roche, composite, verre), perte (facteur de perte de la pièce et de ses
 ## attaches), rebonds [retard (s), force] (verrou qui claque deux fois, caillou qui rebondit), ticks (grains qui
 ## crépitent au début), souffle (gaz d'une vanne, huile d'un vérin, vers souffle_f Hz), crissement (pneu qui
 ## accroche et glisse, vers crissement_f Hz), attaque (s : force qui monte doucement, moteur qui s'allume).
@@ -67,7 +70,34 @@ const FAMILLES := {
 	# verrou du train ou des ailes qui se ferme : « clac-clac » métallique (crochet puis loquet)
 	"verrouillage": {"matiere": "acier", "duree": 0.4,
 		"f_min": 250.0, "f_max": 5000.0, "modes": 12, "perte": 0.008, "contact": 0.0002, "rebonds": [[0.022, 0.6]]},
+	# --- tension des pièces (phase 4, tension_son.gd) ---
+	# craquement (émission acoustique) : une micro-rupture dure quelques microsecondes et fait sonner la pièce ;
+	# composite : sec et court (« carton dur ») ; métal : rivet qui glisse d'un micron (« tink ») ; verre : tintement
+	"craquement_composite": {"matiere": "composite", "duree": 0.12,
+		"f_min": 350.0, "f_max": 7000.0, "modes": 14, "perte": 0.03, "contact": 0.00004, "ticks": 3},
+	"craquement_metal": {"matiere": "aluminium", "duree": 0.3,
+		"f_min": 500.0, "f_max": 9000.0, "modes": 12, "perte": 0.006, "contact": 0.00003, "ticks": 1},
+	"craquement_verre": {"matiere": "verre", "duree": 0.3,
+		"f_min": 900.0, "f_max": 10000.0, "modes": 10, "perte": 0.004, "contact": 0.00002},
+	# relâchement : la charge tombe d'un coup, la pièce revient et sonne avec ses grands modes (« boum », « bong »)
+	"relachement_composite": {"matiere": "composite", "duree": 0.5,
+		"f_min": 45.0, "f_max": 1600.0, "modes": 16, "perte": 0.03, "contact": 0.003},
+	"relachement_metal": {"matiere": "acier", "duree": 0.9,
+		"f_min": 55.0, "f_max": 2500.0, "modes": 16, "perte": 0.01, "contact": 0.002},
+	"relachement_verre": {"matiere": "verre", "duree": 0.7,
+		"f_min": 140.0, "f_max": 3500.0, "modes": 14, "perte": 0.006, "contact": 0.0015},
+	# tôle de la coque qui chauffe ou refroidit et saute d'un appui à l'autre (« tic », parfois « tic-tic »)
+	"tic_thermique": {"matiere": "aluminium", "duree": 0.25,
+		"f_min": 700.0, "f_max": 7000.0, "modes": 10, "perte": 0.008, "contact": 0.00008, "rebonds": [[0.006, 0.3]]},
+	# --- poussière de l'espace (phase 4, poussiere_son.gd) : choc à des km/s, contact de quelques µs ---
+	"poussiere_verre": {"matiere": "verre", "duree": 0.08,
+		"f_min": 2000.0, "f_max": 14000.0, "modes": 8, "perte": 0.004, "contact": 0.00001},
+	"poussiere_coque": {"matiere": "aluminium", "duree": 0.1,
+		"f_min": 900.0, "f_max": 10000.0, "modes": 8, "perte": 0.01, "contact": 0.00002},
 }
+## Phase 4 : un son qui traverse la structure perd ses aigus (les vibrations rapides s'amortissent plus vite) :
+## 0,3 dB par mètre et par kHz, en plus du 1 dB par mètre déjà compté dans son niveau.
+const ASSOURDISSEMENT := 0.3
 
 
 static func existe(famille: String) -> bool:
@@ -78,7 +108,7 @@ static func existe(famille: String) -> bool:
 ## 100 premières ms, pleine échelle = 1). Renvoie {modes (n × 4 nombres), options (11 nombres, voir chocs_son.h),
 ## parts (énergie de chaque octave, somme 1), duree (s, jusqu'à −90 dB)}.
 static func recette(famille: String, i: float, carre_moyen: float, rng: RandomNumberGenerator, gauche := 1.0, droite := 1.0,
-		priorite := 0.0) -> Dictionary:
+		priorite := 0.0, trajet := 0.0) -> Dictionary:
 	var p: Dictionary = FAMILLES[famille]
 	i = clampf(i, 0.0, 1.0)
 	var k := clampf(i, 0.05, 1.0) / 0.5
@@ -103,7 +133,7 @@ static func recette(famille: String, i: float, carre_moyen: float, rng: RandomNu
 		var tc := f * contact
 		var choc := 1.0 if absf(1.0 - 4.0 * tc * tc) < 1e-6 else absf(cos(PI * tc) / (1.0 - 4.0 * tc * tc))
 		var montee := 1.0 / sqrt(1.0 + pow(TAU * f * attaque, 2.0))
-		var a := forme * choc * montee / sqrt(f) * rng.randf_range(0.6, 1.0)
+		var a := forme * choc * montee / sqrt(f) * rng.randf_range(0.6, 1.0) * _assourdi(f, trajet)
 		base.append([f, minf(tau, duree), a])
 		a2_tot += a * a
 	var a_ref := sqrt(a2_tot / maxi(nb, 1)) if nb > 0 else 1.0
@@ -121,7 +151,8 @@ static func recette(famille: String, i: float, carre_moyen: float, rng: RandomNu
 	# grains qui crépitent (roche, poussière) : chacun un tout petit mode aigu très amorti
 	var ticks := int(round(float(p.get("ticks", 0)) * (0.3 + i)))
 	for t in ticks:
-		_mode(modes, parts, rng.randf_range(2500.0, 7000.0), 0.0006, a_ref * rng.randf_range(0.5, 2.0), rng.randf_range(0.0, 0.15))
+		var f_t := rng.randf_range(2500.0, 7000.0)
+		_mode(modes, parts, f_t, 0.0006, a_ref * rng.randf_range(0.5, 2.0) * _assourdi(f_t, trajet), rng.randf_range(0.0, 0.15))
 	var options := PackedFloat32Array()
 	options.resize(11)
 	options[0] = maxf(attaque, 0.0003)
@@ -181,6 +212,11 @@ static func recette(famille: String, i: float, carre_moyen: float, rng: RandomNu
 	for b in 10:
 		parts[b] /= maxf(tot, 1e-30)
 	return {"modes": modes, "options": options, "parts": parts, "duree": fin}
+
+
+## Ce qui reste d'un mode de fréquence f après « trajet » mètres de structure (amplitude).
+static func _assourdi(f: float, trajet: float) -> float:
+	return pow(10.0, -ASSOURDISSEMENT * trajet * f / 20000.0) if trajet > 0.0 else 1.0
 
 
 static func _mode(modes: PackedFloat32Array, parts: PackedFloat64Array, f: float, tau: float, a: float, retard: float) -> void:

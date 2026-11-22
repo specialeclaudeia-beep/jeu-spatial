@@ -145,6 +145,7 @@ void max_atomique(std::atomic<float> &a, float v) {
 SyntheSon::SyntheSon() {
 	for (int j = 0; j < BANDES; j++) {
 		cible_bandes[j].store(0.0f);
+		cible_gauche[j].store(0.5f);
 	}
 	for (int i = 0; i < MODES; i++) {
 		cible_modes[i].store(0.0f);
@@ -165,6 +166,18 @@ void SyntheSon::regler_bandes(const PackedFloat32Array &p_energies) {
 	}
 	for (int j = n; j < BANDES; j++) {
 		cible_bandes[j].store(0.0f, std::memory_order_relaxed);
+	}
+}
+
+void SyntheSon::regler_gauche(const PackedFloat32Array &p_parts) {
+	const int n = std::min((int)p_parts.size(), BANDES);
+	for (int j = 0; j < BANDES; j++) {
+		float w = j < n ? p_parts[j] : 0.5f;
+		w = fini(w) ? std::min(1.0f, std::max(0.0f, w)) : 0.5f;
+		if (std::fabs(w - 0.5f) < 0.005f) {
+			w = 0.5f;   // moins de 0,1 dB d'écart : au milieu (un seul calcul pour les deux oreilles)
+		}
+		cible_gauche[j].store(w, std::memory_order_relaxed);
 	}
 }
 
@@ -286,6 +299,7 @@ bool SyntheSon::_is_monophonic() const { return true; }
 
 void SyntheSon::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("regler_bandes", "energies"), &SyntheSon::regler_bandes);
+	ClassDB::bind_method(D_METHOD("regler_gauche", "parts"), &SyntheSon::regler_gauche);
 	ClassDB::bind_method(D_METHOD("regler_modes", "frequences", "pertes"), &SyntheSon::regler_modes);
 	ClassDB::bind_method(D_METHOD("regler_energie_modes", "energies"), &SyntheSon::regler_energie_modes);
 	ClassDB::bind_method(D_METHOD("regler_raie", "i", "frequence", "energie"), &SyntheSon::regler_raie);
@@ -361,8 +375,12 @@ void LectureSyntheSon::preparer() {
 		b.e = 0.0;
 		b.g = 0.0;
 		b.gc = 0.0;
+		b.w = 0.5;
+		b.pl = b.pr = b.plc = b.prc = 1.0;
 		pas_g[j] = 0.0;
+		pas_pl[j] = pas_pr[j] = 0.0;
 	}
+	au_milieu = true;
 	for (int i = 0; i < SyntheSon::MODES; i++) {
 		modes[i] = Mode();
 		modes[i].hasard = melanger(hasard_raies ^ (g * 131u + (uint32_t)i * 40503u + 977u));
@@ -378,6 +396,7 @@ void LectureSyntheSon::preparer() {
 		passe_tout[k].pos = 0;
 	}
 	mono.assign(SyntheSon::BLOC, 0.0f);
+	droite.assign(SyntheSon::BLOC, 0.0f);
 	version_modes = 0xffffffffu;
 	dans_bloc = 0;
 	temps = 0.0;
@@ -401,6 +420,7 @@ void LectureSyntheSon::preparer_modes() {
 		const double w = 2.0 * PI_D * f / taux;
 		m.a1 = 2.0 * r * std::cos(w);
 		m.a2 = r * r;
+		m.bande = std::min(SyntheSon::BANDES - 1, std::max(0, (int)std::lround(1.0 + 3.0 * std::log2(f / 31.25))));
 		// carré moyen de y pour un bruit blanc de carré moyen 1 (processus AR(2))
 		m.k = (1.0 + m.a2) / ((1.0 - m.a2) * ((1.0 + m.a2) * (1.0 + m.a2) - m.a1 * m.a1));
 		m.actif = fini(m.k) && m.k > 0.0;
@@ -418,6 +438,25 @@ void LectureSyntheSon::debut_bloc() {
 	}
 	double en_cours = 0.0;
 	bool silence = true;
+	// côté : glisse un peu plus lentement que le volume (30 ms au moins), pour qu'un son qui change de côté
+	// ne « saute » jamais d'une oreille à l'autre
+	const double k_cote = 1.0 - std::exp(-dt / std::max(0.03, (double)tau));
+	au_milieu = true;
+	for (int j = 0; j < SyntheSon::BANDES; j++) {
+		Bande &b = bandes[j];
+		b.pl = b.plc;
+		b.pr = b.prc;
+		const double w_cible = flux->cible_gauche[j].load(std::memory_order_relaxed);
+		b.w += (w_cible - b.w) * k_cote;
+		if (std::fabs(b.w - w_cible) < 1e-3) {
+			b.w = w_cible;   // arrivé (à 0,01 dB près) : plus de rampe, boucle plus légère
+		}
+		b.plc = b.w == 0.5 ? 1.0 : std::sqrt(2.0 * b.w);
+		b.prc = b.w == 0.5 ? 1.0 : std::sqrt(2.0 * (1.0 - b.w));
+		pas_pl[j] = (b.plc - b.pl) / SyntheSon::BLOC;
+		pas_pr[j] = (b.prc - b.pr) / SyntheSon::BLOC;
+		au_milieu = au_milieu && b.pl == 1.0 && b.plc == 1.0 && b.pr == 1.0 && b.prc == 1.0;
+	}
 	for (int j = 0; j < SyntheSon::BANDES; j++) {
 		Bande &b = bandes[j];
 		b.g = b.gc;   // fin exacte de la rampe du bloc précédent (pas d'erreur qui s'accumule)
@@ -537,7 +576,18 @@ void LectureSyntheSon::calculer(float *p_sortie, int p_n) {
 		}
 		const int k = std::min(p_n - fait, SyntheSon::BLOC - dans_bloc);
 		float *m = mono.data();
+		float *md_ = droite.data();
 		std::fill(m, m + k, 0.0f);
+		// côtés au début de ce morceau (un bloc de 256 peut être coupé en plusieurs appels : chaque morceau repart
+		// d'où le précédent s'est arrêté, sinon le côté « reculerait » d'un coup)
+		double pl0[SyntheSon::BANDES], pr0[SyntheSon::BANDES];
+		if (!au_milieu) {
+			std::fill(md_, md_ + k, 0.0f);
+			for (int j = 0; j < SyntheSon::BANDES; j++) {
+				pl0[j] = bandes[j].pl;
+				pr0[j] = bandes[j].pr;
+			}
+		}
 		// 1. bruit filtré : les bandes actives, rangées côte à côte (le processeur les mène de front)
 		int idx[SyntheSon::BANDES];
 		int na = 0;
@@ -551,7 +601,8 @@ void LectureSyntheSon::calculer(float *p_sortie, int p_n) {
 		if (na > 0) {
 			double b0[SyntheSon::BANDES], a1a[SyntheSon::BANDES], a2a[SyntheSon::BANDES], a1b[SyntheSon::BANDES],
 					a2b[SyntheSon::BANDES], s1a[SyntheSon::BANDES], s2a[SyntheSon::BANDES], s1b[SyntheSon::BANDES],
-					s2b[SyntheSon::BANDES], g[SyntheSon::BANDES], dg[SyntheSon::BANDES];
+					s2b[SyntheSon::BANDES], g[SyntheSon::BANDES], dg[SyntheSon::BANDES], pl[SyntheSon::BANDES],
+					pr[SyntheSon::BANDES], dpl[SyntheSon::BANDES], dpr[SyntheSon::BANDES];
 			uint32_t h[SyntheSon::BANDES];
 			for (int q = 0; q < na; q++) {
 				const Bande &b = bandes[idx[q]];
@@ -567,7 +618,57 @@ void LectureSyntheSon::calculer(float *p_sortie, int p_n) {
 				g[q] = b.g;
 				dg[q] = pas_g[idx[q]];
 				h[q] = b.hasard;
+				pl[q] = b.pl;
+				pr[q] = b.pr;
+				dpl[q] = pas_pl[idx[q]];
+				dpr[q] = pas_pr[idx[q]];
 			}
+			bool rampe = false;
+			for (int q = 0; q < na; q++) {
+				rampe = rampe || dpl[q] != 0.0 || dpr[q] != 0.0;
+			}
+			if (!au_milieu && rampe) {
+				// chaque bande a son côté : deux sommes (gauche, droite) ; un côté qui change glisse
+				// échantillon par échantillon (une marche, même minuscule, sur un grave très fort s'entendrait)
+				for (int i = 0; i < k; i++) {
+					double sg = 0.0, sd = 0.0;
+					for (int q = 0; q < na; q++) {
+						const double x = g[q] * bruit(h[q]);
+						const double y1 = b0[q] * x + s1a[q];
+						s1a[q] = a1a[q] * y1 + s2a[q];
+						s2a[q] = -b0[q] * x - a2a[q] * y1;
+						const double y2 = y1 + s1b[q];
+						s1b[q] = a1b[q] * y2 + s2b[q];
+						s2b[q] = -y1 - a2b[q] * y2;
+						sg += y2 * pl[q];
+						sd += y2 * pr[q];
+						g[q] += dg[q];
+						pl[q] += dpl[q];
+						pr[q] += dpr[q];
+					}
+					m[i] += (float)sg;
+					md_[i] += (float)sd;
+				}
+			} else if (!au_milieu) {
+				// côtés arrivés (le cas le plus courant) : pas de rampe, boucle plus légère
+				for (int i = 0; i < k; i++) {
+					double sg = 0.0, sd = 0.0;
+					for (int q = 0; q < na; q++) {
+						const double x = g[q] * bruit(h[q]);
+						const double y1 = b0[q] * x + s1a[q];
+						s1a[q] = a1a[q] * y1 + s2a[q];
+						s2a[q] = -b0[q] * x - a2a[q] * y1;
+						const double y2 = y1 + s1b[q];
+						s1b[q] = a1b[q] * y2 + s2b[q];
+						s2b[q] = -y1 - a2b[q] * y2;
+						sg += y2 * pl[q];
+						sd += y2 * pr[q];
+						g[q] += dg[q];
+					}
+					m[i] += (float)sg;
+					md_[i] += (float)sd;
+				}
+			} else
 			for (int i = 0; i < k; i++) {
 				double somme = 0.0;
 				for (int q = 0; q < na; q++) {
@@ -619,6 +720,31 @@ void LectureSyntheSon::calculer(float *p_sortie, int p_n) {
 				db[q] = pas_b[im[q]];
 				h[q] = md.hasard;
 			}
+			if (!au_milieu) {
+				double pl[SyntheSon::MODES], pr[SyntheSon::MODES], dpl[SyntheSon::MODES], dpr[SyntheSon::MODES];
+				for (int q = 0; q < nm; q++) {
+					const int j = modes[im[q]].bande;   // une résonance prend le côté de sa bande
+					pl[q] = pl0[j];
+					pr[q] = pr0[j];
+					dpl[q] = pas_pl[j];
+					dpr[q] = pas_pr[j];
+				}
+				for (int i = 0; i < k; i++) {
+					double sg = 0.0, sd = 0.0;
+					for (int q = 0; q < nm; q++) {
+						const double y = a1[q] * y1[q] - a2[q] * y2[q] + b[q] * bruit(h[q]);
+						y2[q] = y1[q];
+						y1[q] = y;
+						sg += y * pl[q];
+						sd += y * pr[q];
+						b[q] += db[q];
+						pl[q] += dpl[q];
+						pr[q] += dpr[q];
+					}
+					m[i] += (float)sg;
+					md_[i] += (float)sd;
+				}
+			} else
 			for (int i = 0; i < k; i++) {
 				double somme = 0.0;
 				for (int q = 0; q < nm; q++) {
@@ -638,6 +764,12 @@ void LectureSyntheSon::calculer(float *p_sortie, int p_n) {
 				md.hasard = h[q];
 			}
 		}
+		if (!au_milieu) {
+			for (int j = 0; j < SyntheSon::BANDES; j++) {
+				bandes[j].pl = pl0[j] + pas_pl[j] * k;
+				bandes[j].pr = pr0[j] + pas_pr[j] * k;
+			}
+		}
 		// 3. sons purs
 		for (int r = 0; r < SyntheSon::RAIES; r++) {
 			Raie &ra = raies[r];
@@ -648,6 +780,9 @@ void LectureSyntheSon::calculer(float *p_sortie, int p_n) {
 			const double cr = rot_re[r], ci = rot_im[r], da = pas_a[r];
 			for (int i = 0; i < k; i++) {
 				m[i] += (float)(a * imj);
+				if (!au_milieu) {
+					md_[i] += (float)(a * imj);   // les sons purs restent au milieu
+				}
 				const double nr = re * cr - imj * ci;
 				imj = re * ci + imj * cr;
 				re = nr;
@@ -657,12 +792,13 @@ void LectureSyntheSon::calculer(float *p_sortie, int p_n) {
 			ra.im = imj;
 			ra.a = std::max(0.0, a);
 		}
-		// 4. sortie : gauche = le son ; droite = le même passé par 4 filtres passe-tout
+		// 4. sortie : gauche = le son ; droite = le même (ou sa voie droite) passé par 4 filtres passe-tout
 		float pic = 0.0f;
 		bool ok = true;
+		const float *entree_d = au_milieu ? m : md_;
 		for (int i = 0; i < k; i++) {
 			const float x = m[i];
-			float y = x;
+			float y = entree_d[i];
 			for (int p = 0; p < 4; p++) {
 				PasseTout &pt = passe_tout[p];
 				const float ancien = pt.ligne[pt.pos];

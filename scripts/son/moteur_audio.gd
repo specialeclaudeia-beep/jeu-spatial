@@ -37,6 +37,21 @@ extends Node
 ## raclage) et des vérins s'ajoutent aux voix C++ : roulement et vérins dans la voix « structure » (ils passent par
 ## les panneaux qui résonnent), dérapage, frein et raclage dans une 3e voix « sol » dont les sons purs tremblent
 ## plus (un pneu qui crisse n'est jamais stable). Sans la partie C++, pas de sons brefs ni de sons du sol.
+##
+## Phase 4 : la tension des pièces et la poussière de l'espace. charges.gd calcule 120 fois par seconde la charge
+## exacte de chaque attache (ailes, réacteurs, moteur central, dérives, jambes du train, verrière, nez : principe de
+## d'Alembert) ; tension_son.gd en tire les craquements (émission acoustique, effet Kaiser), les relâchements, les
+## tics de la coque qui chauffe ou refroidit, et le « chant » de la structure (couche « tension », voix structure :
+## elle passe par les panneaux du cockpit qui résonnent). poussiere_son.gd fait frapper les grains et le gaz de
+## l'espace (rares « tic » en orbite, pluie puis souffle continu près de la vitesse de la lumière : couche
+## « poussiere », voix air, et les plus gros grains un par un). Un son bref qui traverse la structure perd ses aigus
+## en route (« trajet », chocs.gd).
+##
+## Côté (phase 4, demande de Gwenaël) : chaque moteur, chaque petit propulseur et chaque pièce qui chante a sa place
+## dans le cockpit. cote_son.gd calcule, octave par octave, la part qui arrive à l'oreille gauche (parois de son côté,
+## ombre de la tête dans les aigus, aigus perdus si le son vient de derrière) ; la partie C++ donne à chaque tiers
+## d'octave sa part à gauche. Tout est dans le repère de la tête : si le pilote tourne la tête, le son reste à sa
+## place dans le cockpit. Les sons brefs font de même (Chocs.panoramique).
 
 const Capteurs = preload("res://scripts/son/capteurs.gd")
 const MoteursSon = preload("res://scripts/son/moteurs_son.gd")
@@ -46,6 +61,9 @@ const Synthese = preload("res://scripts/son/synthese.gd")
 const Resonances = preload("res://scripts/son/resonances.gd")
 const SolSon = preload("res://scripts/son/sol_son.gd")
 const Chocs = preload("res://scripts/son/chocs.gd")
+const TensionSon = preload("res://scripts/son/tension_son.gd")
+const PoussiereSon = preload("res://scripts/son/poussiere_son.gd")
+const CoteSon = preload("res://scripts/son/cote_son.gd")
 
 const CATALOGUE := "res://sons/sons.json"
 const COUCHES_MAX := 8
@@ -66,17 +84,22 @@ const RELACHE := 0.3             # s : … et revient doucement
 const RELACHE_COUCHE := 0.06     # s : une couche qui baisse (jet de gaz coupé) s'éteint en ~60 ms
 ## Phase 2 : les voix fabriquées en direct, et les couches qu'elles regroupent (bus, graine du hasard).
 const VOIX_DIRECTES := {
-	"structure": {"bus": "Structure", "couches": ["structure", "rcs", "roulage", "verins"], "graine": 21},
-	"air": {"bus": "Exterieur", "couches": ["souffle", "jet", "jet_rcs"], "graine": 22},
+	"structure": {"bus": "Structure", "couches": ["structure", "rcs", "roulage", "verins", "tension"], "graine": 21},
+	"air": {"bus": "Exterieur", "couches": ["souffle", "jet", "jet_rcs", "poussiere"], "graine": 22},
 	"sol": {"bus": "Structure", "couches": ["derapage", "frein", "raclage"], "graine": 23, "instabilite": 0.03, "instabilite_temps": 0.02},
 }
 ## Couches de la phase 3 (sol et vérins) : elles n'ont pas de boucle de la phase 1.
 const COUCHES_SOL := ["roulage", "verins", "derapage", "frein", "raclage"]
+## Couches de la phase 4 (tension des pièces, poussière de l'espace).
+const COUCHES_PHASE4 := ["tension", "poussiere"]
 ## Priorité de chaque famille de sons brefs.
 const PRIORITE_CHOC := {"pneu_toucher": 4, "coque_choc": 4, "train_butee": 4, "amortisseur_detente": 4, "pneu_crissement": 4,
-	"gravier": 1, "frein_serrage": 3, "verin_depart": 3, "verin_arret": 3, "verrouillage": 3}
+	"gravier": 1, "frein_serrage": 3, "verin_depart": 3, "verin_arret": 3, "verrouillage": 3,
+	"craquement_composite": 1, "craquement_metal": 1, "craquement_verre": 1, "tic_thermique": 1,
+	"relachement_composite": 2, "relachement_metal": 2, "relachement_verre": 2, "poussiere_verre": 2, "poussiere_coque": 1}
 const BOUCLE_DE := {"structure": "structure", "rcs": "rcs", "jet": "jet_moteur", "jet_rcs": "jet_rcs", "souffle": "souffle"}
 const LISSAGE_DIRECT := 0.01     # s : les cibles changent 60 fois par seconde, le C++ les rejoint en ~10 ms
+const OCTAVE_DE := [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9]
 const BATTEMENT := 0.18          # léger battement du grondement des moteurs (le même que la boucle de la phase 1)
 
 enum { AMBIANCE, TENSION, AIR, MOTEUR, CHOC, ALARME }
@@ -87,9 +110,12 @@ var pilote: Node3D = null              # nœud qui suit le vaisseau (centre de g
 var camera: Camera3D = null
 var oreille_scene := Vector3.ZERO      # tête du pilote dans le nœud « pilote »
 var oreille := Vector3.ZERO            # la même, repère du modèle (comme la physique)
+var tete := Basis.IDENTITY             # orientation de la tête du pilote (repère du modèle), pour le côté des sons
 var capteurs := Capteurs.new()
 var moteurs := MoteursSon.new()
 var sol := SolSon.new()
+var tension := TensionSon.new()
+var poussiere := PoussiereSon.new()
 var ecoute: AudioListener3D = null
 var actif := false
 
@@ -118,7 +144,7 @@ var couches := {}       # nom → {lecteur, ref_dbfs, parts (énergie par octave
 var chocs = null              # ChocsSon
 var lecteur_chocs: AudioStreamPlayer = null
 var _chocs_en_cours: Array = []
-var _demandes: Array = []   # sons brefs en attente : [nom, niveau (dB), position, priorite, âge, intensité]
+var _demandes: Array = []   # sons brefs en attente : [nom, niveau (dB), position, priorite, âge, intensité, trajet (m)]
 var fondu := 0.0        # 0 = silence, 1 = son normal
 var gain := 0.0         # dB : réduction de la compression (≤ 0)
 var souffle := {}       # dernier calcul du souffle (fluides_son.gd)
@@ -268,16 +294,26 @@ func _preparer_voix_directes(catalogue: Dictionary) -> void:
 		add_child(l)
 		var bandes := PackedFloat32Array()
 		bandes.resize(30)
-		voix_directes[nv] = {"lecteur": l, "flux": flux, "couches": d["couches"], "bandes": bandes}
+		var ecarts := PackedFloat64Array()
+		ecarts.resize(30)
+		var parts_gauche := PackedFloat32Array()
+		parts_gauche.resize(30)
+		parts_gauche.fill(0.5)
+		voix_directes[nv] = {"lecteur": l, "flux": flux, "couches": d["couches"], "bandes": bandes, "ecarts": ecarts,
+			"parts_gauche": parts_gauche}
 		for nom in d["couches"]:
 			var parts := PackedFloat64Array()
+			var priorite := AIR if nom == "souffle" or nom in COUCHES_SOL else MOTEUR
 			if BOUCLE_DE.has(nom):
 				parts = PackedFloat64Array(catalogue[BOUCLE_DE[nom]]["bandes"])
+			elif nom in COUCHES_PHASE4:
+				parts = SolSon.octaves(_forme(nom))
+				priorite = TENSION if nom == "tension" else AMBIANCE
 			else:
 				parts = SolSon.octaves(sol.formes.get(nom, SolSon.forme_roulage(10.0)))
 			couches[nom] = {"lecteur": l, "ref_dbfs": 0.0, "parts": parts,
 				"eq": null, "m_eq": PackedFloat64Array(), "niveau": -INF, "lisse": -INF,
-				"priorite": AIR if nom == "souffle" or nom in COUCHES_SOL else MOTEUR, "bandes_db": PackedFloat64Array(), "volume": -80.0,
+				"priorite": priorite, "bandes_db": PackedFloat64Array(), "volume": -80.0,
 				"voix": nv, "energie": 0.0}
 	_formes["rcs"] = _forme_fixe("rcs", 1.0)
 
@@ -318,6 +354,10 @@ func _forme(nom: String) -> PackedFloat64Array:
 			source = moteurs.tiers_jet
 		"jet_rcs":
 			source = moteurs.tiers_jet_rcs
+		"tension":
+			return tension.forme
+		"poussiere":
+			return poussiere.forme
 		_:
 			if sol.formes.has(nom):
 				return sol.formes[nom]
@@ -331,6 +371,22 @@ func _forme(nom: String) -> PackedFloat64Array:
 			forme[j] = source[j] / tot
 		_formes[nom] = forme
 	return _formes.get(nom, PackedFloat64Array())
+
+
+## Côté d'une couche (cote_son.gd) ; vide = au milieu.
+func _cote(nom: String) -> PackedFloat64Array:
+	match nom:
+		"structure":
+			return moteurs.cote_structure
+		"rcs":
+			return moteurs.cote_rcs
+		"jet":
+			return moteurs.cote_jet
+		"jet_rcs":
+			return moteurs.cote_jet_rcs
+		"tension":
+			return tension.cote
+	return PackedFloat64Array()
 
 
 ## Battement du grondement : énergie × (1 + 0,18 s(t))² / (1 + 0,18²), s = 6 ondes lentes de 2 à 10 Hz
@@ -352,6 +408,8 @@ func _envoyer_voix() -> void:
 		var vd: Dictionary = voix_directes[nv]
 		var e30: PackedFloat32Array = vd["bandes"]
 		e30.fill(0.0)
+		var d30: PackedFloat64Array = vd["ecarts"]   # énergie à gauche en plus de la moitié (couches de côté)
+		var de_cote := false
 		var total := 0.0
 		var e_raies := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 		var f_raies := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -370,14 +428,41 @@ func _envoyer_voix() -> void:
 				e_raies[int(r[0])] += en * float(r[2])
 				f_raies[int(r[0])] = float(r[1])
 				reste -= float(r[2])
-			for j in 30:
-				e30[j] += en * reste * forme[j]
+			var cote := _cote(nom)
+			if cote.is_empty():
+				for j in 30:
+					e30[j] += en * reste * forme[j]
+			else:
+				if not de_cote:
+					d30.fill(0.0)
+				de_cote = true
+				for j in 30:
+					var b: int = OCTAVE_DE[j]
+					var e := en * reste * forme[j] * cote[CoteSon.OCTAVES + b]
+					e30[j] += e
+					d30[j] += e * (cote[b] - 0.5)
 			total += en
 		var flux = vd["flux"]
 		for r in 8:
 			if e_raies[r] > 0.0 or vd.get("raies_utilisees", false):
 				flux.regler_raie(r, f_raies[r] if f_raies[r] > 0.0 else 1000.0, e_raies[r])
 		vd["raies_utilisees"] = e_raies.max() > 0.0
+		if (de_cote or vd.get("de_cote", false)) and flux.has_method("regler_gauche"):
+			# un côté n'est renvoyé que s'il a bougé d'au moins 1 % (0,2 dB) : entre deux, la partie C++ garde le sien
+			# et n'a pas de rampe à suivre (boucle plus légère)
+			var parts: PackedFloat32Array = vd["parts_gauche"]
+			var change := false
+			for j in 30:
+				var w := 0.5 + d30[j] / e30[j] if de_cote and e30[j] > 0.0 else 0.5
+				if absf(w - 0.5) <= 0.02:
+					w = 0.5   # au milieu : moins de 0,35 dB d'écart, l'oreille ne fait pas la différence (≈ 0,5 dB)
+				if absf(w - parts[j]) > 0.01 or (w == 0.5 and parts[j] != 0.5):
+					parts[j] = w
+					change = true
+			if change:
+				flux.regler_gauche(parts)
+				vd["parts_gauche"] = parts   # (un PackedFloat32Array se copie : on le range de nouveau)
+		vd["de_cote"] = de_cote
 		if nv == "structure":
 			var r: Array = resonances.partager(e30)
 			flux.regler_bandes(r[0])
@@ -466,10 +551,17 @@ func _physics_process(delta: float) -> void:
 		sol.detecter(capteurs, oreille, delta)
 		for e in sol.evenements:
 			_demandes.append([e[0], e[1], e[2], PRIORITE_CHOC.get(e[0], CHOC), 0.0, float(e[4])])
+		tension.detecter(capteurs, oreille, delta)
+		poussiere.detecter(capteurs, oreille, delta)
+		for e in tension.evenements + poussiere.evenements:
+			_demandes.append([e[0], e[1], e[2], PRIORITE_CHOC.get(e[0], TENSION), 0.0, float(e[4]), float(e[6])])
 	else:
 		sol.detecter(capteurs, oreille, delta)   # garde son état à jour (pas de vieux choc au retour du son)
+		tension.detecter(capteurs, oreille, delta)   # la mémoire des charges (effet Kaiser) continue
 	moteurs.evenements.clear()
 	sol.evenements.clear()
+	tension.evenements.clear()
+	poussiere.evenements.clear()
 	_us_physique += Time.get_ticks_usec() - t0
 
 
@@ -498,6 +590,11 @@ func mettre_a_jour(delta: float) -> void:
 		# passage par la paroi : il dépend un peu de l'air du dehors (refait quand il change de 0,2 %)
 		_transm = Fluides.transmissions(z_ext)
 		_z_ext = z_ext
+	# la tête du pilote : en vue cockpit, celle de la caméra ; dehors, droite (l'oreille reste celle du pilote)
+	tete = camera.transform.basis.orthonormalized() if vue_interieure and camera != null and camera.get_parent() == pilote \
+		else Basis.IDENTITY
+	moteurs.tete = tete
+	tension.tete = tete
 	moteurs.calculer(c, oreille, _transm)
 	var mach := c.vitesse_air / Fluides.vitesse_son(c.temperature) if c.densite > 0.0 else 0.0
 	souffle = Fluides.souffle(c.densite, c.temperature, c.vitesse_air, mach, c.temperature_coque, _transm) if c.densite > 0.0 \
@@ -510,6 +607,10 @@ func mettre_a_jour(delta: float) -> void:
 	sol.calculer(c, oreille)
 	for nom in COUCHES_SOL:
 		_poser(nom, float(sol.niveaux[nom]), delta)
+	tension.calculer(c)
+	_poser("tension", tension.niveau, delta)
+	poussiere.calculer(c)
+	_poser("poussiere", poussiere.niveau, delta)
 	# 3. compression : du vrai niveau total au volume des haut-parleurs
 	var total := _somme_db(couches.values().map(func(k): return float(k["lisse"])))
 	var cible := 0.0
@@ -571,6 +672,8 @@ func _poser(nom: String, niveau: float, delta: float) -> void:
 		spectre = moteurs.bandes_jet_rcs
 	elif sol.formes.has(nom):
 		spectre = SolSon.octaves(sol.formes[nom])
+	elif nom in COUCHES_PHASE4:
+		spectre = SolSon.octaves(_forme(nom))
 	var tot := 0.0
 	for e in spectre:
 		tot += e
@@ -664,8 +767,8 @@ func _servir_demandes(delta: float, fondu_db: float) -> void:
 		if dbfs < SEUIL_DB:
 			oublies += 1
 			continue
-		var g := Chocs.panoramique(d[2], oreille)
-		var r := Chocs.recette(nom, float(d[5]), pow(10.0, dbfs / 10.0), _rng, g.x, g.y, float(d[3]))
+		var g := Chocs.panoramique(oreille + tete.inverse() * (d[2] - oreille), oreille)
+		var r := Chocs.recette(nom, float(d[5]), pow(10.0, dbfs / 10.0), _rng, g.x, g.y, float(d[3]), float(d[6]) if d.size() > 6 else 0.0)
 		if _coup_cache(niveau, r["parts"]):
 			oublies += 1
 			continue
