@@ -52,6 +52,12 @@ extends Node
 ## ombre de la tête dans les aigus, aigus perdus si le son vient de derrière) ; la partie C++ donne à chaque tiers
 ## d'octave sa part à gauche. Tout est dans le repère de la tête : si le pilote tourne la tête, le son reste à sa
 ## place dans le cockpit. Les sons brefs font de même (Chocs.panoramique).
+##
+## Phase 5 : l'air en détail (air_son.gd). Le train sorti siffle (tourbillons de Strouhal derrière les jambes), les
+## puits de train ouverts grondent (Rossiter), les ailes tremblent autour de Mach 1 (choc qui va et vient) et quand
+## elles décrochent, l'onde de choc bat devant la verrière au-delà du son (rentrée). Tout s'efface quand l'air devient
+## trop rare pour être un fluide. Le sifflement et les trappes sont des sons purs (raies de la voix air) ; le
+## tremblement passe par l'emplanture des ailes (voix structure, du côté de l'aile qui tremble).
 
 const Capteurs = preload("res://scripts/son/capteurs.gd")
 const MoteursSon = preload("res://scripts/son/moteurs_son.gd")
@@ -64,6 +70,7 @@ const Chocs = preload("res://scripts/son/chocs.gd")
 const TensionSon = preload("res://scripts/son/tension_son.gd")
 const PoussiereSon = preload("res://scripts/son/poussiere_son.gd")
 const CoteSon = preload("res://scripts/son/cote_son.gd")
+const AirSon = preload("res://scripts/son/air_son.gd")
 
 const CATALOGUE := "res://sons/sons.json"
 const COUCHES_MAX := 8
@@ -84,14 +91,17 @@ const RELACHE := 0.3             # s : … et revient doucement
 const RELACHE_COUCHE := 0.06     # s : une couche qui baisse (jet de gaz coupé) s'éteint en ~60 ms
 ## Phase 2 : les voix fabriquées en direct, et les couches qu'elles regroupent (bus, graine du hasard).
 const VOIX_DIRECTES := {
-	"structure": {"bus": "Structure", "couches": ["structure", "rcs", "roulage", "verins", "tension"], "graine": 21},
-	"air": {"bus": "Exterieur", "couches": ["souffle", "jet", "jet_rcs", "poussiere"], "graine": 22},
+	"structure": {"bus": "Structure", "couches": ["structure", "rcs", "roulage", "verins", "tension", "tremblement"], "graine": 21},
+	"air": {"bus": "Exterieur", "couches": ["souffle", "jet", "jet_rcs", "poussiere", "sifflement", "cavites", "choc_verriere"],
+		"graine": 22, "instabilite": 0.012, "instabilite_temps": 0.15},
 	"sol": {"bus": "Structure", "couches": ["derapage", "frein", "raclage"], "graine": 23, "instabilite": 0.03, "instabilite_temps": 0.02},
 }
 ## Couches de la phase 3 (sol et vérins) : elles n'ont pas de boucle de la phase 1.
 const COUCHES_SOL := ["roulage", "verins", "derapage", "frein", "raclage"]
 ## Couches de la phase 4 (tension des pièces, poussière de l'espace).
 const COUCHES_PHASE4 := ["tension", "poussiere"]
+## Couches de la phase 5 (l'air en détail).
+const COUCHES_PHASE5 := ["sifflement", "cavites", "tremblement", "choc_verriere"]
 ## Priorité de chaque famille de sons brefs.
 const PRIORITE_CHOC := {"pneu_toucher": 4, "coque_choc": 4, "train_butee": 4, "amortisseur_detente": 4, "pneu_crissement": 4,
 	"gravier": 1, "frein_serrage": 3, "verin_depart": 3, "verin_arret": 3, "verrouillage": 3,
@@ -116,6 +126,7 @@ var moteurs := MoteursSon.new()
 var sol := SolSon.new()
 var tension := TensionSon.new()
 var poussiere := PoussiereSon.new()
+var air := AirSon.new()
 var ecoute: AudioListener3D = null
 var actif := false
 
@@ -309,6 +320,9 @@ func _preparer_voix_directes(catalogue: Dictionary) -> void:
 			elif nom in COUCHES_PHASE4:
 				parts = SolSon.octaves(_forme(nom))
 				priorite = TENSION if nom == "tension" else AMBIANCE
+			elif nom in COUCHES_PHASE5:
+				parts = SolSon.octaves(_forme(nom))
+				priorite = AIR
 			else:
 				parts = SolSon.octaves(sol.formes.get(nom, SolSon.forme_roulage(10.0)))
 			couches[nom] = {"lecteur": l, "ref_dbfs": 0.0, "parts": parts,
@@ -358,6 +372,8 @@ func _forme(nom: String) -> PackedFloat64Array:
 			return tension.forme
 		"poussiere":
 			return poussiere.forme
+		"sifflement", "cavites", "tremblement", "choc_verriere":
+			return air.formes[nom]
 		_:
 			if sol.formes.has(nom):
 				return sol.formes[nom]
@@ -386,6 +402,8 @@ func _cote(nom: String) -> PackedFloat64Array:
 			return moteurs.cote_jet_rcs
 		"tension":
 			return tension.cote
+		"tremblement":
+			return air.cote_tremblement
 	return PackedFloat64Array()
 
 
@@ -419,12 +437,14 @@ func _envoyer_voix() -> void:
 				continue
 			if nom == "structure":
 				en *= _facteur_battement(capteurs.temps)
+			elif nom == "tremblement":
+				en *= air.facteur_tremblement   # le choc qui va et vient (phase 5)
 			var forme := _forme(nom)
 			if forme.size() != 30:
 				continue
 			# sons purs de la couche (sifflement de la pompe, pneu qui crisse) : leur part de l'énergie
 			var reste := 1.0
-			for r in sol.raies.get(nom, []):
+			for r in sol.raies.get(nom, air.raies.get(nom, [])):
 				e_raies[int(r[0])] += en * float(r[2])
 				f_raies[int(r[0])] = float(r[1])
 				reste -= float(r[2])
@@ -611,6 +631,10 @@ func mettre_a_jour(delta: float) -> void:
 	_poser("tension", tension.niveau, delta)
 	poussiere.calculer(c)
 	_poser("poussiere", poussiere.niveau, delta)
+	air.tete = tete
+	air.calculer(c, oreille, _transm, delta)
+	for nom in COUCHES_PHASE5:
+		_poser(nom, float(air.niveaux[nom]), delta)
 	# 3. compression : du vrai niveau total au volume des haut-parleurs
 	var total := _somme_db(couches.values().map(func(k): return float(k["lisse"])))
 	var cible := 0.0
@@ -672,7 +696,7 @@ func _poser(nom: String, niveau: float, delta: float) -> void:
 		spectre = moteurs.bandes_jet_rcs
 	elif sol.formes.has(nom):
 		spectre = SolSon.octaves(sol.formes[nom])
-	elif nom in COUCHES_PHASE4:
+	elif nom in COUCHES_PHASE4 or nom in COUCHES_PHASE5:
 		spectre = SolSon.octaves(_forme(nom))
 	var tot := 0.0
 	for e in spectre:

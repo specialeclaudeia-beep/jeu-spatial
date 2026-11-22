@@ -285,6 +285,27 @@ que **lire** la physique, il ne la change jamais (un test le vérifie). Tout est
 - Extraits à écouter : 8 à 16 (virage serré, montée hors de l'air, coque qui refroidit, orbite, 0,5 c, 0,9 c,
   propulseur gauche puis droite, moteurs x10, atterrissage dur).
 
+## Son (phase 5 : l'air en détail)
+Tout est dans `scripts/son/air_son.gd` ; la physique n'est que lue (nouvelles « prises » en lecture seule dans
+`aerodynamique.gd` : angle d'attaque, vitesse, surface et corde de chaque bande d'aile et de chaque dérive, part
+« molécules isolées » de l'air).
+- **Le train qui siffle** : derrière chaque jambe, l'air se détache en tourbillons à f = 0,2 × U / D (Strouhal) ; la
+  force qui va et vient rayonne comme un petit haut-parleur (loi de Curle, coefficients mesurés en soufflerie selon le
+  nombre de Reynolds : sifflement pur à petite vitesse, souffle grave après la « crise de traînée »). Les roues font
+  un souffle plus grave. Son pur dans la voix air (il tremble un peu).
+- **Les trappes qui grondent** : au-dessus d'un puits ouvert, l'air ondule et résonne aux fréquences de Rossiter
+  (puits de 1 m à 100 m/s : 37 et 85 Hz). Puits du train et des moteurs de levage.
+- **Tremblement transsonique** (Mach 0,75 à 1,3) : le choc va et vient sur les ailes qui portent, ~9 fois par
+  seconde (balancement au hasard) ; il passe par l'emplanture, donc on l'entend du côté de l'aile qui tremble.
+- **Décrochage** : au-delà de ~15°, chaque bande d'aile décroche avec SON air (en roulis, une seule aile peut décrocher :
+  on l'entend de son côté).
+- **Onde de choc sur la verrière** (au-delà de Mach 1,1, rentrée) : le petit décollement d'air devant la verrière bat ;
+  une coque chaude épaissit la couche d'air, le grondement devient plus grave.
+- **Fondu vers le silence** : tout s'efface avec la part « fluide » de l'air (la même que la physique). Les molécules
+  isolées ne s'entendent pas (calculé : moins d'un milliardième de newton sur 1 m² de coque).
+- Réglages à valider à l'écoute : chemin par la structure des ailes (−25 dB), double paroi sous le ventre (−15 dB).
+- Extraits à écouter : 17 à 21 (train qui sort, transsonique, décrochage puis aile gauche, Mach 2, rentrée).
+
 ## Organisation
 - `scripts/physique/vaisseau_physique.gd` : toute la physique (indépendante de l'affichage).
 - `scripts/physique/atmosphere.gd` et `aerodynamique.gd` : l'air de la planète et ce qu'il fait au vaisseau.
