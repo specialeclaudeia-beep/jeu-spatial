@@ -19,6 +19,7 @@ const PoussiereSon = preload("res://scripts/son/poussiere_son.gd")
 const CoteSon = preload("res://scripts/son/cote_son.gd")
 const TensionSon = preload("res://scripts/son/tension_son.gd")
 const AirSon = preload("res://scripts/son/air_son.gd")
+const IoniqueSon = preload("res://scripts/son/ionique_son.gd")
 const C_LUMIERE := 299792458.0
 const UA := 1.495978707e11
 const TAUX := 48000   # rendu hors ligne de la partie C++ (échantillons par seconde)
@@ -78,7 +79,15 @@ func _ready() -> void:
 			"_test_decrochage",
 			"_test_choc_verriere",
 			"_test_fondu_moleculaire",
-			"_test_phase5_en_jeu"]:
+			"_test_phase5_en_jeu",
+			"_test_reponse_panneaux",
+			"_test_raies_cpp",
+			"_test_bobines",
+			"_test_bobines_regime",
+			"_test_reacteur",
+			"_test_plasma",
+			"_test_allumage_sequence",
+			"_test_phase6_en_jeu"]:
 		if seul == "" or seul in nom:
 			call(nom)
 	for nom in ["_test_cpp_en_direct", "_test_calibration"]:
@@ -334,7 +343,8 @@ func _test_evenements() -> void:
 	s.mettre_a_jour(1.0 / 60.0)
 	v.moteurs[4]["actuel"] = 0.6
 	v.moteurs[4]["consigne"] = 1.0
-	s._physics_process(PAS)
+	for i in 40:   # phase 6 : le « whoomp » attend le champ des bobines (ici le vaisseau est figé : au plus 0,25 s)
+		s._physics_process(PAS)
 	var allumage: Array = _vannes(s._demandes)
 	var ok: bool = ouverture.size() == 1 and ouverture[0][0] == "rcs_ouverture" and trop_tot == 1 \
 		and fermeture.size() == 2 and fermeture[1][0] == "rcs_fermeture" and allumage.size() == 1 and allumage[0][0] == "moteur_allumage" \
@@ -630,23 +640,55 @@ func _test_verins() -> void:
 	_liberer(s)
 
 
+## Calcul étalon pour la mesure de vitesse : du GDScript qui ressemble à celui du son (tableaux, exp, dictionnaire).
+const ETALON_US := 1000.0   # µs dans le cloud quand il n'est pas ralenti (mesuré le 22/11 : 900 à 1 100)
+
+
+func _etalon() -> float:
+	var a := PackedFloat64Array()
+	a.resize(30)
+	var d := {"x": 1.0}
+	var somme := 0.0
+	for i in 400:
+		for j in 30:
+			a[j] = a[j] * 0.5 + exp(-0.001 * j) + float(d["x"])
+		somme += a[i % 30]
+	return somme
+
+
 func _test_vitesse() -> void:
 	var v = _vaisseau_air(3000.0, 200.0)
 	for m in v.moteurs:
 		m["actuel"] = 0.7
 	var s = _son(v)
 	_images(s, 10)
-	var t0 := Time.get_ticks_usec()
-	for i in 300:
-		s._physics_process(PAS)
-		s._physics_process(PAS)
-		s.mettre_a_jour(1.0 / 60.0)
-	var us := float(Time.get_ticks_usec() - t0) / 300.0
-	# 500 µs (3 % d'une image) : depuis la phase 4, la charge de chaque pièce est calculée 120 fois par seconde
-	# (≈ 80 µs par image) ; le cloud varie lui-même de ±50 µs d'un essai à l'autre
-	_resultat(us < 500.0, "Léger : temps de calcul du son",
-		"Dans l'air, moteurs allumés : %.0f microsecondes par image (2 photos de la physique + 1 décision), soit %.1f %% d'une image à 60 i/s. (Le mélange des sons, lui, est fait par Godot en C++.)" % [
-			us, us / 16667.0 * 100.0])
+	# 10 séries de 30 images, chacune suivie d'un calcul ÉTALON (toujours le même) : le cloud ralentit par moments (une
+	# autre machine prend le processeur), ce qui faussait la mesure de ±100 µs d'un essai à l'autre. On compare donc le son
+	# à l'étalon mesuré au même moment, et on ramène le résultat à un cloud « normal » (étalon = ETALON_US).
+	var series := []
+	var rapports := []
+	for k in 10:
+		var t0 := Time.get_ticks_usec()
+		for i in 30:
+			s._physics_process(PAS)
+			s._physics_process(PAS)
+			s.mettre_a_jour(1.0 / 60.0)
+		var t_son := float(Time.get_ticks_usec() - t0) / 30.0
+		t0 = Time.get_ticks_usec()
+		_etalon()
+		var t_etalon := float(Time.get_ticks_usec() - t0)
+		series.append(t_son)
+		rapports.append(t_son / t_etalon)
+	series.sort()
+	rapports.sort()
+	var brut: float = 0.5 * (series[4] + series[5])
+	var us: float = 0.5 * (rapports[4] + rapports[5]) * ETALON_US
+	# 550 µs (3,3 % d'une image) : depuis la phase 4, la charge de chaque pièce est calculée 120 fois par seconde
+	# (≈ 80 µs par image) ; phase 6 : l'intérieur des moteurs, ≈ 45 µs de plus (mesuré en alternant avec la version
+	# d'avant : 440 → 485 µs dans le cloud)
+	_resultat(us < 550.0, "Léger : temps de calcul du son",
+		"Dans l'air, moteurs allumés : %.0f microsecondes par image (2 photos de la physique + 1 décision), ramenées à un cloud normal (mesuré : %.0f, de %.0f à %.0f selon la série ; calcul étalon %.0f µs au lieu de %.0f), soit %.1f %% d'une image à 60 i/s. (Le mélange des sons, lui, est fait par Godot en C++.)" % [
+			us, brut, series[0], series[9], brut / (0.5 * (rapports[4] + rapports[5])), ETALON_US, us / 16667.0 * 100.0])
 	_liberer(s)
 
 
@@ -843,7 +885,7 @@ func _test_chocs_niveau() -> void:
 		fin_ok = fin_ok and fini and int(c.mesures()["non_finis"]) == 0
 		lignes.append("%s %+.2f" % [famille, ecart])
 	_resultat(pire < 1.0 and fin_ok, titre,
-		"14 familles demandées à −30 dB (moyenne des 100 premières ms), écart en dB : %s. Plus grand écart %.2f dB (tolérance 1). Tous finis et silencieux après leur durée calculée : %s." % [
+		"%d familles demandées à −30 dB (moyenne des 100 premières ms), écart en dB : %s. Plus grand écart %.2f dB (tolérance 1). Tous finis et silencieux après leur durée calculée : %s." % [Chocs.FAMILLES.size(),
 			", ".join(lignes), pire, _oui(fin_ok)])
 
 
@@ -1831,3 +1873,472 @@ func _test_phase5_en_jeu() -> void:
 	_resultat(ok, titre,
 		"Train sorti à 90 m/s : sifflement %.0f dB, trappes %.0f dB, souffle %.0f dB dans le cockpit ; sons purs envoyés à la voix air : %s ; ce qui sort de la voix air : %+.2f dB de ce qui est calculé (tolérance 1), %d craquement, %d valeur invalide. Ailes décrochées (22°) : tremblement %.0f dB, joué par la voix structure (%s)." % [
 			l_siffle, l_trappes, l_souffle, _oui(raies_ok), ecart, r["craquements"], r["non_finis"], l_trem, _oui(trem > 0.0)])
+
+
+
+# =====================================================================
+# 6. PHASE 6 : L'INTÉRIEUR DES MOTEURS IONIQUES (ionique_son.gd)
+# =====================================================================
+## Met dans la photo c les moteurs n° (ordre de la physique) aux niveaux donnés (consigne = niveau), le reste à 0.
+func _ionique_photo(c: Capteurs, niveaux: Dictionary) -> void:
+	for k in c.nombre:
+		var x: float = 0.0 if c.types[k] == Capteurs.TYPE_RCS else float(niveaux.get(k, 0.0))
+		c.niveaux[k] = x
+		c.consignes[k] = x
+		c.forces[k] = x * c.poussees_max[k]
+
+
+## Fait avancer le modèle des moteurs pendant « secondes » (pas de la physique) ; renvoie les sons brefs [nom, t, dB].
+func _ionique_avancer(io, c: Capteurs, s, secondes: float, t0 := 0.0) -> Array:
+	var ev := []
+	var n := int(round(secondes / PAS))
+	for i in n:
+		c.temps += PAS
+		io.avancer(c, s.oreille, PAS, true, s.moteurs.attenuation)
+		for e in io.evenements:
+			ev.append([e[0], t0 + (i + 1) * PAS, float(e[1])])
+		io.evenements.clear()
+	return ev
+
+
+## Le modèle tout seul, branché sur la photo d'un vaisseau au repos (moteurs coupés).
+func _ionique_banc() -> Array:
+	var v = _vaisseau_vide()
+	var s = _son(v)
+	s.hors_ligne = true
+	_images(s, 2)
+	var io = IoniqueSon.new()
+	io.resonances = s.resonances
+	return [s, s.capteurs, io]
+
+
+## Ce que les panneaux et le côté changent au niveau d'une couche de sons purs (dB), pour comparer à la loi seule.
+func _correction_sons_purs(io, table: PackedFloat64Array, raies: Array) -> float:
+	# raies : [[Hz, part de l'énergie]] ; renvoie 10 log Σ part × (énergie gardée par le côté) × (réponse des panneaux)
+	var e := 0.0
+	for r in raies:
+		var f: float = r[0]
+		var o := clampi(Resonances.bande(f) / 3, 0, CoteSon.OCTAVES - 1)
+		e += float(r[1]) * table[CoteSon.OCTAVES + o] * io.resonances.reponse(f)
+	return _db(e)
+
+
+func _test_reponse_panneaux() -> void:
+	var titre := "Son pur et panneaux du cockpit : plus fort sur une résonance, le même en moyenne"
+	var res = Resonances.new()
+	var j_modes := -1
+	for j in Resonances.BANDES:
+		if res.part_modes[j] > 0.3 and (j_modes < 0 or res.part_modes[j] > res.part_modes[j_modes]):
+			j_modes = j
+	var j_vide := -1
+	for j in Resonances.BANDES:
+		if res.part_modes[j] <= 0.0 and Resonances.centre(j) > 1500.0:
+			j_vide = j
+			break
+	var bas := Resonances.centre(j_modes) * pow(2.0, -1.0 / 6.0)
+	var haut := Resonances.centre(j_modes) * pow(2.0, 1.0 / 6.0)
+	var moyenne := 0.0
+	var mini := INF
+	var n := 6000
+	for i in n:
+		var f := bas + (haut - bas) * (i + 0.5) / n
+		var r: float = res._reponse(f)
+		moyenne += r / n
+		mini = minf(mini, r)
+	var pic := 0.0
+	for i in res.frequences.size():
+		if res.bande_du_mode[i] == j_modes:
+			pic = maxf(pic, res.reponse(res.frequences[i]))
+	var vide: float = res.reponse(Resonances.centre(j_vide)) if j_vide >= 0 else NAN
+	var memoire: bool = res.reponse(Resonances.centre(j_modes)) == res._reponse(Resonances.centre(j_modes) * 1.0001) \
+		or absf(res.reponse(Resonances.centre(j_modes)) - res._reponse(Resonances.centre(j_modes))) < 0.02
+	var ok: bool = j_modes >= 0 and absf(moyenne - 1.0) < 0.08 and pic > 1.8 and mini < 0.9 and vide == 1.0 and memoire
+	_resultat(ok, titre,
+		"Tiers d'octave de %.0f Hz (%.0f %% de son énergie passe par les panneaux) : un son pur y est en moyenne × %.3f (attendu 1 : l'énergie ne change pas), × %.2f (%+.1f dB) pile sur une résonance, × %.2f (%+.1f dB) entre deux. Au-dessus des résonances (%.0f Hz) : × %s. Valeurs gardées en mémoire (pas de 0,05 %%) : %s." % [
+			Resonances.centre(j_modes), 100.0 * res.part_modes[j_modes], moyenne, pic, _db(pic), mini, _db(mini),
+			Resonances.centre(j_vide), str(vide), _oui(memoire)])
+
+
+func _test_raies_cpp() -> void:
+	var titre := "Partie C++ : 24 sons purs, chacun de son côté"
+	if not _cpp(titre):
+		return
+	var flux = ClassDB.instantiate("SyntheSon")
+	flux.taux = TAUX
+	if not flux.has_method("regler_raies") or not flux.has_method("lier_raies"):
+		_resultat(false, titre, "regler_raies / lier_raies absents (ancienne partie C++)")
+		return
+	var pb = flux.instantiate_playback()
+	pb.start(0.0)
+	var f := PackedFloat32Array()
+	var e := PackedFloat32Array()
+	var g := PackedFloat32Array()
+	f.resize(24)
+	e.resize(24)
+	g.resize(24)
+	g.fill(0.5)
+	# 1. un son pur à 80 % à gauche
+	f[2] = 2400.0
+	e[2] = 1e-3
+	g[2] = 0.8
+	flux.regler_raies(f, e, g)
+	_mixer(pb, TAUX / 2)
+	var a = ClassDB.instantiate("AnalyseSon")
+	_mixer(pb, TAUX * 2, a)
+	var r: Dictionary = a.resultat()
+	var g1 := _db(float(r["gauche"]["energie"]) / 1.6e-3)
+	var d1 := _db(float(r["droite"]["energie"]) / 0.4e-3)
+	# 2. passé d'un coup à 20 % : il glisse, sans clic
+	g[2] = 0.2
+	flux.regler_raies(f, e, g)
+	a.remettre()
+	_mixer(pb, TAUX / 2, a)
+	var clics: int = int(a.resultat()["craquements"])
+	a.remettre()
+	_mixer(pb, TAUX * 2, a)
+	r = a.resultat()
+	var g2 := _db(float(r["gauche"]["energie"]) / 0.4e-3)
+	var d2 := _db(float(r["droite"]["energie"]) / 1.6e-3)
+	# 3. bruit au milieu (calculé une seule fois) + un son pur de côté
+	var b := PackedFloat32Array()
+	b.resize(30)
+	for j in 30:
+		b[j] = 1e-3 / 30.0
+	flux.regler_bandes(b)
+	g[2] = 0.9
+	flux.regler_raies(f, e, g)
+	_mixer(pb, TAUX / 2)
+	a.remettre()
+	_mixer(pb, TAUX * 4, a)
+	r = a.resultat()
+	var g3 := _db(float(r["gauche"]["energie"]) / 2.8e-3)
+	var d3 := _db(float(r["droite"]["energie"]) / 1.2e-3)
+	# 4. les 24 à la fois, de côtés différents, liés comme dans le jeu, fréquences qui tremblent
+	b.fill(0.0)
+	flux.regler_bandes(b)
+	flux.instabilite = 0.004
+	flux.instabilite_temps = 0.05
+	flux.lier_raies(IoniqueSon.liens())
+	for k in 24:
+		f[k] = 150.0 * (k + 1)
+		e[k] = 1e-4
+		g[k] = 0.3 if k % 2 == 0 else 0.7
+	flux.regler_raies(f, e, g)
+	_mixer(pb, TAUX / 2)
+	flux.remettre_mesures()
+	a.remettre()
+	_mixer(pb, TAUX * 4, a)
+	r = a.resultat()
+	var charge: float = flux.mesures()["charge"]
+	var g4 := _db(float(r["gauche"]["energie"]) / 2.4e-3)
+	var d4 := _db(float(r["droite"]["energie"]) / 2.4e-3)
+	var craq: int = int(r["craquements"])
+	var invalide: int = int(r["non_finis"])
+	var ok := absf(g1) < 0.2 and absf(d1) < 0.2 and absf(g2) < 0.2 and absf(d2) < 0.2 and clics == 0 and absf(g3) < 0.4 \
+		and absf(d3) < 0.4 and absf(g4) < 0.3 and absf(d4) < 0.3 and craq == 0 and invalide == 0
+	_resultat(ok, titre,
+		"Son pur de 2,4 kHz à 80 %% à gauche : gauche %+.2f dB, droite %+.2f dB de l'attendu ; passé d'un coup à 20 %% : %d clic, puis gauche %+.2f, droite %+.2f dB. Bruit au milieu + son pur à 90 %% à gauche : %+.2f / %+.2f dB. 24 sons purs à la fois (harmoniques liées à leur fondamentale, fréquences qui tremblent) : %+.2f / %+.2f dB, %d craquement, %d valeur invalide ; coût %.2f %% d'un cœur (cloud)." % [
+			g1, d1, clics, g2, d2, g3, d3, g4, d4, craq, invalide, charge * 100.0])
+
+
+func _test_bobines() -> void:
+	var titre := "Bobines : le sifflement suit √poussée, chaque moteur le sien, de son côté"
+	var banc := _ionique_banc()
+	var s = banc[0]
+	var c: Capteurs = banc[1]
+	var io = banc[2]
+	# moteur central à 25 % puis à 100 % (le champ a le temps d'arriver)
+	_ionique_photo(c, {4: 0.25})
+	_ionique_avancer(io, c, s, 3.0)
+	io.calculer(c, s.oreille, s.moteurs.attenuation, 1.0 / 60.0)
+	var f1: float = io.f_sifflement[4]
+	var l1: float = io.niveaux["bobines"]
+	var cor1 := _correction_sons_purs(io, io._tables[4], [[f1, 0.7], [2.0 * f1, 0.3]])
+	_ionique_photo(c, {4: 1.0})
+	_ionique_avancer(io, c, s, 3.0)
+	io.calculer(c, s.oreille, s.moteurs.attenuation, 1.0 / 60.0)
+	var f2: float = io.f_sifflement[4]
+	var l2: float = io.niveaux["bobines"]
+	var cor2 := _correction_sons_purs(io, io._tables[4], [[f2, 0.7], [2.0 * f2, 0.3]])
+	var loi := (l2 - cor2) - (l1 - cor1)   # énergie ∝ B⁴ ∝ poussée² : +12,04 dB
+	# les 5 moteurs arrière à fond : 5 sifflements tout proches (ils battent entre eux)
+	_ionique_photo(c, {0: 1.0, 1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0})
+	_ionique_avancer(io, c, s, 3.0)
+	io.calculer(c, s.oreille, s.moteurs.attenuation, 1.0 / 60.0)
+	var fs := []
+	for k in 5:
+		fs.append(float(io.f_sifflement[k]))
+	fs.sort()
+	var ecart_min := INF
+	for k in 4:
+		ecart_min = minf(ecart_min, fs[k + 1] - fs[k])
+	var etendue: float = (fs[4] - fs[0]) / fs[2]
+	# côté : moteur d'aile gauche seul, puis droit seul
+	var i_g := -1
+	var i_d := -1
+	for k in 5:
+		if c.positions[k].x < -1.0:
+			i_g = k
+		if c.positions[k].x > 1.0:
+			i_d = k
+	var cotes := []
+	for k in [i_g, i_d]:
+		_ionique_photo(c, {k: 1.0})
+		_ionique_avancer(io, c, s, 4.0)
+		io.calculer(c, s.oreille, s.moteurs.attenuation, 1.0 / 60.0)
+		var w := 0.0
+		var tot := 0.0
+		for rr in io.raies["bobines"]:
+			w += float(rr[2]) * float(rr[3])
+			tot += float(rr[2])
+		cotes.append(w / tot if tot > 0.0 else 0.5)
+	var ok: bool = absf(f2 / f1 - 2.0) < 0.001 and absf(f2 - 2400.0) < 1.0 and absf(loi - 12.04) < 0.05 and ecart_min > 1.0 \
+		and etendue < 0.006 and i_g >= 0 and i_d >= 0 and cotes[0] > 0.6 and cotes[1] < 0.4
+	_resultat(ok, titre,
+		"Moteur central à 25 %% : sifflement %.0f Hz, %.1f dB ; à 100 %% : %.0f Hz (× %.3f : √4 = 2), %.1f dB ; une fois retirés les panneaux et le côté : %+.2f dB (attendu +12,04 : énergie ∝ B⁴ ∝ poussée²). Les 5 moteurs arrière à fond : %s Hz (écart d'au moins %.1f Hz, %.2f %% en tout : ils battent doucement). Moteur d'aile gauche seul : %.0f %% de son sifflement à gauche ; droit seul : %.0f %%." % [
+			f1, l1, f2, f2 / f1, l2, loi, ", ".join(fs.map(func(x): return "%.1f" % x)), ecart_min, 100.0 * etendue,
+			100.0 * cotes[0], 100.0 * cotes[1]])
+	_liberer(s)
+
+
+func _test_bobines_regime() -> void:
+	var titre := "Bobines : le champ part avant la poussée, redescend en glissant, contacteurs"
+	var banc := _ionique_banc()
+	var s = banc[0]
+	var c: Capteurs = banc[1]
+	var io = banc[2]
+	_ionique_photo(c, {})
+	_ionique_avancer(io, c, s, 1.0)
+	# gaz à fond d'un coup : la consigne saute, la poussée suit en 0,3 s (comme la physique)
+	var ev := []
+	var n := 15   # 0,125 s
+	for i in n:
+		var t := (i + 1) * PAS
+		var niveau := 1.0 - exp(-t / 0.3)
+		c.consignes[4] = 1.0
+		c.niveaux[4] = niveau
+		c.forces[4] = niveau * c.poussees_max[4]
+		c.temps += PAS
+		io.avancer(c, s.oreille, PAS, true, s.moteurs.attenuation)
+		for e in io.evenements:
+			ev.append([e[0], t])
+		io.evenements.clear()
+	var champ_montee: float = io.champ[4]
+	var poussee_montee := 1.0 - exp(-n * PAS / 0.3)
+	var attendu_montee := 1.0 - exp(-n * PAS / IoniqueSon.TAU_CHARGE)
+	var fermeture: float = ev[0][1] if ev.size() > 0 and ev[0][0] == "contacteur_fermeture" else NAN
+	_ionique_photo(c, {4: 1.0})
+	_ionique_avancer(io, c, s, 3.0)
+	# coupure nette : le courant des bobines s'écoule en L / R = 0,9 s, puis le contacteur s'ouvre
+	_ionique_photo(c, {})
+	var champ_0: float = io.champ[4]
+	ev = _ionique_avancer(io, c, s, 0.9)
+	io.calculer(c, s.oreille, s.moteurs.attenuation, 1.0 / 60.0)
+	var champ_09: float = io.champ[4]
+	var f_09: float = io.f_sifflement[4]
+	ev += _ionique_avancer(io, c, s, 4.0, 0.9)
+	var ouverture := NAN
+	for e in ev:
+		if e[0] == "contacteur_ouverture":
+			ouverture = e[1]
+	var attendu_ouverture := IoniqueSon.TAU_DECHARGE * log(champ_0 / IoniqueSon.CHAMP_OUVERTURE)
+	var ok: bool = fermeture == PAS and absf(champ_montee - attendu_montee) < 0.002 and champ_montee > sqrt(poussee_montee) \
+		and absf(champ_09 - champ_0 * exp(-1.0)) < 0.002 and absf(ouverture - attendu_ouverture) <= PAS + 1e-9 \
+		and io.contacteur[4] == 0
+	_resultat(ok, titre,
+		"Gaz à fond : contacteur fermé à %.3f s ; à 0,125 s, champ %.3f (attendu %.3f, charge en 0,12 s) alors que la poussée n'en est qu'à %.0f %% (son sifflement serait à %.2f) : le sifflement part avant. Coupure : 0,9 s après, champ %.3f (attendu %.3f = e⁻¹, le courant s'écoule en L/R), sifflement encore à %.0f Hz ; contacteur ouvert à %.3f s (attendu %.3f, champ sous 3 %%)." % [
+			fermeture, champ_montee, attendu_montee, 100.0 * poussee_montee, sqrt(poussee_montee), champ_09, champ_0 * exp(-1.0),
+			f_09, ouverture, attendu_ouverture])
+	_liberer(s)
+
+
+func _test_reacteur() -> void:
+	var titre := "Réacteur : bourdon de 110 Hz, plus fort et plus grave quand il est chargé"
+	var banc := _ionique_banc()
+	var s = banc[0]
+	var c: Capteurs = banc[1]
+	var io = banc[2]
+	_ionique_photo(c, {})
+	_ionique_avancer(io, c, s, 5.0)
+	io.calculer(c, s.oreille, s.moteurs.attenuation, 1.0 / 60.0)
+	var f_repos: float = io.f_bourdon
+	var l_repos: float = io.niveaux["reacteur"]
+	var cor_repos := _correction_sons_purs(io, io._table_reacteur, IoniqueSon.HARMONIQUES.map(func(h): return [f_repos * h[0], h[1]]))
+	# les 5 moteurs arrière à fond d'un coup : la fréquence creuse le temps que le réacteur suive
+	var tous := {0: 1.0, 1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0}
+	_ionique_photo(c, tous)
+	var f_creux := INF
+	for i in 60:
+		_ionique_avancer(io, c, s, PAS)
+		f_creux = minf(f_creux, io.f_bourdon)
+	_ionique_avancer(io, c, s, 8.0)
+	io.calculer(c, s.oreille, s.moteurs.attenuation, 1.0 / 60.0)
+	var f_plein: float = io.f_bourdon
+	var l_plein: float = io.niveaux["reacteur"]
+	var mw: float = io.puissance_mw
+	var cor_plein := _correction_sons_purs(io, io._table_reacteur, IoniqueSon.HARMONIQUES.map(func(h): return [f_plein * h[0], h[1]]))
+	var loi := (l_plein - cor_plein) - (l_repos - cor_repos)
+	# coupure : elle remonte un instant au-dessus du repos
+	_ionique_photo(c, {})
+	var f_haut := 0.0
+	for i in 60:
+		_ionique_avancer(io, c, s, PAS)
+		f_haut = maxf(f_haut, io.f_bourdon)
+	var mw_attendu := 5.0 * 0.5 * c.poussee_reference * IoniqueSon.VITESSE_JET / IoniqueSon.RENDEMENT * 1e-6
+	var f_repos_attendu := IoniqueSon.F_BOURDON * (1.0 - IoniqueSon.STATISME * IoniqueSon.VEILLE)
+	var ok: bool = absf(f_repos - f_repos_attendu) < 0.01 and absf(f_plein - IoniqueSon.F_BOURDON * 0.97) < 0.02 \
+		and f_creux < f_plein - 2.0 and f_haut > f_repos + 2.0 and absf(mw - mw_attendu) < 1.0 \
+		and absf(loi - (IoniqueSon.REACTEUR_PLEIN_DB - IoniqueSon.REACTEUR_REPOS_DB)) < 0.05 and l_repos > 40.0 and l_repos < 65.0
+	_resultat(ok, titre,
+		"Au repos : %.2f Hz, %.1f dB dans le cockpit. Les 5 moteurs à fond : %.0f MW demandés (attendu %.0f : ½ F v / 65 %%), bourdon à %.2f Hz (−3 %% : le réacteur « peine »), %.1f dB ; une fois retirés les panneaux et le côté : %+.2f dB (attendu %+.0f). Au moment où l'on remet les gaz, il creuse jusqu'à %.1f Hz ; quand on coupe, il remonte jusqu'à %.1f Hz." % [
+			f_repos, l_repos, mw, mw_attendu, f_plein, l_plein, loi, IoniqueSon.REACTEUR_PLEIN_DB - IoniqueSon.REACTEUR_REPOS_DB,
+			f_creux, f_haut])
+	_liberer(s)
+
+
+func _test_plasma() -> void:
+	var titre := "Chambre à plasma : respiration de Hall, parois qui chauffent, le grondement monte"
+	var banc := _ionique_banc()
+	var s = banc[0]
+	var c: Capteurs = banc[1]
+	var io = banc[2]
+	var f_froid: float = IoniqueSon.respiration(300.0, 0.8)
+	var attendu := sqrt(300.0 * 3000.0) / (TAU * 0.8)
+	var rapport: float = IoniqueSon.respiration(1200.0, 0.8) / f_froid
+	var f_levage: float = IoniqueSon.respiration(300.0, 0.35)
+	_ionique_photo(c, {4: 1.0})
+	_ionique_avancer(io, c, s, 4.0)
+	var t4: float = io.t_paroi[4]
+	_ionique_avancer(io, c, s, 40.0)
+	io.calculer(c, s.oreille, s.moteurs.attenuation, 1.0 / 60.0)
+	var regime: float = io.facteur_regime
+	var l_plein: float = io.niveaux["plasma"]
+	c.forces[4] = 0.5 * c.poussees_max[4]
+	io.calculer(c, s.oreille, s.moteurs.attenuation, 1.0 / 60.0)
+	var l_moitie: float = io.niveaux["plasma"]
+	_ionique_photo(c, {})
+	_ionique_avancer(io, c, s, 12.0)
+	var t_refroidi: float = io.t_paroi[4]
+	# le grondement large du chef d'orchestre suit : sa fréquence moyenne × facteur_regime
+	var moy := func(forme: PackedFloat64Array) -> float:
+		var m := 0.0
+		for j in 30:
+			m += forme[j] * log(Resonances.centre(j))
+		return exp(m)
+	s.ionique.facteur_regime = 1.0
+	var m1: float = moy.call(s._forme("structure"))
+	s.ionique.facteur_regime = sqrt(2.0)
+	var m2: float = moy.call(s._forme("structure"))
+	s.ionique.facteur_regime = 1.0
+	var ok: bool = absf(f_froid - attendu) < 0.01 and absf(rapport - sqrt(2.0)) < 1e-4 and absf(t4 - (1200.0 - 900.0 * exp(-1.0))) < 0.5 \
+		and absf(regime - sqrt(2.0)) < 0.005 and absf(l_plein - l_moitie - 6.02) < 0.01 \
+		and absf(t_refroidi - (300.0 + (900.0 - 900.0 * exp(-11.0)) * exp(-1.0))) < 0.5 and absf(m2 / m1 - sqrt(2.0)) < 0.12
+	_resultat(ok, titre,
+		"Parois froides : %.1f Hz (√(v_gaz v_ions) / 2πL, moteur arrière ; levage : %.0f Hz) ; parois à 1 200 K : × %.4f (√2 : le gaz repart plus vite). Moteur à fond : parois à %.0f K après 4 s (attendu %.0f), grondement × %.3f après 44 s ; à 100 %% puis 50 %% de poussée : %+.2f dB (attendu +6,02, ∝ force²). Coupé 12 s : %.0f K. Grondement large du chef d'orchestre : fréquence moyenne × %.2f quand la chambre est chaude (attendu √2)." % [
+			f_froid, f_levage, rapport, t4, 1200.0 - 900.0 * exp(-1.0), regime, l_plein - l_moitie, t_refroidi, m2 / m1])
+	_liberer(s)
+
+
+func _test_allumage_sequence() -> void:
+	var titre := "Allumage et coupure : contacteur, plasma, contacteur"
+	var v = _vaisseau_vide()
+	v.reactivite_moteurs = 0.3
+	var s = _son(v)
+	s.hors_ligne = true
+	_images(s, 2)
+	var ev := []
+	var t := 0.0
+	var l_contact := NAN
+	for phase in [1.0, 0.0]:
+		v.moteurs[4]["consigne"] = phase
+		for i in 120 * 5:
+			v.pas(PAS)
+			s._physics_process(PAS)
+			t += PAS
+			for d in s._demandes:
+				var nom := String(d[0])
+				if nom.begins_with("contacteur") or nom.begins_with("moteur"):
+					ev.append([nom, t])
+					if nom == "contacteur_fermeture":
+						l_contact = float(d[1])
+			s._demandes.clear()
+			if i % 2 == 1:
+				s.mettre_a_jour(1.0 / 60.0)
+	var noms: Array = ev.map(func(e): return e[0])
+	var attendu := ["contacteur_fermeture", "moteur_allumage", "moteur_coupure", "contacteur_ouverture"]
+	var ecart_allumage: float = ev[1][1] - ev[0][1] if ev.size() >= 2 else NAN
+	var apres_coupure: float = ev[3][1] - ev[2][1] if ev.size() >= 4 else NAN
+	var recette := Chocs.recette("contacteur_fermeture", 0.7, 1e-3, RandomNumberGenerator.new())
+	var ok: bool = noms == attendu and ecart_allumage > 0.02 and ecart_allumage < 0.08 and apres_coupure > 1.0 \
+		and apres_coupure < 6.0 and l_contact > 70.0 and l_contact < 90.0 and float(recette["duree"]) > 0.05
+	_resultat(ok, titre,
+		"Gaz à fond puis coupés (moteur central) : %s ; le plasma s'amorce %.0f ms après le « clac » du contacteur (%.0f dB) ; le contacteur se rouvre %.1f s après la coupure (le sifflement est d'abord redescendu)." % [
+			" → ".join(noms), ecart_allumage * 1000.0, l_contact, apres_coupure])
+	_liberer(s)
+
+
+func _test_phase6_en_jeu() -> void:
+	var titre := "Phase 6 dans le chef d'orchestre : moteur d'aile gauche, pause, x10"
+	if not _cpp(titre):
+		return
+	var v = _vaisseau_vide()
+	v.reactivite_moteurs = 0.3
+	var s = _son(v)
+	s.hors_ligne = true
+	_images(s, 2)
+	var c = s.capteurs
+	var i_g := -1
+	for k in 5:
+		if c.positions[k].x < -1.0:
+			i_g = k
+	v.moteurs[i_g]["consigne"] = 1.0
+	for i in 120 * 3:
+		v.pas(PAS)
+		s._physics_process(PAS)
+		s._demandes.clear()
+		if i % 2 == 1:
+			s.mettre_a_jour(1.0 / 60.0)
+	var niveaux := {}
+	var audibles := true   # bobines et chambre (le réacteur, plus faible, peut être caché par la chambre : c'est voulu)
+	for nom in IoniqueSon.COUCHES:
+		niveaux[nom] = _niveau(s, nom)
+		if nom != "reacteur":
+			audibles = audibles and float(s.couches[nom]["energie"]) > 0.0
+	var reacteur_joue: bool = float(s.couches["reacteur"]["energie"]) > 0.0
+	var vd: Dictionary = s.voix_directes["structure"]
+	var raies_ok: bool = vd.get("raies_utilisees", false)
+	var flux = vd["flux"]
+	flux.taux = TAUX
+	var pb = flux.instantiate_playback()
+	pb.start(0.0)
+	_mixer(pb, TAUX / 2)
+	var a = ClassDB.instantiate("AnalyseSon")
+	var son := _mixer(pb, TAUX * 2, a, true)
+	var r: Dictionary = a.resultat()
+	var ecart := _db(float(r["gauche"]["energie"]) / float(r["droite"]["energie"]))
+	# le sifflement est bien dans ce qui sort : le tiers d'octave de son 2 f
+	var sp: PackedFloat64Array = a.spectre_tiers(son, TAUX)
+	var f_s: float = s.ionique.f_sifflement[i_g]
+	var j_s := Resonances.bande(f_s)
+	var voisins := 0.5 * (sp[j_s - 2] + sp[j_s + 2])
+	var raie_visible: bool = sp[j_s] > 2.0 * voisins
+	# pause : le modèle ne bouge plus (la physique non plus) ; x10 : il va 10 fois plus vite
+	var champ_avant: float = s.ionique.champ[i_g]
+	v.moteurs[i_g]["consigne"] = 0.0
+	s.regler(true, 1, true)
+	for i in 120:
+		s._physics_process(PAS)
+	var champ_pause: float = s.ionique.champ[i_g]
+	s.regler(false, 10, true)
+	for i in 24:
+		v.pas(10.0 * PAS)
+		s._physics_process(PAS)
+	var champ_x10: float = s.ionique.champ[i_g]
+	var ok: bool = i_g >= 0 and audibles and raies_ok and ecart > 1.0 and int(r["craquements"]) == 0 and int(r["non_finis"]) == 0 \
+		and raie_visible and champ_pause == champ_avant and champ_x10 < 0.5 * champ_avant
+	_resultat(ok, titre,
+		"Moteur d'aile gauche à fond : bobines %.0f dB, chambre à plasma %.0f dB, réacteur %.0f dB dans le cockpit ; bobines et chambre jouées : %s (réacteur : %s) ; sons purs envoyés à la voix structure : %s ; la voie gauche sort %.1f dB plus fort ; le sifflement (%.0f Hz) se voit dans ce qui sort (%.0f fois les tiers d'octave voisins) ; %d craquement, %d valeur invalide. Pause 1 s : champ %.3f → %.3f (figé). Coupé en x10 pendant 0,2 s (2 s pour le pilote) : champ %.3f." % [
+			niveaux["bobines"], niveaux["plasma"], niveaux["reacteur"], _oui(audibles), "joué" if reacteur_joue else "caché par la chambre",
+			_oui(raies_ok), ecart, f_s,
+			sp[j_s] / maxf(voisins, 1e-30), r["craquements"], r["non_finis"], champ_avant, champ_pause, champ_x10])
+	_liberer(s)

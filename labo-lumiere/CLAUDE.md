@@ -311,7 +311,7 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
 - `cpp/src/synthe_son.cpp` / `.h` : rien à voir avec la lumière, mais c'est la seule partie C++ du dépôt, donc le
   son du jeu y vit aussi (même bibliothèque, mêmes commandes de compilation). Le labo ne s'en sert pas.
 - `SyntheSon` (AudioStream) : 30 tiers d'octave de bruit (Butterworth d'ordre 4, calibrés par Σh², le volume agit
-  AVANT le filtre : pas de clic dans les graves), 32 résonances (AR(2), durée 1/(π f η)), 8 sons purs ; voie droite
+  AVANT le filtre : pas de clic dans les graves), 32 résonances (AR(2), durée 1/(π f η)), 24 sons purs (8 avant la phase 6) ; voie droite
   = gauche par 4 passe-tout. Cibles atomiques posées par `scripts/son/moteur_audio.gd` (jeu), rejointes par blocs de
   256 échantillons. `AnalyseSon` = outil des tests du son du jeu (craquements par prédiction AR(16), spectre en
   tiers d'octave, FFT de 65 536 points).
@@ -320,6 +320,11 @@ Référence unique : le programme du système de lumière, https://claude.ai/art
   sans verrou de 64 chocs, 16 qui sonnent à la fois (plein : le moins prioritaire s'éteint en 30 ms, le nouveau attend
   sa place). Chaque mode boucle à part (un mode sous −110 dB n'est plus calculé) ; crissement = phaseur revu tous
   les 16 échantillons. Recettes écrites par `scripts/son/chocs.gd` (jeu). 16 chocs de 38 modes ≈ 1,5 % d'un cœur.
+- **Phase 6** : 24 sons purs (au lieu de 8), chacun de son côté : `regler_raies(fréquences, énergies, parts_gauche)`
+  (un seul appel pour les 24 ; part 0,5 = au milieu), `lier_raies(maîtres)` (une harmonique prend le tremblement de sa
+  fondamentale ; −1 = libre). Le côté d'un son pur glisse en 30 ms au moins, comme celui des bandes. `bandes_milieu` :
+  quand le bruit est au milieu mais un son pur ne l'est pas, le bruit n'est calculé qu'une fois (copié vers la voie
+  droite) et seuls les sons purs ont deux voies. 24 sons purs de côté ≈ 0,4 % d'un cœur (cloud).
 - Tests : ceux du son du jeu (`scenes/tests_son.tscn` à la racine), pas ceux du labo.
 
 ## Organisation
