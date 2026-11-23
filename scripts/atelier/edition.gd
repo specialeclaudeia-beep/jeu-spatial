@@ -16,6 +16,9 @@ extends RefCounted
 ## remplit une zone fermée par 3 ou 4 poutres d'un panneau, on déplace un connecteur (ses poutres et ses
 ## panneaux suivent). En symétrie, tout a sa jumelle de l'autre côté. Enlever un connecteur enlève ses
 ## poutres ; enlever une poutre enlève les panneaux qu'elle bordait.
+##
+## Étape 8 : la VIE À BORD (section « vie » du plan) : pression de la cabine, recycleur, volumes fermés de
+## l'armature pressurisés ou non (scripts/physique/vie_a_bord.gd).
 
 signal change
 
@@ -23,6 +26,7 @@ const Plan = preload("res://scripts/atelier/plan.gd")
 const Catalogue = preload("res://scripts/atelier/catalogue.gd")
 const Pieces = preload("res://scripts/atelier/pieces_toutes_faites.gd")
 const Armature = preload("res://scripts/atelier/armature.gd")
+const VieABord = preload("res://scripts/physique/vie_a_bord.gd")
 
 const DOSSIER := "user://vaisseaux/"
 const HISTOIRE_MAX := 80                          # nombre de retours en arrière possibles
@@ -414,6 +418,49 @@ func regler_duree_commande(c: String, s: float) -> void:
 	if not (donnees["commandes"] as Dictionary).has(c):
 		donnees["commandes"][c] = {"nom": String(Catalogue.COMMANDES[c]["nom"])}
 	donnees["commandes"][c]["duree_s"] = snappedf(s, 0.1)
+	_apres()
+
+
+# =====================================================================
+# ÉTAPE 8 : LA VIE À BORD
+# =====================================================================
+## La section « vie » du plan (un vaisseau enregistré avant l'étape 8 reçoit celle du chasseur).
+func _section_vie() -> Dictionary:
+	if not donnees.get("vie", null) is Dictionary:
+		donnees["vie"] = VieABord.section(plan()).duplicate(true)
+	return donnees["vie"]
+
+
+## « pression_kpa » (de 20 à 110) ou « recycleur » (vrai / faux).
+func regler_vie(cle: String, valeur) -> void:
+	var nouvelle = null
+	if cle == "pression_kpa":
+		nouvelle = snappedf(clampf(float(valeur), VieABord.PRESSION_MIN_KPA, VieABord.PRESSION_MAX_KPA), 0.001)
+	elif cle == "recycleur":
+		nouvelle = bool(valeur)
+	else:
+		return
+	var avant = (donnees.get("vie", {}) as Dictionary).get(cle, null) if donnees.get("vie", null) is Dictionary else null
+	if avant != null and (is_equal_approx(float(avant), float(nouvelle)) if cle == "pression_kpa" else bool(avant) == nouvelle):
+		return
+	_avant()
+	_section_vie()[cle] = nouvelle
+	_apres()
+
+
+## Pressurise (ou non) un volume fermé de l'armature, donné par ses panneaux.
+func pressuriser(panneaux: Array, oui: bool) -> void:
+	if panneaux.is_empty():
+		return
+	_avant()
+	var vie := _section_vie()
+	var soutes: Array = (vie.get("soutes", []) as Array).duplicate()
+	for id in panneaux:
+		soutes.erase(String(id))
+	if oui:
+		for id in panneaux:
+			soutes.append(String(id))
+	vie["soutes"] = soutes
 	_apres()
 
 

@@ -80,6 +80,7 @@ var air_f := PackedVector3Array()
 var air_c := PackedVector3Array()
 var sol_f := PackedVector3Array()                 # N : force moyenne du sol sur chaque point qui touche
 var pression_dehors := 0.0                        # Pa (0 dans le vide)
+var pression_cabine := 101325.0                   # Pa : l'air de la cabine (atelier, étape 8 : il peut fuir)
 var temps_physique := 0.0                         # s : temps de l'univers écoulé depuis la photo précédente
 # --- phase 4 : où l'on est (poussière et gaz de l'espace : scripts/son/poussiere_son.gd) ---
 var vitesse := 0.0                                # m/s, par rapport à l'astre du repère (toujours < c)
@@ -200,6 +201,8 @@ func _lire_mouvement(v, dt: float) -> void:
 	_base_avant = base
 	_base_lue = true
 	pression_dehors = densite * R_AIR * temperature if densite > 0.0 else 0.0
+	var vie = v.get("vie")
+	pression_cabine = float(vie.pression_cabine()) if vie != null else 101325.0
 	air_f = v.aero.prise_f.duplicate()
 	air_c = v.aero.prise_c.duplicate()
 	mach = v.aero.mach

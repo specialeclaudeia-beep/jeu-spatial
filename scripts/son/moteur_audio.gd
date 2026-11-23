@@ -194,6 +194,9 @@ func installer(v, noeud_pilote: Node3D, cam: Camera3D, oeil: Vector3) -> void:
 	oreille = oeil + capteurs.centre_gravite
 	_rng.seed = 7
 	preparer_bus()
+	air_cabine_db = 0.0
+	if AudioServer.get_bus_index("Cockpit") >= 0:
+		AudioServer.set_bus_volume_db(AudioServer.get_bus_index("Cockpit"), 0.0)
 	synthese_directe = ClassDB.class_exists("SyntheSon") and not forcer_boucles \
 		and not OS.get_cmdline_user_args().has("--son-boucles")
 	_charger_sons()
@@ -203,6 +206,25 @@ func installer(v, noeud_pilote: Node3D, cam: Camera3D, oeil: Vector3) -> void:
 	ecoute.position = oreille_scene
 	ecoute.make_current()
 	actif = true
+
+
+## Atelier, étape 8 : l'air de la cabine porte le son jusqu'à l'oreille. Une paroi qui vibre pousse l'air
+## avec une pression proportionnelle à la densité de cet air (impédance ρ·c) : à moitié de la pression,
+## −6 dB ; à un dixième, −20 dB. Il reste au moins −30 dB : ce qui passe par le siège et le casque (os du
+## crâne). Les alarmes (casque) ne changent pas. Le bus « Cockpit » est remis à 0 dB à chaque partie.
+const AIR_CABINE_MIN_DB := -30.0
+var air_cabine_db := 0.0
+
+
+func _air_cabine() -> void:
+	var p := capteurs.pression_cabine
+	var db := clampf(20.0 * log(maxf(p, 1.0) / 101325.0) / log(10.0), AIR_CABINE_MIN_DB, 0.0)
+	if absf(db - air_cabine_db) < 0.1 and not (db == 0.0 and air_cabine_db != 0.0):
+		return
+	air_cabine_db = db
+	var i := AudioServer.get_bus_index("Cockpit")
+	if i >= 0:
+		AudioServer.set_bus_volume_db(i, db)
 
 
 ## Bus de mixage (une seule fois par partie : ils restent d'une scène à l'autre).
@@ -689,6 +711,7 @@ func mettre_a_jour(delta: float) -> void:
 	# 1. silence demandé ? fondu de 0,1 s
 	fondu = move_toward(fondu, 1.0 if son_permis() else 0.0, delta / FONDU_SILENCE)
 	var fondu_db := 20.0 * log(maxf(fondu, 1e-4)) / log(10.0)
+	_air_cabine()
 	# 2. ce que le pilote entend, en dB dans le cockpit
 	var c := capteurs
 	var z_ext := c.densite * Fluides.vitesse_son(c.temperature) if c.densite > 0.0 else 0.0

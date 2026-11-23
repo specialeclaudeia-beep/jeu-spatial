@@ -8,6 +8,7 @@ extends RefCounted
 ##    "commandes": {"ailes": {…}, "train": {…}, "vertical": {…}},   durées des mouvements
 ##    "articulations": [ … ],                                          pièces mobiles (charnières, vérins…)
 ##    "coque": {…}, "air": {…},                                        réglages d'ensemble de la coque
+##    "vie": {…},                                                      cabine, pression, oxygène (étape 8)
 ##    "modules": {clé: nom lisible},                                   morceaux du vaisseau (atelier)
 ##    "pieces": [ {"id": …, "type": …, …}, … ]}
 ## Les types de pièces et d'articulations sont décrits dans scripts/atelier/catalogue.gd.
@@ -25,8 +26,10 @@ const FORMAT := "plan-vaisseau"
 ## Version 2 (atelier, étape 3) : pièces toutes faites (ensembles avec « modele » et « reglages »), type
 ## « bloc », modules. Version 3 (étape 6) : l'ARMATURE (connecteurs, poutres entre deux connecteurs, panneaux
 ## remplis entre 3 ou 4 connecteurs : scripts/atelier/armature.gd), types « panneau », bloc en « boule »,
-## poutres en tube. Un plan de version 1 ou 2 se lit toujours.
-const VERSION := 3
+## poutres en tube. Version 4 (étape 8) : la VIE À BORD (section « vie » : cabine, parois qui tiennent la
+## pression, réserves d'air, volumes de l'armature pressurisés : scripts/physique/vie_a_bord.gd). Un plan de
+## version 1, 2 ou 3 se lit toujours.
+const VERSION := 4
 const PLAN_PAR_DEFAUT := "res://vaisseaux/chasseur_v27.plan.json"
 
 var donnees := {}                  # le plan tel qu'il est écrit
@@ -340,6 +343,18 @@ func _verifier() -> void:
 				break
 			vues[porteur] = true
 			porteur = String((articulations[porteur] as Dictionary).get("porte_par", ""))
+	# la vie à bord (étape 8)
+	var vie = donnees.get("vie", null)
+	if vie != null:
+		if not vie is Dictionary:
+			erreurs.append("section « vie » illisible")
+		else:
+			var p_kpa := float(vie.get("pression_kpa", 101.325))
+			if p_kpa < 20.0 or p_kpa > 110.0:
+				erreurs.append("vie : pression de la cabine %s kPa (de 20 à 110)" % p_kpa)
+			var cab = vie.get("cabine", {})
+			if not cab is Dictionary or (not (cab as Dictionary).is_empty() and float(cab.get("volume_m3", 0.0)) <= 0.0):
+				erreurs.append("vie : volume de la cabine nul")
 
 
 # =====================================================================

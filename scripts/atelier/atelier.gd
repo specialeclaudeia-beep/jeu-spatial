@@ -52,6 +52,7 @@ const Pieces = preload("res://scripts/atelier/pieces_toutes_faites.gd")
 const DessinVaisseau = preload("res://scripts/dessin_vaisseau.gd")
 const ControleVol = preload("res://scripts/atelier/controle_vol.gd")
 const Armature = preload("res://scripts/atelier/armature.gd")
+const VieABord = preload("res://scripts/physique/vie_a_bord.gd")
 
 const MODELE_EXTERIEUR := "res://modeles/vaisseau/vaisseau_exterieur.glb"
 const MODELE_COCKPIT := "res://modeles/vaisseau/cockpit.glb"
@@ -160,6 +161,8 @@ var aide: Label
 var case_cg: CheckBox
 var case_poussees: CheckBox
 var case_neutre: CheckBox
+var case_parois: CheckBox                # étape 8 : parois sous pression en couleur
+var _materiaux_parois := {}              # couleur → matériau
 var curseur_vitesse: HSlider
 var texte_vitesse: Label
 var minuterie: Timer
@@ -767,6 +770,9 @@ func choisir(genre: String, id: String, garder_pose := false) -> void:
 					_afficher_fiche(analyse.fiche_symetrie())
 				"mobiles":
 					_afficher_fiche(analyse.fiche_mobiles())
+				"cabine":
+					_afficher_fiche(analyse.fiche_cabine())
+					_outils_cabine()
 				"controle":
 					if controle == null:
 						controle = controle_vol()
@@ -1193,9 +1199,22 @@ func _surligner(ids: Array) -> void:
 	for cle in flottantes:
 		if vus.has(cle):
 			continue
+		vus[cle] = true
 		for mi in maillages.get(cle, []):
 			(mi as MeshInstance3D).material_overlay = _materiau_flotte
 			_surlignes.append(mi)
+	# étape 8 : les parois sous pression, en couleur (vert, orange, rouge)
+	if case_parois != null and case_parois.button_pressed and analyse != null:
+		var couleurs: Dictionary = analyse.couleurs_parois()
+		for cle in couleurs:
+			if vus.has(cle):
+				continue
+			var c: Color = couleurs[cle]
+			if not _materiaux_parois.has(c):
+				_materiaux_parois[c] = _materiau_calque(c, 0.55)
+			for mi in maillages.get(cle, []):
+				(mi as MeshInstance3D).material_overlay = _materiaux_parois[c]
+				_surlignes.append(mi)
 	_survol_maillages.clear()   # le survol se redessine
 
 
@@ -2110,6 +2129,41 @@ func _controles_reglages(modele: String, r: Dictionary, quand: Callable) -> void
 		fiche_outils.add_child(ligne)
 
 
+## Étape 8 : les réglages de la cabine, dans sa page : pression, recycleur, volumes de l'armature à pressuriser.
+func _outils_cabine() -> void:
+	var a: Dictionary = analyse.vie()
+	if not bool(a["a_cabine"]) and (a["compartiments"] as Array).is_empty():
+		return
+	var ligne := HBoxContainer.new()
+	var nom := Style.label("Pression de la cabine", 13, Style.TEXTE)
+	nom.custom_minimum_size = Vector2(150, 0)
+	ligne.add_child(nom)
+	var s := SpinBox.new()
+	s.min_value = VieABord.PRESSION_MIN_KPA
+	s.max_value = VieABord.PRESSION_MAX_KPA
+	s.step = 0.025
+	s.custom_arrow_step = 1.0
+	s.value = float(a["consigne"]) / 1000.0
+	s.suffix = "kPa"
+	s.tooltip_text = "Pression gardée par le régulateur (101,3 kPa : niveau de la mer ; 70 kPa : comme à 3 000 m). Toujours 21,2 kPa d'oxygène. Plus basse, elle fatigue moins les parois."
+	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	s.value_changed.connect(func(x): edition.regler_vie("pression_kpa", x))
+	ligne.add_child(s)
+	fiche_outils.add_child(ligne)
+	var survie: Dictionary = a["survie"]
+	if bool(survie["present"]):
+		var c := _case("Recycleur d'oxygène (rend 90 % de l'oxygène respiré)", bool(survie["recycleur"]),
+			func(on): edition.regler_vie("recycleur", on))
+		fiche_outils.add_child(c)
+	for comp in a["compartiments"]:
+		if bool(comp["cabine"]):
+			continue
+		var panneaux: Array = comp["panneaux"]
+		var c2 := _case("Pressuriser le %s (%s m³)" % [String(comp["nom"]), Analyse.nombre(float(comp["volume_m3"]), 2)], bool(comp["pressurise"]),
+			func(on): edition.pressuriser(panneaux, on))
+		fiche_outils.add_child(c2)
+
+
 ## Les outils d'un élément de l'armature, dans sa fiche : ses réglages (et pour toute l'armature), la place
 ## d'un connecteur, tracer à partir de lui.
 func _outils_armature(id: String) -> void:
@@ -2565,6 +2619,8 @@ func _remplir_tableau() -> void:
 	var tuiles: Array = analyse.tuiles_groupe(pieces_salle()) if en_salle else analyse.tuiles()
 	var details: Array = [] if en_salle else analyse.details_tuiles()
 	if not en_salle:
+		tuiles.append(analyse.tuile_cabine())   # étape 8
+		details.append("cabine")
 		controle = controle_vol()
 		tuiles.append(controle.tuile())
 		details.append("controle")
@@ -2612,6 +2668,8 @@ func ouvrir_detail(detail: String) -> void:
 	choisir("analyse", detail)
 	if detail == "poussees" and case_poussees != null:
 		case_poussees.button_pressed = true
+	if detail == "cabine" and case_parois != null:
+		case_parois.button_pressed = true
 
 
 func _panneau_catalogue() -> Control:
@@ -2670,6 +2728,9 @@ func _barre_vue() -> Control:
 	h.add_child(case_poussees)
 	case_neutre = _case("Fond neutre", false, func(on): hangar.vue_technique(on); _sauver_reglages())
 	h.add_child(case_neutre)
+	case_parois = _case("Parois", false, func(_on): _surligner(pieces_choisies()); _sauver_reglages())
+	case_parois.tooltip_text = "Colore les parois qui tiennent la pression de la cabine : vert (marge ×2 ou plus), orange (×1 à ×2), rouge (elles cassent dans le vide)"
+	h.add_child(case_parois)
 	return p
 
 
@@ -3482,6 +3543,7 @@ func _lire_reglages() -> void:
 	case_cg.button_pressed = bool(f.get_value("vue", "centre_gravite", true))
 	case_poussees.button_pressed = bool(f.get_value("vue", "poussees", false))
 	case_neutre.button_pressed = bool(f.get_value("vue", "fond_neutre", false))
+	case_parois.button_pressed = bool(f.get_value("vue", "parois", false))
 	case_symetrie.button_pressed = bool(f.get_value("pose", "symetrie", true))
 
 
@@ -3493,6 +3555,8 @@ func _sauver_reglages() -> void:
 	f.set_value("vue", "centre_gravite", case_cg.button_pressed)
 	f.set_value("vue", "poussees", case_poussees.button_pressed)
 	f.set_value("vue", "fond_neutre", case_neutre.button_pressed)
+	if case_parois != null:
+		f.set_value("vue", "parois", case_parois.button_pressed)
 	f.set_value("pose", "symetrie", case_symetrie.button_pressed)
 	f.save(REGLAGES)
 

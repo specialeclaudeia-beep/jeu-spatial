@@ -167,7 +167,7 @@ func charger(c: Capteurs) -> void:
 	var w := c.omega
 	var al := c.alpha
 	var cg := c.centre_gravite
-	var dp := Pieces.P_CABINE - c.pression_dehors
+	var dp := c.pression_cabine - c.pression_dehors   # étape 8 : la cabine qui fuit ne pousse plus ses parois
 	var maree := c.maree_k > MAREE_MIN
 	var nn := c.maree_dir
 	var k_m := c.maree_k

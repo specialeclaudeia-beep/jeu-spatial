@@ -16,7 +16,7 @@ choses qui ne sont pas dans le dépôt (trop lourdes) : l'extension `addons/nobo
 Le jeu s'ouvre sur l'**écran d'accueil** (provisoire) : **Atelier**, **Jouer** (le dernier vaisseau,
 posé au sol devant le hangar) et **Charger un vaisseau**.
 
-## Atelier (étapes 2 à 7)
+## Atelier (étapes 2 à 8)
 L'atelier est un écran à part : le jeu (planète, lumière, son) n'est chargé qu'au clic sur **Lancer**,
 et il est libéré quand on revient (F3 dans le jeu). Le vaisseau est posé dans un hangar, sur ses roues
 (même physique que le jeu : ses amortisseurs s'écrasent sous son poids), ailes repliées.
@@ -170,6 +170,52 @@ et il est libéré quand on revient (F3 dans le jeu). Le vaisseau est posé dans
   commande, de combien et vers où le centre de gravité bouge, la liste des pièces mobiles. Le contrôle
   avant le vol **avertit** si le centre de gravité bouge de plus de 30 cm, et signale une charnière ou un
   vérin qui ne porte rien.
+
+### La cabine : parois sous pression, air, oxygène, fuites (étape 8)
+- La **cabine du pilote** a été mesurée sur le modèle 3D (`outils/plan/cabine_cockpit_v27.py`) : **3,6 m³
+  d'air** (sans le pilote ni son siège), tenus par trois parois : la **verrière** (verre feuilleté), la
+  **baignoire** du cockpit et le **cadre** de la verrière (aluminium). L'épaisseur de chaque paroi vient de
+  sa masse et de sa surface ; sa courbure, du modèle.
+- **Ce qui casse une paroi** : une coque courbe casse quand la pression dépasse résistance × épaisseur ÷
+  rayon de courbure ; un **panneau plat** de l'armature (fixé sur ses bords) se bombe d'abord comme une
+  membrane, puis casse (formules de Roark, grandes flèches ; un panneau est ramené au disque qui fatigue
+  autant). Exemple : une tôle d'aluminium de 2 mm et de 1 m de côté tient 125 kPa ; la même en
+  aluminium-lithium 170 kPa. Chaque matière a sa résistance, son élasticité, et dit si elle est étanche
+  (la céramique du bouclier thermique laisse passer l'air).
+- **Marge** = pression qui casse ÷ pression de la cabine : **vert** à ×2 ou plus (règle des structures
+  habitées), **orange** de ×1 à ×2, **rouge** sous ×1 (elle casse dans le vide). Le chasseur : verrière
+  ×41, baignoire ×9,7, cadre ×11.
+- Tuile **CABINE** du tableau ingénieur (avant **AVANT LE VOL**) : pression, volume d'air, la plus faible
+  paroi, les jours d'oxygène. Sa page : chaque paroi (matière, épaisseur, courbure, pression qui la
+  casse, marge), l'air (4,3 kg à 101,3 kPa), les réserves (20 kg d'oxygène, 30 kg d'azote : 238 jours
+  avec le recycleur qui rend 90 % de l'oxygène respiré, 24 jours sans), et ce que ferait un trou. On y
+  règle la **pression de la cabine** (20 à 110 kPa ; toujours 21,2 kPa d'oxygène : 70 kPa, c'est comme à
+  3 000 m, et ça fatigue moins les parois) et le recycleur. Case **Parois** (en haut) : les parois en
+  couleur dans la vue.
+- **Volumes fermés de l'armature** : des panneaux qui ferment un volume (chaque bord partagé par deux
+  panneaux) font une soute. Sa page peut la **pressuriser** (remplie au départ à la pression de la cabine,
+  puis fermée : le régulateur ne sert que la cabine) ; ses panneaux deviennent alors des parois sous
+  pression (même calcul, même couleurs). Un panneau enlevé : le volume n'est plus fermé, le contrôle
+  le dit.
+- **Contrôle avant le vol** (catégorie **Cabine**) : une paroi rouge **avertit** (avec l'altitude où elle
+  cède en montant), une paroi orange est signalée, une paroi enlevée ou qui laisse passer l'air aussi
+  (« la cabine fuit »).
+- **Dans le jeu**, l'air est simulé à chaque pas : masses d'oxygène et d'azote, **régulateur** (il garde
+  la pression et l'oxygène, 0,1 kg/s au plus, pris dans les réserves), **soupapes** (trop de pression :
+  l'air sort ; pas assez : l'air du dehors entre), le pilote qui respire (0,84 kg d'oxygène par jour).
+  Une paroi qui ne tient plus **cède** : le trou fait sa surface, l'air sort par lui à la vitesse du son
+  et **pousse le vaisseau** de l'autre côté (vraie force et vrai couple : une verrière qui part, c'est
+  environ 2 300 N·s d'un coup). La masse du vaisseau ne change pas (quelques kilos d'air).
+- **F4** : la **vanne de la cabine** (20 cm²), pour vider l'air ou le refermer ; elle ne pousse pas (deux
+  sorties opposées) et le régulateur s'arrête tant qu'elle est ouverte. Quand l'oxygène manque, le pilote
+  a de moins en moins de temps avant de perdre connaissance (**hypoxie**, tables de l'aviation) ; il se
+  réveille environ 30 s après le retour de l'oxygène. Sous 6,3 kPa (limite d'Armstrong), l'eau du corps
+  bout. Pour l'instant, c'est seulement affiché (pas de pilote qui s'évanouit pour de vrai).
+- Le tableau (texte à gauche) a une ligne **CABINE**, l'écran du cockpit montre la pression et
+  l'oxygène, et une alarme au centre dit ce qui arrive (paroi qui cède, fuite, vanne ouverte, hypoxie).
+  Le **son** des parois suit la vraie différence de pression, et les sons qui passent par l'air du
+  cockpit s'éteignent quand la cabine se vide.
+- Plus tard : la température et la ventilation, les dégâts et les pannes.
 Le visuel (hangar, menus, couleurs, formes des pièces) est provisoire ; la physique est la vraie.
 
 ## Commandes
@@ -212,6 +258,7 @@ Disposition par défaut :
 | saut d'essai vers le trou noir Gaia BH1 | M | — (à choisir avec F2) |
 | saut d'essai devant le trou de ver (vers Alpha du Centaure) | W | — (à choisir avec F2) |
 | retour à l'atelier (recharge l'atelier) | F3 | — (à choisir avec F2) |
+| vanne de la cabine : vider l'air / refermer | F4 | — (à choisir avec F2) |
 | tests de physique | F1 (Échap pour revenir) | Rond pour revenir |
 | configurer les commandes | F2 | Options |
 
@@ -505,8 +552,8 @@ façon Star Wars (jet de 3 000 m/s), qui suit de vraies lois là où elles exist
   (tableau ingénieur, catégories, recherche, fiches, pages d'analyse : masses, poussées, symétrie), `camera_atelier.gd`, `hangar.gd` et `style.gd` (visuel provisoire).
   `pieces_toutes_faites.gd` : les pièces à poser (réglages, masse, dessin) ; `edition.gd` : les changements
   du plan (poser, symétrie, régler, enlever, annuler / refaire, enregistrer).
-  `controle_vol.gd` : le contrôle avant le vol (vitesse du PC, lumière, au sol, en vol, symétrie).
-  `outils/captures_atelier.gd`, `captures_atelier_etape3.gd` à `captures_atelier_etape7.gd` : captures
+  `controle_vol.gd` : le contrôle avant le vol (vitesse du PC, lumière, au sol, en vol, cabine, symétrie).
+  `outils/captures_atelier.gd`, `captures_atelier_etape3.gd` à `captures_atelier_etape8.gd` : captures
   d'écran de l'atelier et du départ.
 - `scripts/dessin_vaisseau.gd` : le dessin du vaisseau d'après son plan (modules enlevés cachés, chaque
   pièce du plan dessinée, pièces posées fusionnées dans le jeu, compte des surfaces et triangles) ; le
@@ -516,6 +563,8 @@ façon Star Wars (jet de 3 000 m/s), qui suit de vraies lois là où elles exist
 - `scripts/modele_vaisseau.gd` : le modèle 3D suit la physique (ailes, train, trappes, tuyère,
   amortisseurs) ; partagé par le jeu et l'atelier.
 - `scripts/physique/atmosphere.gd` et `aerodynamique.gd` : l'air de la planète et ce qu'il fait au vaisseau.
+- `scripts/physique/vie_a_bord.gd` : la cabine (étape 8 de l'atelier) : parois sous pression, volumes fermés
+  de l'armature, air, régulateur, réserves, fuites qui poussent, oxygène du pilote.
 - `scripts/physique/reperes.gd` : les systèmes d'étoile, leurs repères et les transformations de Lorentz entre eux.
 - `scripts/physique/lentille.gd` : Einstein B, la lumière courbée par un trou noir (tables pour le ciel et les étoiles).
 - `scripts/einstein/toile.gd` : Einstein B, la « toile de l'espace » (touche Y).

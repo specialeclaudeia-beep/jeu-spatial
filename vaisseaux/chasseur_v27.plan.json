@@ -152,6 +152,52 @@
 			"surface_m2": 0.9
 		}
 	},
+	"vie": {
+		"pression_kpa": 101.325,
+		"recycleur": true,
+		"cabine": {
+			"nom": "cabine du pilote",
+			"volume_m3": 3.6,
+			"parois": [
+				{
+					"piece": "Cockpit_verriere",
+					"nom": "verrière",
+					"rayon_m": 0.731,
+					"normale": [0.0, 1.0, 0.0],
+					"surface_m2": 7.053,
+					"centre": [0.0, 0.730663, -0.32763],
+					"dessins": [
+						"Verriere"
+					]
+				},
+				{
+					"piece": "Cockpit_interieur",
+					"nom": "baignoire du cockpit",
+					"rayon_m": 0.952,
+					"normale": [0.0, 0.0, 0.0],
+					"surface_m2": 26.3268,
+					"centre": [0.0, -0.165991, -0.392151]
+				},
+				{
+					"piece": "Cockpit_cadre",
+					"nom": "cadre de la verrière",
+					"rayon_m": 0.825,
+					"normale": [0.0, 1.0, 0.0],
+					"surface_m2": 1.9948,
+					"centre": [0.0, 0.73473, -0.256098],
+					"dessins": [
+						"Verriere_cadre"
+					]
+				}
+			]
+		},
+		"survie": {
+			"piece": "Masse_survie",
+			"oxygene_kg": 20.0,
+			"azote_kg": 30.0
+		},
+		"soutes": []
+	},
 	"pieces": [
 		{
 			"id": "Aile_bas_droit",

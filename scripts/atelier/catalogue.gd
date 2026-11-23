@@ -24,18 +24,30 @@ extends RefCounted
 
 ## Matières : une seule liste pour la masse (densité) et pour le son (comportement de la matière qui craque
 ## ou qui sonne, scripts/son/pieces_sonores.gd). Densités : valeurs habituelles des fiches techniques.
+## Étape 8 (parois sous pression, scripts/physique/vie_a_bord.gd) : « resistance_mpa » = contrainte où la
+## matière casse (résistance à la rupture en traction, fiches techniques : Al-Li 2195, Al 7075, Ti-6Al-4V,
+## acier maraging, carbone quasi isotrope, verre aluminosilicate trempé chimiquement), « module_gpa » = module
+## de Young (raideur), « poisson » = coefficient de Poisson, « etanche » = laisse-t-elle passer l'air
+## (les tuiles de silice du bouclier thermique sont poreuses : elles ne tiennent pas la pression).
 const MATIERES := {
 	"aluminium_lithium": {"nom": "alliage aluminium-lithium", "densite": 2590.0, "son": "aluminium",
-		"usage": "coque, trappes", "couleur": [0.72, 0.74, 0.77], "metal": 0.75},
-	"aluminium": {"nom": "aluminium", "densite": 2700.0, "son": "aluminium", "usage": "habillage du cockpit", "couleur": [0.8, 0.81, 0.83], "metal": 0.8},
+		"usage": "coque, trappes", "couleur": [0.72, 0.74, 0.77], "metal": 0.75,
+		"resistance_mpa": 580, "module_gpa": 76, "poisson": 0.33, "etanche": true},
+	"aluminium": {"nom": "aluminium", "densite": 2700.0, "son": "aluminium", "usage": "habillage du cockpit", "couleur": [0.8, 0.81, 0.83], "metal": 0.8,
+		"resistance_mpa": 470, "module_gpa": 73, "poisson": 0.33, "etanche": true},
 	"titane": {"nom": "titane (Ti-6Al-4V)", "densite": 4430.0, "son": "titane",
-		"usage": "tuyères, moteurs, carters chauds", "couleur": [0.56, 0.57, 0.6], "metal": 0.85},
-	"acier": {"nom": "acier haute résistance", "densite": 7850.0, "son": "acier", "usage": "trains d'atterrissage", "couleur": [0.44, 0.45, 0.47], "metal": 0.9},
-	"composite_carbone": {"nom": "composite fibre de carbone", "densite": 1600.0, "son": "composite", "usage": "ailes", "couleur": [0.17, 0.18, 0.2], "metal": 0.1},
+		"usage": "tuyères, moteurs, carters chauds", "couleur": [0.56, 0.57, 0.6], "metal": 0.85,
+		"resistance_mpa": 950, "module_gpa": 114, "poisson": 0.34, "etanche": true},
+	"acier": {"nom": "acier haute résistance", "densite": 7850.0, "son": "acier", "usage": "trains d'atterrissage", "couleur": [0.44, 0.45, 0.47], "metal": 0.9,
+		"resistance_mpa": 1900, "module_gpa": 200, "poisson": 0.29, "etanche": true},
+	"composite_carbone": {"nom": "composite fibre de carbone", "densite": 1600.0, "son": "composite", "usage": "ailes", "couleur": [0.17, 0.18, 0.2], "metal": 0.1,
+		"resistance_mpa": 600, "module_gpa": 55, "poisson": 0.3, "etanche": true},
 	"verre_aluminosilicate": {"nom": "verre aluminosilicate feuilleté", "densite": 2460.0, "son": "verre",
-		"usage": "verrière, vitres", "couleur": [0.45, 0.6, 0.7], "metal": 0.0},
+		"usage": "verrière, vitres", "couleur": [0.45, 0.6, 0.7], "metal": 0.0,
+		"resistance_mpa": 250, "module_gpa": 72, "poisson": 0.22, "etanche": true},
 	"ceramique": {"nom": "céramique de bouclier thermique (tuiles de silice)", "densite": 144.0, "son": "verre",
-		"usage": "bouclier thermique", "couleur": [0.9, 0.89, 0.86], "metal": 0.0},
+		"usage": "bouclier thermique", "couleur": [0.9, 0.89, 0.86], "metal": 0.0,
+		"resistance_mpa": 1, "module_gpa": 0.5, "poisson": 0.2, "etanche": false},
 }
 
 ## Types de pièces. « champs » : réglages obligatoires ; « facultatifs » : réglages possibles (toute pièce

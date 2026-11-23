@@ -48,6 +48,7 @@ const ACTIONS := [
 	["recommencer", "Recommencer", "l:82", "b:4"],                    # R, Créer
 	["remettre_orbite", "Remettre en orbite", "l:79", ""],            # O
 	["atelier", "Retour à l'atelier (recharge l'atelier)", "p:4194334", ""],   # F3
+	["vanne_cabine", "Vanne de la cabine : vider l'air / refermer", "p:4194335", ""],   # F4 (atelier, étape 8)
 	["temps_x1", "Temps x1", "p:49", ""],                             # 1
 	["temps_x10", "Temps x10", "p:50", ""],                           # 2
 	["temps_x100", "Temps x100", "p:51", ""],                         # 3

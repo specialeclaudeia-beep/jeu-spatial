@@ -14,6 +14,7 @@ const PiloteAuto = preload("res://scripts/physique/pilote_auto.gd")
 const Reperes = preload("res://scripts/physique/reperes.gd")
 const Atmosphere = preload("res://scripts/physique/atmosphere.gd")
 const AtmoLumiere = preload("res://scripts/lumiere/atmosphere_lumiere.gd")
+const VieABord = preload("res://scripts/physique/vie_a_bord.gd")
 const R := 600000.0
 const GM := 9.81 * 600000.0 * 600000.0
 
@@ -314,6 +315,7 @@ func _lancer() -> void:
 	_tests_lune()
 	_tests_atmosphere()
 	_tests_masses_mobiles()
+	_tests_vie_a_bord()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
@@ -3069,3 +3071,152 @@ func _tests_masses_mobiles() -> void:
 		"Centre de gravité exact au départ : %s. Vol vertical : tuyère de %.0f kg, centre de gravité déplacé de %.1f mm, revenu : %s. Ailes repliées dans le vide : moment cinétique des ailes %.1f N·m·s au plus, total gardé à %s près, rotation finale %s rad/s (tourné de %.3f°, symétrique). Tuyère : %.1f N·m·s, total à %s près, le vaisseau a tourné de %.3f° puis s'est arrêté (%s rad/s)." % [
 		exact, m_tuyere, d_v * 1000.0, revenu, l_int_max, String.num_scientific(l_max), String.num_scientific(v.omega.length()), tourne, lw_int,
 		String.num_scientific(lw_max), tourne_v, String.num_scientific(w.omega.length())])
+
+
+
+# =====================================================================
+# TESTS : LA VIE À BORD (atelier, étape 8 : pression de la cabine, oxygène, fuites)
+# =====================================================================
+func _tests_vie_a_bord() -> void:
+	# 1. débit d'un trou : formule des manuels pour l'air (jet à la vitesse du son) : ṁ = 0,0404·A·p/√T
+	var e: Vector2 = VieABord.ecoulement(1.0, 101325.0, 293.15, VieABord.M_AIR, 0.0)
+	var manuel := 0.040418 * 101325.0 / sqrt(293.15)
+	# poussée dans le vide : F = (γ + 1)·p* ·A avec p* = 0,528·p (le jet sort à la vitesse du son)
+	var f_manuel := 2.4 * 0.528282 * 101325.0
+	# sous la vitesse du son (p2 = 0,9·p1) : Saint-Venant, calculé à la main
+	var e2: Vector2 = VieABord.ecoulement(1.0, 100000.0, 293.15, VieABord.M_AIR, 90000.0)
+	var rs := VieABord.R / VieABord.M_AIR
+	var main := 100000.0 * sqrt(7.0 / (rs * 293.15) * (pow(0.9, 2.0 / 1.4) - pow(0.9, 2.4 / 1.4)))
+	_resultat(absf(e.x / manuel - 1.0) < 0.003 and absf(e.y / f_manuel - 1.0) < 0.003 and absf(e2.x / main - 1.0) < 1e-6,
+		"Vie à bord : débit et poussée d'un trou",
+		"1 m² (utile) à 101,3 kPa vers le vide : %.1f kg/s (manuels : %.1f), poussée %.0f kN (%.0f) ; vers 90 kPa : %.2f kg/s (%.2f)." % [
+		e.x, manuel, e.y / 1000.0, f_manuel / 1000.0, e2.x, main])
+
+	# 2. cabine fermée dans le vide : 10 minutes sans rien changer (ni pression ni mouvement)
+	var v = _nouveau(false)
+	v.vx = 10.0
+	for i in 600:
+		v.pas(1.0)
+	var vie = v.vie
+	_resultat(vie != null and absf(vie.pression_cabine() - 101325.0) < 0.01 and absf(vie.ppo2_cabine() - 21200.0) < 2.0 and absf(v.vx - 10.0) < 1e-9
+		and absf(v.vy) < 1e-12 and v.omega.length() < 1e-12 and vie.force == Vector3.ZERO,
+		"Vie à bord : cabine fermée dans le vide",
+		"10 min : cabine %.3f kPa, oxygène %.2f kPa (le régulateur remplace ce que le pilote respire), vitesse inchangée %s m/s, rotation %s." % [
+		vie.pression_cabine() / 1000.0, vie.ppo2_cabine() / 1000.0, v.vx, v.omega])
+
+	# 3. un trou de 5 cm² sur le côté droit de la verrière : le régulateur garde la pression (0,073 kg/s < 0,1),
+	#    l'air qui sort pousse le vaisseau vers la gauche avec F = 1,268·p·A·0,61 ; quantité de mouvement exacte
+	v = _nouveau(false)
+	vie = v.vie
+	var trou := {"nom": "essai", "surface": 0.0005, "centre": Vector3(0.6, 0.7, -0.3), "normale": Vector3.RIGHT}
+	vie.comps[0]["trous"].append(trou)
+	var impulsion := Vector3.ZERO
+	for i in 1200:
+		v.pas(1.0 / 120.0)
+		impulsion += Basis(v.orientation) * vie.force / 120.0
+	var f_th := 2.4 * 0.528282 * 101325.0 * 0.61 * 0.0005
+	var dv := Vector3(v.vx, v.vy, v.vz).length()
+	var tourne: bool = v.omega.length() > 1e-5
+	_resultat(absf(vie.force.length() / f_th - 1.0) < 0.003 and absf(dv * v.masse / impulsion.length() - 1.0) < 0.001 and v.vx < 0.0
+		and absf(vie.pression_cabine() - 101325.0) < 1.0 and tourne and absf(dv - f_th * 10.0 / v.masse) < 0.002 * dv,
+		"Vie à bord : une fuite pousse le vaisseau",
+		"Trou de 5 cm² : %.3f kg/s d'air perdus (le régulateur compense : cabine %.1f kPa), jet de %.2f N (calcul à la main %.2f N). Après 10 s : %.4f m/s vers la gauche (attendu %.4f), le vaisseau s'est mis à tourner (%.4f°/s) : le trou n'est pas en face du centre de gravité." % [
+		vie.debit_fuite, vie.pression_cabine() / 1000.0, vie.force.length(), f_th, dv, f_th * 10.0 / v.masse, rad_to_deg(v.omega.length())])
+
+	# 4. la verrière cède (rendue fragile pour l'essai) : la cabine se vide en quelques centièmes de seconde ;
+	#    poussée totale = air perdu × 537 m/s (vitesse du son dans le jet + pression au trou : (γ+1)/γ × √(γ·R·T*))
+	v = _nouveau(false)
+	vie = v.vie
+	for w in vie.comps[0]["parois"]:
+		if String(w["nom"]) == "verrière":
+			w["p_rupture"] = 50000.0
+	var m_air: float = float(vie.comps[0]["m_o2"]) + float(vie.comps[0]["m_n2"])
+	var t_vide := -1.0
+	impulsion = Vector3.ZERO
+	var message := ""
+	for i in 60:
+		v.pas(1.0 / 120.0)
+		impulsion += Basis(v.orientation) * vie.force / 120.0
+		if not vie.evenements.is_empty():
+			message = String(vie.evenements[0])
+		if t_vide < 0.0 and vie.pression_cabine() < 1000.0:
+			t_vide = (i + 1) / 120.0
+	var t_etoile := 293.15 * 2.0 / 2.4
+	var u_eff := sqrt(1.4 * VieABord.R / VieABord.M_AIR * t_etoile) * 2.4 / 1.4
+	var regul := VieABord.DEBIT_REGULATEUR * 0.5
+	var attendu := m_air * u_eff
+	_resultat(t_vide > 0.0 and t_vide < 0.05 and message.begins_with("VERRIÈRE A CÉDÉ") and v.vy < 0.0 and impulsion.y < 0.0
+		and absf(impulsion.length() - attendu) < 0.02 * attendu + regul * u_eff,
+		"Vie à bord : la verrière cède dans le vide",
+		"« %s ». Cabine vide (sous 1 kPa) en %.3f s. L'air (%.2f kg) part vers le haut et pousse le vaisseau vers le bas : %.0f N·s (attendu %.0f, air × %.0f m/s), soit %.3f m/s." % [
+		message, t_vide, m_air, impulsion.length(), attendu, u_eff, -v.vy])
+
+	# 5. la vanne de la cabine (F4) : régulateur coupé, l'air sort sans pousser ; demi-pression en τ·ln 2
+	#    (τ = air / débit) ; sous 10,6 kPa d'oxygène le temps de conscience s'écoule ; refermée, le régulateur
+	#    remplit la cabine à 0,1 kg/s
+	v = _nouveau(false)
+	vie = v.vie
+	vie.ouvrir_vanne(true)
+	m_air = float(vie.comps[0]["m_o2"]) + float(vie.comps[0]["m_n2"])
+	var debit0: float = VieABord.ecoulement(VieABord.CD * VieABord.SURFACE_VANNE, 101325.0, VieABord.T_CABINE, VieABord.M_AIR, 0.0).x
+	var tau := m_air / debit0
+	var p_demi := 0.0
+	var t_hypoxie := -1.0
+	var conscience_min := INF
+	var pousse := false
+	for i in int(120.0 * 120.0):
+		v.pas(1.0 / 120.0)
+		var t := (i + 1) / 120.0
+		if absf(t - tau * log(2.0)) < 0.5 / 120.0:
+			p_demi = vie.pression_cabine()
+		if t_hypoxie < 0.0 and vie.temps_conscience < INF:
+			t_hypoxie = t
+		conscience_min = minf(conscience_min, vie.temps_conscience)
+		pousse = pousse or vie.force != Vector3.ZERO
+	var p_fin: float = vie.pression_cabine()
+	var reserve_avant: float = vie.reserve_o2 + vie.reserve_n2
+	vie.ouvrir_vanne(false)
+	var t_rempli := -1.0
+	for i in int(120.0 * 120.0):
+		v.pas(1.0 / 120.0)
+		if vie.pression_cabine() > 0.99 * 101325.0:
+			t_rempli = (i + 1) / 120.0
+			break
+	_resultat(absf(p_demi / 50662.5 - 1.0) < 0.02 and t_hypoxie > 0.0 and p_fin < 2000.0 and not pousse and conscience_min < 30.0
+		and t_rempli > 0.0 and absf(t_rempli - m_air / VieABord.DEBIT_REGULATEUR) < 3.0 and absf(reserve_avant - (vie.reserve_o2 + vie.reserve_n2) - m_air) < 0.05,
+		"Vie à bord : vanne de la cabine et hypoxie",
+		"Vanne ouverte (20 cm²) : demi-pression %.1f kPa à %.1f s (attendu 50,7 kPa à τ·ln 2), sans pousser le vaisseau ; hypoxie à %.0f s, plus que %.0f s de conscience ; 2 min : %.2f kPa. Refermée : cabine remplie en %.0f s (%.1f kg à 0,1 kg/s)." % [
+		p_demi / 1000.0, tau * log(2.0), t_hypoxie, conscience_min, p_fin / 1000.0, t_rempli, m_air])
+
+	# 6. un jour (temps accéléré, pas de 60 s) : le pilote respire 0,84 kg d'oxygène, le recycleur en rend 90 %
+	v = _nouveau(false)
+	vie = v.vie
+	var o2_avant: float = vie.reserve_o2
+	for i in 1440:
+		v.pas(60.0)
+	var avec: float = o2_avant - vie.reserve_o2
+	vie.remettre()
+	vie.recycleur = false
+	for i in 1440:
+		v.pas(60.0)
+	var sans: float = o2_avant - vie.reserve_o2
+	_resultat(absf(avec - 0.084) < 0.002 and absf(sans - 0.84) < 0.005 and absf(vie.ppo2_cabine() - 21200.0) < 50.0,
+		"Vie à bord : oxygène respiré en un jour",
+		"Réserve d'oxygène : %.3f kg pris avec le recycleur (attendu 0,084), %.3f kg sans (0,84) ; oxygène de la cabine %.2f kPa." % [avec, sans, vie.ppo2_cabine() / 1000.0])
+
+	# 7. en montant dans l'air : une paroi trop faible (40 kPa) tient au sol et casse quand le dehors descend
+	#    sous 61 kPa (vers 4 km sur Terre) ; le reste du vaisseau et la cabine fermée ne bougent pas au sol
+	v = _nouveau(true)
+	v.atmosphere = Atmosphere.new(R, 0.0)
+	vie = v.vie
+	vie.comps[0]["parois"][0]["p_rupture"] = 40000.0
+	vie.pas(0.01, 101325.0, 288.0)
+	var tient_sol: bool = vie.evenements.is_empty()
+	vie.pas(0.01, 70000.0, 280.0)
+	var tient_70: bool = vie.evenements.is_empty()
+	vie.pas(0.01, 60000.0, 275.0)
+	var casse_60: bool = vie.evenements.size() == 1
+	_resultat(tient_sol and tient_70 and casse_60 and vie.surface_trous_cabine() > 7.0,
+		"Vie à bord : une paroi faible cède en montant",
+		"Verrière rendue faible (40 kPa) : tient au sol (%s) et à 70 kPa dehors (%s), cède à 60 kPa (%s) : trou de %.2f m²." % [
+		tient_sol, tient_70, casse_60, vie.surface_trous_cabine()])
