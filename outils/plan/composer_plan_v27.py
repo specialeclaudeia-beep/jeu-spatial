@@ -121,6 +121,32 @@ def r(v, n=7):
 
 AVANT, HAUT, BAS, GAUCHE, DROITE = (0, 0, -1), (0, 1, 0), (0, -1, 0), (-1, 0, 0), (1, 0, 0)
 
+# LA VIE À BORD (atelier, étape 8 : scripts/physique/vie_a_bord.gd). Volume d'air et rayons des parois mesurés sur
+# le modèle 3D du cockpit par outils/plan/cabine_cockpit_v27.py. Les parois qui tiennent la pression : la vitre
+# intérieure de la verrière (la vitre extérieure, « Verriere », protège du froid et des chocs ; l'air entre les deux
+# communique avec le dehors), la baignoire du cockpit (plancher, flancs, tableau de bord) et le cadre de la
+# verrière. « normale » : vers où part l'air si la paroi casse (la verrière s'envole vers le haut ; la baignoire
+# est dans le fuselage : l'air s'y répand de tous les côtés, il ne pousse pas le vaisseau). « dessins » : les pièces
+# qui dessinent la même paroi vue du dehors (l'atelier les colore avec elle). Réserves dans le
+# système de survie (Masse_survie, 250 kg : air, eau, refroidissement) : 20 kg d'oxygène, 30 kg d'azote.
+VIE = {
+    "pression_kpa": 101.325,
+    "recycleur": True,
+    "cabine": {
+        "nom": "cabine du pilote", "volume_m3": 3.6,
+        "parois": [
+            {"piece": "Cockpit_verriere", "nom": "verrière", "rayon_m": 0.731, "normale": [0.0, 1.0, 0.0],
+             "surface_m2": 7.053, "centre": [0.0, 0.730663, -0.32763], "dessins": ["Verriere"]},
+            {"piece": "Cockpit_interieur", "nom": "baignoire du cockpit", "rayon_m": 0.952, "normale": [0.0, 0.0, 0.0],
+             "surface_m2": 26.3268, "centre": [0.0, -0.165991, -0.392151]},
+            {"piece": "Cockpit_cadre", "nom": "cadre de la verrière", "rayon_m": 0.825, "normale": [0.0, 1.0, 0.0],
+             "surface_m2": 1.9948, "centre": [0.0, 0.73473, -0.256098], "dessins": ["Verriere_cadre"]},
+        ],
+    },
+    "survie": {"piece": "Masse_survie", "oxygene_kg": 20.0, "azote_kg": 30.0},
+    "soutes": [],
+}
+
 
 def plan():
     masses = json.load(open(MASSES, encoding="utf-8"))["pieces"]
@@ -273,6 +299,7 @@ def plan():
                              "surface_dessus_m2": 12.68},
                 "nez": {"point": [0.0, 0.0, -1.46], "section_max_m2": 2.8},
                 "train": {"point": [0.0, -1.3, -1.0], "surface_m2": 0.9}},
+        "vie": VIE,
         "pieces": pieces,
     }
 

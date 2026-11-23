@@ -8,6 +8,7 @@ extends Node3D
 ## la planète qu'on place autour de lui. Les grandes distances restent ainsi précises.
 
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
+const VieABord = preload("res://scripts/physique/vie_a_bord.gd")
 const Commandes = preload("res://scripts/commandes.gd")
 const EcranTouches = preload("res://scripts/ecran_touches.gd")
 const LumiereJeu = preload("res://scripts/lumiere_jeu.gd")
@@ -747,7 +748,7 @@ func _ecrire_aide() -> void:
 		+ "%s : stabilisateur   %s : pause   Temps : %s %s %s %s %s %s, loin des astres %s %s, ou %s / %s\n" % [c.resume("stabilisateur"), c.resume("pause"), c.resume("temps_x1"), c.resume("temps_x10"), c.resume("temps_x100"), c.resume("temps_x1000"), c.resume("temps_x10000"), c.resume("temps_x100000"), c.resume("temps_x1000000"), c.resume("temps_x10000000"), c.resume("temps_moins"), c.resume("temps_plus")]
 		+ "Puissance des moteurs (relativité) : %s moins   %s plus\n" % [c.resume("poussee_moins"), c.resume("poussee_plus")]
 		+ "%s : remettre en orbite   %s : recommencer (%s)   %s : retour à l'atelier   %s : tests   %s : cacher l'aide\n" % [c.resume("remettre_orbite"), c.resume("recommencer"), "devant le hangar" if depart == Partie.DEPART_HANGAR else "en orbite", c.resume("atelier"), c.resume("tests"), c.resume("aide")]
-		+ "%s : ailes   %s : train d'atterrissage   %s : vol vertical   %s : vue cockpit / extérieure\n" % [c.resume("ailes"), c.resume("train"), c.resume("vol_vertical"), c.resume("vue")]
+		+ "%s : ailes   %s : train d'atterrissage   %s : vol vertical   %s : vue cockpit / extérieure   %s : vanne de la cabine (vider l'air)\n" % [c.resume("ailes"), c.resume("train"), c.resume("vol_vertical"), c.resume("vue"), c.resume("vanne_cabine")]
 		+ "Au sol : le lacet tourne aussi la roue avant   %s (maintenir) : freins des roues (frein de parc automatique à l'arrêt, gaz à zéro)\n" % c.resume("frein")
 		+ "Tourner la tête (ou la caméra) : %s   %s : regarder droit devant   %s (maintenir) : zoom\n" % [_aide_tete(), c.resume("regard_centre"), c.resume("zoom")]
 		+ "%s : projecteur   %s : casque et visière   %s : tête qui bouge avec les G\n" % [c.resume("phares"), c.resume("visiere"), c.resume("tete_g")]
@@ -820,6 +821,7 @@ func _lire_boutons() -> void:
 	if _appui("ailes"): vaisseau.ouvrir_ailes(vaisseau.ailes_consigne < 0.5)
 	if _appui("train"): vaisseau.sortir_train(vaisseau.train_consigne < 0.5)
 	if _appui("vol_vertical"): vaisseau.passer_vol_vertical(vaisseau.vertical_consigne < 0.5)
+	if _appui("vanne_cabine") and vaisseau.vie != null: vaisseau.vie.ouvrir_vanne(not vaisseau.vie.vanne_ouverte)
 	if _appui("vue"):
 		vue_interieure = not vue_interieure
 		_appliquer_vue()
@@ -1287,7 +1289,19 @@ func _infos_cockpit() -> Dictionary:
 		"vertical": vaisseau.vertical, "vertical_txt": _etat(vaisseau.vertical, vaisseau.vertical_consigne, "ACTIF", "arrêt"),
 		"stabilisateur": stabilisateur, "temps": acc_effectif, "pause": en_pause, "vue_interieure": vue_interieure,
 		"orbite": vaisseau.orbite(), "au_sol": vaisseau.au_sol, "ecrase": vaisseau.ecrase, "astres": astres,
+		"cabine": _infos_cabine(),
 	}
+
+
+## Étape 8 : ce que l'écran SYSTÈME montre de la cabine (vide : pas de cabine).
+func _infos_cabine() -> Dictionary:
+	var vie = vaisseau.vie
+	if vie == null:
+		return {}
+	return {"pression": vie.pression_cabine(), "consigne": vie.consigne, "ppo2": vie.ppo2_cabine(), "fuite": vie.fuite(),
+		"trou": vie.surface_trous_cabine(), "vanne": vie.vanne_ouverte, "conscience": vie.temps_conscience,
+		"reserve": (vie.reserve_o2 + vie.reserve_n2) / maxf(float(vie.analyse["survie"]["oxygene_kg"]) + float(vie.analyse["survie"]["azote_kg"]), 1e-9)
+			if vie.a_survie else 0.0}
 
 
 func _placer_planete() -> void:
@@ -1493,6 +1507,7 @@ func _mettre_a_jour_hud() -> void:
 	lignes.append("ALTITUDE      %s" % _distance(vaisseau.altitude()))
 	lignes.append("ORBITE        %s" % orbite_txt)
 	lignes.append(_ligne_air())
+	lignes.append(_ligne_cabine())
 	lignes.append("RESSENTI      %.2f g" % (vaisseau.acceleration_ressentie.length() / VaisseauPhysique.G0))
 	lignes.append("GAZ           %s %3d %%" % [_barre(gaz), int(round(gaz * 100.0))])
 	# moteurs : ceux du plan, quels qu'ils soient (l'atelier peut en enlever ou en ajouter)
@@ -1532,14 +1547,74 @@ func _mettre_a_jour_hud() -> void:
 
 
 func _mettre_a_jour_message() -> void:
+	var cabine := _alarme_cabine()
 	if vaisseau.avale:
 		message.text = "TOMBÉ DANS LE TROU NOIR\n(l'horizon est franchi : rien n'en ressort, pas même la lumière)\nR pour recommencer"
 	elif vaisseau.ecrase:
 		message.text = "ÉCRASÉ (impact à %.0f m/s)\nR pour recommencer" % vaisseau.vitesse_impact
 	elif vaisseau.au_sol:
-		message.text = "Posé (impact à %.1f m/s)" % vaisseau.vitesse_impact if vaisseau.vitesse_impact >= 0.05 else "Posé"
+		message.text = ("Posé (impact à %.1f m/s)" % vaisseau.vitesse_impact if vaisseau.vitesse_impact >= 0.05 else "Posé") \
+			+ ("\n" + cabine if cabine != "" else "")
 	else:
-		message.text = ""
+		message.text = cabine
+
+
+## Atelier, étape 8 : la cabine (scripts/physique/vie_a_bord.gd). Une paroi qui cède reste écrite 8 s.
+var _alerte_cabine := ""
+var _alerte_cabine_fin := 0
+
+
+func _alarme_cabine() -> String:
+	var vie = vaisseau.vie
+	if vie == null:
+		return ""
+	for e in vie.evenements:
+		_alerte_cabine = String(e)
+		_alerte_cabine_fin = Time.get_ticks_msec() + 8000
+	vie.evenements.clear()
+	var lignes := PackedStringArray()
+	if _alerte_cabine != "" and Time.get_ticks_msec() < _alerte_cabine_fin:
+		lignes.append(_alerte_cabine)
+	var p: float = vie.pression_cabine()
+	if vie.inconscient():
+		lignes.append("PILOTE INCONSCIENT : PAS ASSEZ D'OXYGÈNE")
+	elif vie.temps_conscience < INF:
+		lignes.append("HYPOXIE : perte de connaissance dans %d s" % ceili(vie.temps_conscience))
+	if p < VieABord.LIMITE_ARMSTRONG:
+		lignes.append("CABINE VIDE (%s) : l'eau du corps bout" % _pression_txt(p))
+	elif vie.fuite():
+		lignes.append("FUITE DE LA CABINE : %s ouverts, cabine à %s" % [_surface_trou(vie.surface_trous_cabine()), _pression_txt(p)])
+	if vie.vanne_ouverte:
+		lignes.append("VANNE DE LA CABINE OUVERTE (%s pour la fermer)" % commandes.resume("vanne_cabine"))
+	return "\n".join(lignes)
+
+
+static func _surface_trou(s: float) -> String:
+	return ("%s cm²" % _nombre(s * 1.0e4, 1 if s < 1.0e-3 else 0)) if s < 0.1 else ("%s m²" % _nombre(s, 2))
+
+
+## La ligne CABINE du tableau : pression, oxygène, réserves, fuite, vanne, pilote.
+func _ligne_cabine() -> String:
+	var vie = vaisseau.vie
+	if vie == null:
+		return "CABINE        aucune (pas de cabine sous pression)"
+	var txt := "CABINE        %s (consigne %s)   oxygène %s   réserves %s kg d'oxygène + %s kg d'azote%s" % [_pression_txt(vie.pression_cabine()),
+		_pression_txt(vie.consigne), _pression_txt(vie.ppo2_cabine()), _nombre(vie.reserve_o2, 1), _nombre(vie.reserve_n2, 1),
+		("   recycleur en marche" if vie.recycleur else "   recycleur arrêté") if vie.a_survie else "   pas de système de survie"]
+	var suite := PackedStringArray()
+	if vie.fuite():
+		suite.append("FUITE %s (%s kg/s)" % [_surface_trou(vie.surface_trous_cabine()), _petit(vie.debit_fuite)])
+	if vie.vanne_ouverte:
+		suite.append("VANNE OUVERTE")
+	if vie.autonomie() < INF:
+		suite.append("réserves vides dans %s" % _duree_courte(vie.autonomie()))
+	if vie.temps_conscience < INF:
+		suite.append("pilote : conscience %d s" % ceili(vie.temps_conscience))
+	if vie.force.length() > 0.01:
+		suite.append("l'air qui s'échappe pousse le vaisseau de %s" % _force_txt(vie.force.length()))
+	if not suite.is_empty():
+		txt += "\n              " + "   ".join(suite)
+	return txt
 
 
 ## Einstein A3 : dans quel système d'étoile on est, l'étoile la plus proche, l'heure de la maison.

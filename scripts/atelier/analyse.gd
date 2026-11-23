@@ -14,12 +14,15 @@ extends RefCounted
 ## par moteur et par axe, défauts de symétrie gauche-droite, et les chiffres de la salle à part.
 ## Étape 6 : l'ARMATURE (poutres, connecteurs, panneaux) a sa catégorie, ses fiches (forme d'un connecteur,
 ## longueur d'une poutre, surface d'un panneau…) et sa part dans la tuile MASSE.
+## Étape 8 : la CABINE (tuile CABINE et sa page) : pression, air, réserves, recycleur, solidité de chaque
+## paroi sous pression, volumes fermés de l'armature, fuites (scripts/physique/vie_a_bord.gd).
 
 const Catalogue = preload("res://scripts/atelier/catalogue.gd")
 const Pieces = preload("res://scripts/atelier/pieces_toutes_faites.gd")
 const Armature = preload("res://scripts/atelier/armature.gd")
 const Plan = preload("res://scripts/atelier/plan.gd")
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
+const VieABord = preload("res://scripts/physique/vie_a_bord.gd")
 
 const G_SOL := 9.81   # m/s², gravité au sol de la planète du jeu (jeu.gd : GRAVITE_SURFACE)
 
@@ -70,6 +73,7 @@ var _moteur_par_id := {}
 var ajouts := {}    # id d'une pièce posée dans l'atelier → son ensemble dans le plan (modèle, réglages…)
 var armature := {}  # les éléments de l'armature parmi eux (connecteurs, poutres, panneaux)
 var _symetrie = null # défauts de symétrie (calculés une fois, à la demande)
+var _vie := {}       # la cabine (étape 8), calculée une fois
 
 
 func _init(p_plan = null) -> void:
@@ -1279,3 +1283,221 @@ static func _direction_txt(a) -> String:
 		if d.dot(n[0]) > 0.999:
 			return n[1]
 	return vecteur_txt(d)
+
+
+# =====================================================================
+# ÉTAPE 8 : LA CABINE (parois sous pression, air, oxygène, fuites)
+# =====================================================================
+const VERT_MARGE := Color(0.3, 0.85, 0.5)
+const ORANGE_MARGE := Color(1.0, 0.7, 0.25)
+const ROUGE_MARGE := Color(1.0, 0.36, 0.32)
+
+
+## L'analyse de la vie à bord (même calcul que le jeu : scripts/physique/vie_a_bord.gd).
+func vie() -> Dictionary:
+	if _vie.is_empty():
+		_vie = v.vie.analyse if v.vie != null else VieABord.analyser(plan)
+	return _vie
+
+
+## Couleur d'une marge (pression qui casse / pression de la cabine) : vert ≥ ×2, orange de ×1 à ×2, rouge < ×1.
+static func couleur_marge(m: float) -> Color:
+	return VERT_MARGE if m >= VieABord.MARGE_SURE else (ORANGE_MARGE if m >= 1.0 else ROUGE_MARGE)
+
+
+static func marge_txt(m: float) -> String:
+	if m == INF:
+		return "—"
+	return "×%s" % (nombre(m, 1) if m < 100.0 else nombre(m))
+
+
+static func duree_txt(s: float) -> String:
+	if s == INF:
+		return "toujours"
+	if s < 1.0:
+		return "%s s" % nombre(s, 2 if s < 0.1 else 1)
+	if s < 90.0:
+		return "%s s" % nombre(s)
+	if s < 5400.0:
+		return "%s min" % nombre(s / 60.0)
+	if s < 172800.0:
+		return "%s h" % nombre(s / 3600.0, 1 if s < 36000.0 else 0)
+	return "%s jours" % nombre(s / 86400.0)
+
+
+static func kpa_txt(p: float) -> String:
+	return "%s kPa" % nombre(p / 1000.0, 1 if p < 1.0e6 else 0)
+
+
+static func surface_trou_txt(s: float) -> String:
+	return ("%s cm²" % nombre(s * 1.0e4, 1 if s < 1.0e-3 else 0)) if s < 0.1 else ("%s m²" % nombre(s, 2))
+
+
+## Les chiffres de la cabine : {a_cabine, consigne, volume, masse_air, masse_o2, reserve_o2, reserve_n2,
+## remplissages, recycleur, jours_o2, jours_o2_sans, pire_marge, pire_paroi, surface_trous, trous,
+## fuite (texte), compense, temps_vide, temps_armstrong, temps_reserve, survie}
+func bilan_cabine() -> Dictionary:
+	var a := vie()
+	var b := {"a_cabine": bool(a["a_cabine"]), "consigne": float(a["consigne"]), "pire_marge": float(a["pire_marge"]),
+		"pire_paroi": int(a["pire_paroi"]), "survie": bool(a["survie"]["present"]), "recycleur": bool(a["survie"]["recycleur"]),
+		"reserve_o2": float(a["survie"]["oxygene_kg"]), "reserve_n2": float(a["survie"]["azote_kg"]), "trous": [], "surface_trous": 0.0}
+	if not b["a_cabine"]:
+		return b
+	var cab: Dictionary = a["compartiments"][0]
+	var vol := float(cab["volume_m3"])
+	var p := float(b["consigne"])
+	var m: Array = VieABord.masses_air(p, vol)
+	b["volume"] = vol
+	b["masse_o2"] = float(m[0])
+	b["masse_air"] = float(m[0]) + float(m[1])
+	b["remplissages"] = (float(b["reserve_o2"]) + float(b["reserve_n2"])) / maxf(float(b["masse_air"]), 1e-9)
+	var conso := VieABord.CONSOMMATION_O2
+	b["jours_o2"] = float(b["reserve_o2"]) / (conso * ((1.0 - VieABord.PART_RECYCLEE) if b["recycleur"] else 1.0)) / 86400.0
+	b["jours_o2_sans"] = float(b["reserve_o2"]) / conso / 86400.0
+	var s_trous := 0.0
+	for t in cab["trous"]:
+		s_trous += float(t["surface"])
+		b["trous"].append(t)
+	b["surface_trous"] = s_trous
+	b["compense"] = false
+	b["temps_vide"] = INF
+	b["temps_armstrong"] = INF
+	b["temps_reserve"] = INF
+	if s_trous > 0.0:
+		# débit à la pression de la cabine, dans le vide (jet à la vitesse du son : débit proportionnel à la pression)
+		var x_o2 := float(m[0]) / maxf(float(b["masse_air"]), 1e-9)
+		var m_mol := 1.0 / (x_o2 / VieABord.M_O2 + (1.0 - x_o2) / VieABord.M_N2)
+		var debit: float = VieABord.ecoulement(VieABord.CD * s_trous, p, VieABord.T_CABINE, m_mol, 0.0).x
+		var apport := VieABord.DEBIT_REGULATEUR if b["survie"] else 0.0
+		var reserve := float(b["reserve_o2"]) + float(b["reserve_n2"])
+		if apport >= debit and reserve > 0.0:
+			b["compense"] = true
+			b["temps_reserve"] = reserve / debit
+		else:
+			var tau := float(b["masse_air"]) / debit
+			b["temps_vide"] = tau * log(p / 100.0)               # jusqu'à 0,1 kPa
+			b["temps_armstrong"] = tau * log(p / VieABord.LIMITE_ARMSTRONG) if p > VieABord.LIMITE_ARMSTRONG else 0.0
+		b["debit_fuite"] = debit
+	return b
+
+
+## La tuile CABINE du tableau ingénieur : [titre, valeur, détail, couleur].
+func tuile_cabine() -> Array:
+	var b := bilan_cabine()
+	if not b["a_cabine"]:
+		return ["CABINE", "aucune", "pas de cabine sous pression : le pilote respire l'air du dehors", Color.WHITE]
+	var pm := float(b["pire_marge"])
+	var couleur := couleur_marge(pm) if pm < VieABord.MARGE_SURE else Color.WHITE
+	var detail := "%s m³ d'air · parois %s · oxygène %s" % [nombre(float(b["volume"]), 1), marge_txt(pm),
+		duree_txt(float(b["jours_o2"]) * 86400.0) if b["survie"] else "pas renouvelé"]
+	if float(b["surface_trous"]) > 0.0:
+		detail = "FUITE : %s ouverts · %s" % [surface_trou_txt(float(b["surface_trous"])),
+			"le régulateur compense" if b["compense"] else "vide en " + duree_txt(float(b["temps_vide"]))]
+		couleur = ORANGE_MARGE if b["compense"] else ROUGE_MARGE
+	return ["CABINE", kpa_txt(float(b["consigne"])), detail, couleur]
+
+
+## La page CABINE (clic sur la tuile).
+func fiche_cabine() -> Dictionary:
+	var a := vie()
+	var b := bilan_cabine()
+	if not b["a_cabine"]:
+		return {"titre": "Cabine et vie à bord", "sous_titre": "analyse ingénieur · même calcul que le jeu", "lignes": [
+			["Cabine", "aucune : ce vaisseau n'a pas de cabine sous pression"]], "sections": [],
+			"note": "La cabine du chasseur est son cockpit. Un volume fermé construit avec les panneaux de l'armature peut aussi être pressurisé."}
+	var p := float(b["consigne"])
+	var lignes := []
+	lignes.append(["Pression de la cabine", "%s, dont %s d'oxygène (comme au niveau de la mer : 101,3 kPa)" % [kpa_txt(p),
+		kpa_txt(minf(VieABord.PPO2_CIBLE, p))]])
+	lignes.append(["Air de la cabine", "%s m³ · %s (dont %s d'oxygène)" % [nombre(float(b["volume"]), 1), masse_txt(float(b["masse_air"])),
+		masse_txt(float(b["masse_o2"]))]])
+	var pire := int(b["pire_paroi"])
+	if pire >= 0:
+		var w: Dictionary = a["parois"][pire]
+		lignes.append(["Paroi la plus faible", "%s : casse à %s, marge %s (sûr à partir de ×2)" % [String(w["nom"]),
+			kpa_txt(float(w["p_rupture_pa"])), marge_txt(float(w["marge"]))]])
+	if b["survie"]:
+		lignes.append(["Réserves", "%s d'oxygène, %s d'azote : de quoi remplir la cabine %s fois" % [masse_txt(float(b["reserve_o2"])),
+			masse_txt(float(b["reserve_n2"])), nombre(float(b["remplissages"]))]])
+		lignes.append(["Recycleur", ("en marche : l'oxygène dure %s (%s sans lui)" if b["recycleur"] else "arrêté : l'oxygène dure %s (%s avec lui)") % [
+			duree_txt(float(b["jours_o2"]) * 86400.0), duree_txt((float(b["jours_o2_sans"]) if b["recycleur"] else float(b["reserve_o2"]) / (VieABord.CONSOMMATION_O2 * (1.0 - VieABord.PART_RECYCLEE)) / 86400.0) * 86400.0)]])
+	else:
+		lignes.append(["Système de survie", "enlevé : pas de régulateur ni de réserves, l'air de la cabine n'est pas renouvelé"])
+	if float(b["surface_trous"]) > 0.0:
+		lignes.append(["Fuites", ("%s ouverts : le régulateur compense (%s par seconde), réserves vides en %s" % [surface_trou_txt(float(b["surface_trous"])),
+			masse_txt(float(b["debit_fuite"])), duree_txt(float(b["temps_reserve"]))]) if b["compense"] else
+			("%s ouverts : la cabine se vide en %s (le pilote sous la limite d'Armstrong en %s)" % [surface_trou_txt(float(b["surface_trous"])),
+			duree_txt(float(b["temps_vide"])), duree_txt(float(b["temps_armstrong"]))])])
+	else:
+		lignes.append(["Fuites", "aucune : la cabine est fermée"])
+	var sections := []
+	for c in a["compartiments"]:
+		var liste := []
+		for i in c["parois"]:
+			var w2: Dictionary = a["parois"][i]
+			var l := {}
+			if not bool(w2["presente"]):
+				l = ligne_liste(_majuscule(String(w2["nom"])), "ENLEVÉE : trou de %s" % surface_trou_txt(float(w2["surface_m2"])), 1.0, {})
+				l["alerte"] = true
+				l["couleur"] = ROUGE_MARGE
+			elif not bool(w2["etanche"]):
+				l = ligne_liste(_majuscule(String(w2["nom"])), "laisse passer l'air (%s)" % _nom_matiere_cle(String(w2["matiere"])), 1.0, w2["element"])
+				l["alerte"] = true
+				l["couleur"] = ROUGE_MARGE
+			elif bool(c["pressurise"]):
+				var mg := float(w2["marge"])
+				l = ligne_liste(_majuscule(String(w2["nom"])), marge_txt(mg), clampf(1.0 / maxf(mg, 1e-9), 0.0, 1.0), w2["element"])
+				l["detail"] = "casse à %s · %s" % [kpa_txt(float(w2["p_rupture_pa"])), _forme_paroi(w2)]
+				l["alerte"] = mg < VieABord.MARGE_SURE
+				if mg < VieABord.MARGE_SURE:
+					l["couleur"] = couleur_marge(mg)
+			else:
+				l = ligne_liste(_majuscule(String(w2["nom"])), "pas sous pression", -1.0, w2["element"])
+				l["detail"] = _forme_paroi(w2)
+			liste.append(l)
+		var titre := "%s : %s m³ · %s" % [String(c["nom"]).to_upper(), nombre(float(c["volume_m3"]), 2),
+			("pressurisé" if bool(c["pressurise"]) else "pas pressurisé") if not bool(c["cabine"]) else "parois qui tiennent la pression (part de leur force utilisée)"]
+		sections.append({"titre": titre, "liste": liste})
+	if not (a["ouverts"] as Array).is_empty():
+		var liste2 := []
+		for o in a["ouverts"]:
+			var elts: Array = (o["panneaux"] as Array).map(func(id): return {"genre": "ajout", "id": String(id)})
+			var l2 := ligne_liste("%d panneau%s" % [(o["panneaux"] as Array).size(), "x" if (o["panneaux"] as Array).size() > 1 else ""],
+				"%d bord%s sans voisin" % [int(o["bords_ouverts"]), "s" if int(o["bords_ouverts"]) > 1 else ""], -1.0,
+				{"genre": "groupe", "elements": elts} if elts.size() > 1 else elts[0])
+			if bool(o["pressurise"]):
+				l2["couleur"] = ROUGE_MARGE
+			liste2.append(l2)
+		sections.append({"titre": "SURFACES DE L'ARMATURE PAS FERMÉES (pas de volume, pas de pression)", "liste": liste2})
+	return {"titre": "Cabine et vie à bord", "sous_titre": "analyse ingénieur · même calcul que le jeu", "lignes": lignes, "sections": sections,
+		"note": "Dans le vide, l'air de la cabine pousse chaque paroi vers le dehors (101 kPa : 10 tonnes par mètre carré). Une paroi courbe tient jusqu'à résistance × épaisseur ÷ rayon ; un panneau plat de l'armature se bombe entre ses poutres (formulaire de Roark). Marge = pression qui la casse ÷ pression de la cabine : au moins ×2 pour une cabine habitée (vert), orange de ×1 à ×2, rouge en dessous (elle casse dans le vide). « Parois » (en haut) les colore sur le vaisseau. Un volume fermé de l'armature (chaque bord de panneau touche un autre panneau) peut être pressurisé (rempli au départ à la pression de la cabine, puis fermé : le régulateur ne sert que la cabine) ; la céramique du bouclier thermique laisse passer l'air."}
+
+
+## « verre aluminosilicate feuilleté, 1,2 cm, courbe (rayon 73 cm) » ; « …, plat (comme un disque de 41 cm) ».
+static func _forme_paroi(w: Dictionary) -> String:
+	return "%s, %s, %s" % [_nom_matiere_cle(String(w["matiere"])), longueur_txt(float(w["epaisseur_m"])),
+		("courbe (rayon %s)" if String(w["genre"]) == "coque" else "plat (comme un disque de %s de rayon)") % longueur_txt(float(w["rayon_m"]))]
+
+
+static func _nom_matiere_cle(m: String) -> String:
+	return String(Catalogue.MATIERES[m]["nom"]) if Catalogue.MATIERES.has(m) else m
+
+
+## Couleur de chaque paroi sous pression (pour l'atelier) : {id de pièce ou de pièce posée: Color}.
+func couleurs_parois() -> Dictionary:
+	var a := vie()
+	var res := {}
+	for c in a["compartiments"]:
+		for i in c["parois"]:
+			var w: Dictionary = a["parois"][i]
+			if not bool(w["presente"]):
+				continue
+			var couleur := Color(0.6, 0.65, 0.72)
+			if not bool(w["etanche"]):
+				couleur = ROUGE_MARGE
+			elif bool(c["pressurise"]):
+				couleur = couleur_marge(float(w["marge"]))
+			res[String(w["element"]["id"])] = couleur
+			for d in w.get("dessins", []):
+				res[String(d)] = couleur
+	return res

@@ -5,7 +5,7 @@ extends RefCounted
 ##   Ecran_centre          : radar des astres proches (position autour du vaisseau, distance)
 ##   Ecran_gauche          : état du vaisseau (ailes, train, gaz, moteurs, stabilisateur)
 ##   Ecran_droit           : vol (vitesses totale / horizontale / verticale, altitude, G, rotation)
-##   Ecran_lateral_gauche  : temps (x1 à x1000, pause), vue
+##   Ecran_lateral_gauche  : système : temps (x1 à x1000, pause), cabine (pression, oxygène, fuite), vue
 ##   Ecran_lateral_droit   : orbite (périapside, apoapside, excentricité), sol
 
 const PIXELS_PAR_METRE := 1500.0
@@ -170,14 +170,32 @@ func _vol(c: Control) -> void:
 
 func _temps_ecran(c: Control) -> void:
 	var lignes := [
-		["TEMPS"],
-		["x%d" % infos["temps"], AMBRE if infos["temps"] > 1 else VERT],
-		[""],
+		["TEMPS x%d" % infos["temps"], AMBRE if infos["temps"] > 1 else VERT],
 		["PAUSE" if infos["pause"] else "", ROUGE],
-		[""],
-		["VUE"],
-		["cockpit" if infos["vue_interieure"] else "ext."],
 	]
+	# étape 8 : la cabine (pression, oxygène, et ce qui ne va pas)
+	var cab: Dictionary = infos.get("cabine", {})
+	if cab.is_empty():
+		lignes.append(["CABINE --", GRIS])
+		lignes.append([""])
+		lignes.append([""])
+	else:
+		var p: float = cab["pression"]
+		var ok_p := p >= 0.9 * float(cab["consigne"])
+		lignes.append(["CABINE %.0f kPa" % (p / 1000.0) if p >= 10000.0 else "CABINE %.1f kPa" % (p / 1000.0),
+			VERT if ok_p else (AMBRE if p > 0.5 * float(cab["consigne"]) else ROUGE)])
+		var o2: float = cab["ppo2"]
+		lignes.append(["O2 %.1f kPa" % (o2 / 1000.0), VERT if o2 >= 16000.0 else (AMBRE if o2 >= 10600.0 else ROUGE)])
+		if float(cab["conscience"]) < INF:
+			lignes.append(["HYPOXIE %d s" % ceili(float(cab["conscience"])), ROUGE])
+		elif bool(cab["fuite"]):
+			var t: float = cab["trou"]
+			lignes.append([("FUITE %.0f cm²" % (t * 1.0e4)) if t < 0.1 else ("FUITE %.1f m²" % t), ROUGE])
+		elif bool(cab["vanne"]):
+			lignes.append(["VANNE OUVERTE", AMBRE])
+		else:
+			lignes.append(["AIR %d %%" % roundi(100.0 * float(cab["reserve"])), VERT if float(cab["reserve"]) > 0.25 else AMBRE])
+	lignes.append(["VUE " + ("cockpit" if infos["vue_interieure"] else "ext.")])
 	_lignes(c, "SYSTÈME", lignes, 18)
 
 

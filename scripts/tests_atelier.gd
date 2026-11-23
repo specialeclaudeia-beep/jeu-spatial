@@ -39,6 +39,7 @@ const AtelierScript = preload("res://scripts/atelier/atelier.gd")
 const ControleVol = preload("res://scripts/atelier/controle_vol.gd")
 const Armature = preload("res://scripts/atelier/armature.gd")
 const Objets = preload("res://scripts/lumiere/objets.gd")
+const VieABord = preload("res://scripts/physique/vie_a_bord.gd")
 const SCENE_ACCUEIL := "res://scenes/accueil.tscn"
 const DOSSIER_ESSAI := "user://essais_atelier_etape3/"
 const SCENE_ATELIER := "res://scenes/atelier.tscn"
@@ -87,6 +88,7 @@ func _ready() -> void:
 	_tests_controle_vol()
 	_tests_armature()
 	_tests_pieces_mobiles()
+	_tests_vie_a_bord()
 	# l'écran de l'atelier s'ouvre sur le chasseur de départ, et ce que les tests enregistrent ne touche pas
 	# aux vaisseaux ni au dernier vaisseau ouvert du joueur
 	var partie_avant = Engine.get_meta("partie") if Engine.has_meta("partie") else null
@@ -98,6 +100,7 @@ func _ready() -> void:
 	await _tests_ecran_etape5()
 	await _tests_ecran_etape6()
 	await _tests_ecran_etape7()
+	await _tests_ecran_etape8()
 	if partie_avant != null:
 		Engine.set_meta("partie", partie_avant)
 	else:
@@ -1454,7 +1457,7 @@ func _tests_ecran_etape4() -> void:
 	_resultat(sous != "" and avec and sans, "Écran : Ctrl + clic dans la vue", "sous la souris : « %s » ; ajoutée : %s, retirée : %s" % [sous, avec, sans])
 	at.camera.vue("trois_quarts")
 	# 2. un clic sur une tuile ouvre sa page détaillée
-	var tuiles_ok: bool = at.tableau.get_child_count() == 9   # (étape 5 : 9e tuile, AVANT LE VOL)
+	var tuiles_ok: bool = at.tableau.get_child_count() == 10   # (étape 5 : AVANT LE VOL ; étape 8 : CABINE)
 	(at.tableau.get_child(7) as Control).gui_input.emit(_clic_gauche())
 	var page_sym: bool = at.selection == {"genre": "analyse", "id": "symetrie"} and at.fiche.visible and at.fiche_titre.text == "Symétrie gauche-droite"
 	var manche_orange: bool = not at.maillages.has("Manche_piece") or (at.maillages["Manche_piece"][0] as MeshInstance3D).material_overlay == at._materiau_surligne
@@ -2210,11 +2213,11 @@ func _tests_ecran_etape5() -> void:
 	add_child(at)
 	await _attendre_atelier()
 	at.case_symetrie.button_pressed = false
-	# 1. la 9e tuile : AVANT LE VOL, « prêt » pour le chasseur de départ ; un clic ouvre la page du contrôle
-	var tuile: Control = at.tableau.get_child(8)
+	# 1. la dernière tuile (10e depuis l'étape 8) : AVANT LE VOL, « prêt » pour le chasseur de départ ; un clic ouvre la page du contrôle
+	var tuile: Control = at.tableau.get_child(9)
 	var textes: Array = tuile.find_children("*", "Label", true, false).map(func(l): return (l as Label).text)
 	tuile.gui_input.emit(_clic_gauche())
-	var ok: bool = at.tableau.get_child_count() == 9 and textes[0] == "AVANT LE VOL" and textes[1] == "prêt" and at.fiche_titre.text == "Contrôle avant le vol" \
+	var ok: bool = at.tableau.get_child_count() == 10 and textes[0] == "AVANT LE VOL" and textes[1] == "prêt" and at.fiche_titre.text == "Contrôle avant le vol" \
 		and at.fiche_sections.get_child_count() > 8
 	_resultat(ok, "Écran (étape 5) : la tuile AVANT LE VOL", "« %s » ; un clic ouvre « %s » (%d lignes)" % [" / ".join(textes), at.fiche_titre.text, at.fiche_sections.get_child_count()])
 	# 2. une boîte posée (à la souris) sur le nez, devant la verrière : la tuile avertit, « Lancer » ouvre la
@@ -2226,7 +2229,7 @@ func _tests_ecran_etape5() -> void:
 	at.valider_pose()
 	await _attendre_atelier()
 	await _attendre_atelier()
-	textes = (at.tableau.get_child(8) as Control).find_children("*", "Label", true, false).map(func(l): return (l as Label).text)
+	textes = (at.tableau.get_child(9) as Control).find_children("*", "Label", true, false).map(func(l): return (l as Label).text)
 	at.deselectionner()
 	var lance: bool = await at.lancer_jeu()
 	var fenetre: Control = at.fenetre_controle
@@ -2258,7 +2261,7 @@ func _tests_ecran_etape5() -> void:
 	await _attendre_atelier()
 	lance = await at.lancer_jeu()
 	boutons = _boutons(at.fenetre_controle) if at.fenetre_controle != null else []
-	textes = (at.tableau.get_child(8) as Control).find_children("*", "Label", true, false).map(func(l): return (l as Label).text)
+	textes = (at.tableau.get_child(9) as Control).find_children("*", "Label", true, false).map(func(l): return (l as Label).text)
 	ok = not lance and at.nb_flottantes == 1 and at.fenetre_controle != null and not boutons.has("▶  Lancer quand même") and textes[1] == "BLOQUÉ" and at.avis.visible
 	_resultat(ok, "Écran (étape 5) : Lancer refusé (pièce qui flotte)", "tuile « %s » ; fenêtre : %s" % [textes[1], boutons])
 	# Échap ferme la fenêtre
@@ -2570,5 +2573,227 @@ func _tests_ecran_etape7() -> void:
 	await _attendre_atelier()
 	ok = page == "Pièces mobiles" and at.vaisseau_pose.ailes == 0.0 and at.commandes_essai.is_empty()
 	_resultat(ok, "Écran (étape 7) : la page, et retour à la pose du hangar", "page « %s » ; ailes %s" % [page, Analyse.nombre(at.vaisseau_pose.ailes, 1)])
+	at.queue_free()
+	await get_tree().process_frame
+
+
+
+# =====================================================================
+# ÉTAPE 8 : LA VIE À BORD (parois sous pression, air, oxygène, fuites)
+# =====================================================================
+## Un cube d'armature (12 poutres, 6 panneaux) de côté « cote », coin en bas à gauche devant : les panneaux.
+static func _cube(ed, coin: Vector3, cote: float, reglages: Dictionary) -> Array:
+	var ids := {}
+	for a in 8:
+		for k in 3:
+			var b: int = a | (1 << k)
+			if b == a:
+				continue
+			var pa := coin + Vector3(a & 1, (a >> 1) & 1, (a >> 2) & 1) * cote
+			var pb := coin + Vector3(b & 1, (b >> 1) & 1, (b >> 2) & 1) * cote
+			var r: Dictionary = ed.tracer_poutre({"noeud": ids[a]} if ids.has(a) else {"point": pa}, {"noeud": ids[b]} if ids.has(b) else {"point": pb}, {}, false)
+			ids[a] = String(r["debut"])
+			ids[b] = String(r["fin"])
+	ed.remplir_tout(reglages, false)
+	return ed.armature(Armature.PANNEAU).map(func(e): return String(e["id"]))
+
+
+static func _avertit_cabine(c) -> bool:
+	return c.elements.any(func(e): return e["categorie"] == "Cabine" and (e["niveau"] == ControleVol.AVERTIT or e["niveau"] == ControleVol.BLOQUE))
+
+
+static func _avec_texte(c, niveau: String, debut: String) -> bool:
+	for e in c.elements:
+		if e["niveau"] == niveau and String(e["titre"]).begins_with(debut):
+			return true
+	return false
+
+
+func _tests_vie_a_bord() -> void:
+	# 1. la cabine du chasseur : 3,6 m³ (mesurés sur le modèle 3D), trois parois qui tiennent la pression ;
+	#    épaisseur = masse ÷ (densité × surface), pression qui casse = résistance × épaisseur ÷ rayon
+	var a = Analyse.new(Plan.par_defaut())
+	var vie: Dictionary = a.vie()
+	var b: Dictionary = a.bilan_cabine()
+	var parois := {}
+	for w in vie["parois"]:
+		parois[String(w["id"])] = w
+	var e_v := 211.2 / (2460.0 * 7.053)
+	var ok: bool = bool(vie["a_cabine"]) and absf(float(b["volume"]) - 3.6) < 1e-9 and parois.size() == 3 \
+		and absf(float(parois["Cockpit_verriere"]["epaisseur_m"]) - e_v) < 1e-6 \
+		and absf(float(parois["Cockpit_verriere"]["p_rupture_pa"]) - 250.0e6 * e_v / 0.731) < 1.0 \
+		and absf(float(parois["Cockpit_interieur"]["p_rupture_pa"]) - 470.0e6 * 142.2 / (2700.0 * 26.3268) / 0.952) < 1.0 \
+		and String(vie["parois"][int(vie["pire_paroi"])]["id"]) == "Cockpit_interieur" and float(vie["pire_marge"]) > 9.0 \
+		and absf(float(b["masse_air"]) - 4.33) < 0.03 and absf(float(b["jours_o2"]) - 20.0 / 0.084) < 0.5 \
+		and absf(float(b["jours_o2_sans"]) - 20.0 / 0.84) < 0.1 and float(b["surface_trous"]) == 0.0 \
+		and String(a.tuile_cabine()[1]) == "101,3 kPa"
+	_resultat(ok, "Cabine du chasseur", "%s m³, %s d'air ; verrière %s (casse à %s), baignoire %s, cadre %s ; oxygène %s (%s sans recycleur) ; tuile « %s »" % [
+		Analyse.nombre(float(b["volume"]), 1), Analyse.masse_txt(float(b["masse_air"])), Analyse.marge_txt(float(parois["Cockpit_verriere"]["marge"])),
+		Analyse.kpa_txt(float(parois["Cockpit_verriere"]["p_rupture_pa"])), Analyse.marge_txt(float(parois["Cockpit_interieur"]["marge"])),
+		Analyse.marge_txt(float(parois["Cockpit_cadre"]["marge"])), Analyse.duree_txt(float(b["jours_o2"]) * 86400.0),
+		Analyse.duree_txt(float(b["jours_o2_sans"]) * 86400.0), a.tuile_cabine()[1]])
+	var c0 = ControleVol.new(Plan.par_defaut(), a)
+	ok = _avec_texte(c0, ControleVol.OK, "Cabine à 101,3 kPa") and not _avertit_cabine(c0)
+	_resultat(ok, "Cabine : contrôle avant le vol du chasseur", "« %s », aucun avertissement : %s" % [
+		c0.elements.filter(func(e): return e["categorie"] == "Cabine").map(func(e): return e["titre"]), not _avertit_cabine(c0)])
+
+	# 2. plaque plate encastrée (formulaire de Roark, grande flèche) : une tôle d'aluminium de 2 mm et de 1 m
+	#    de côté casse vers 125 kPa ; ramenée à un disque de 64 cm (même contrainte au bord qu'un carré)
+	var carre := [Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1, 0, 1), Vector3(0, 0, 1)]
+	var a_eq := VieABord.rayon_equivalent(carre)
+	var p_al := VieABord.rupture_plaque(470.0e6, 73.0e9, 0.33, 0.002, a_eq)
+	var p_coque := VieABord.rupture_coque(470.0e6, 0.002, 1.0)
+	var tri := VieABord.rayon_equivalent([Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0.5, 0, sqrt(0.75))])
+	ok = absf(a_eq - sqrt(0.3078 / 0.75)) < 1e-6 and absf(p_al - 124481.7) < 50.0 and absf(p_coque - 940000.0) < 1.0 \
+		and absf(tri - 1.281 * sqrt(3.0) / 6.0) < 1e-6
+	_resultat(ok, "Parois : plaque plate et coque courbe", "tôle d'aluminium 2 mm, 1 m × 1 m (disque de %s) : casse à %s ; la même courbée (rayon 1 m) : %s ; triangle de 1 m : disque de %s" % [
+		Analyse.longueur_txt(a_eq), Analyse.kpa_txt(p_al), Analyse.kpa_txt(p_coque), Analyse.longueur_txt(tri)])
+
+	# 3. un cube d'armature fermé (1 m, tôle d'aluminium-lithium de 2 mm) : volume de 1 m³, normales vers le
+	#    dehors ; pressurisé, chaque tôle casse à 170 kPa : marge ×1,7 (orange : le contrôle prévient)
+	var ed = _ed_depart()
+	var panneaux := _cube(ed, Vector3(2.0, 1.5, 1.0), 1.0, {"matiere": "aluminium_lithium", "epaisseur_m": 0.002})
+	var vols: Array = VieABord.volumes_armature(ed.donnees)
+	var dehors := vols.size() == 1 and bool(vols[0]["ferme"])
+	if dehors:
+		for f in vols[0]["faces"]:
+			dehors = dehors and ((f["centre"] as Vector3) - Vector3(2.5, 2.0, 1.5)).dot(f["normale"]) > 0.49
+	ok = panneaux.size() == 6 and dehors and absf(float(vols[0]["volume_m3"]) - 1.0) < 1e-6
+	ed.pressuriser(vols[0]["panneaux"] if not vols.is_empty() else [], true)
+	var a3 = Analyse.new(ed.plan())
+	var v3: Dictionary = a3.vie()
+	var soute: Dictionary = v3["compartiments"][1] if (v3["compartiments"] as Array).size() > 1 else {}
+	var p_tole := VieABord.rupture_plaque(580.0e6, 76.0e9, 0.33, 0.002, sqrt(0.3078 / 0.75))
+	var marges := []
+	if not soute.is_empty():
+		for i in soute["parois"]:
+			marges.append(float(v3["parois"][i]["marge"]))
+	var c3 = ControleVol.new(ed.plan(), a3)
+	ok = ok and bool(soute.get("pressurise", false)) and marges.size() == 6 and absf(float(marges[0]) - p_tole / 101325.0) < 1e-3 \
+		and absf(p_tole - 169805.9) < 50.0 and _avec_texte(c3, ControleVol.INFO, "6 parois sous la marge") and not _avertit_cabine(c3)
+	_resultat(ok, "Armature : volume fermé pressurisé", "%d panneaux, %d volume fermé de %s m³, normales vers le dehors : %s ; pressurisé : tôles à %s (%s), le contrôle le dit : %s" % [
+		panneaux.size(), vols.size(), Analyse.nombre(float(vols[0]["volume_m3"]) if not vols.is_empty() else 0.0, 3), dehors,
+		Analyse.kpa_txt(p_tole), Analyse.marge_txt(float(marges[0]) if not marges.is_empty() else 0.0), _avec_texte(c3, ControleVol.INFO, "6 parois sous la marge")])
+
+	# 4. tôles de 1 mm : elles cassent dans le vide (avertissement) ; une tuile de céramique laisse passer l'air
+	#    (fuite) ; un panneau enlevé : le volume n'est plus fermé (4 bords sans voisin)
+	ed.regler_armature(panneaux, {"epaisseur_m": 0.001})
+	var c4 = ControleVol.new(ed.plan(), Analyse.new(ed.plan()))
+	var casse := _avec_texte(c4, ControleVol.AVERTIT, "6 parois cassent dans le vide")
+	ed.repeindre(String(panneaux[0]), {"matiere": "ceramique", "epaisseur_m": 0.05})
+	var a4 = Analyse.new(ed.plan())
+	var trous: Array = a4.vie()["compartiments"][1]["trous"] if (a4.vie()["compartiments"] as Array).size() > 1 else []
+	ed.supprimer([String(panneaux[1])])
+	var a5 = Analyse.new(ed.plan())
+	var ouverts: Array = a5.vie()["ouverts"]
+	var c5 = ControleVol.new(ed.plan(), a5)
+	ok = casse and trous.size() == 1 and String(trous[0]["raison"]) == "matière qui laisse passer l'air" and ouverts.size() == 1 \
+		and int(ouverts[0]["bords_ouverts"]) == 4 and bool(ouverts[0]["pressurise"]) and _avec_texte(c5, ControleVol.INFO, "Un volume pressurisé n'est plus fermé")
+	_resultat(ok, "Armature : tôles trop fines, céramique, volume ouvert", "1 mm : « cassent dans le vide » %s ; céramique : %s ; panneau enlevé : %d bords sans voisin" % [
+		casse, trous.map(func(t): return t["raison"]), int(ouverts[0]["bords_ouverts"]) if not ouverts.is_empty() else -1])
+
+	# 5. réglages de la cabine : 70 kPa (moins de force sur les parois : marge × 101,3/70), recycleur arrêté ;
+	#    annuler revient en arrière ; enregistré et relu (version 4 du plan)
+	var ed6 = _ed_depart()
+	ed6.regler_vie("pression_kpa", 70.0)
+	ed6.regler_vie("recycleur", false)
+	var a6 = Analyse.new(ed6.plan())
+	var marge6 := float(a6.vie()["pire_marge"])
+	var relu = Plan.new()
+	var lu: bool = relu.lire_texte(ed6.texte())
+	var a6b = Analyse.new(relu)
+	ed6.annuler()
+	ed6.annuler()
+	var a7 = Analyse.new(ed6.plan())
+	ok = absf(float(a6.vie()["consigne"]) - 70000.0) < 1e-6 and absf(marge6 - float(vie["pire_marge"]) * 101325.0 / 70000.0) < 1e-6 \
+		and absf(float(a6.bilan_cabine()["jours_o2"]) - 20.0 / 0.84) < 0.1 and lu and absf(float(a6b.vie()["consigne"]) - 70000.0) < 1e-6 \
+		and absf(float(a7.vie()["consigne"]) - 101325.0) < 1e-6 and bool(a7.vie()["survie"]["recycleur"])
+	_resultat(ok, "Cabine : pression et recycleur réglables", "70 kPa : marge %s, oxygène %s sans recycleur ; relu : %s kPa ; annulé : %s kPa, recycleur %s" % [
+		Analyse.marge_txt(marge6), Analyse.duree_txt(float(a6.bilan_cabine()["jours_o2"]) * 86400.0), float(a6b.vie()["consigne"]) / 1000.0,
+		float(a7.vie()["consigne"]) / 1000.0, a7.vie()["survie"]["recycleur"]])
+
+	# 6. un ancien vaisseau (enregistré avant l'étape 8, sans section « vie ») garde la cabine du chasseur ; le
+	#    même sans sa verrière (fichier écrit à la main) : trou de 7 m², le contrôle avertit ; sans le système de
+	#    survie (module enlevé) : ni régulateur ni réserves
+	var d := (Plan.par_defaut().donnees as Dictionary).duplicate(true)
+	d.erase("vie")
+	var ancien = Plan.new()
+	ancien.lire_dictionnaire(d.duplicate(true))
+	var a8 = Analyse.new(ancien)
+	var sans_verriere := (Plan.par_defaut().donnees as Dictionary).duplicate(true)
+	sans_verriere["pieces"] = (sans_verriere["pieces"] as Array).filter(func(p): return String(p.get("id", "")) != "Cockpit_verriere")
+	var p9 = Plan.new()
+	p9.lire_dictionnaire(sans_verriere)
+	var a9 = Analyse.new(p9)
+	var c9 = ControleVol.new(p9, a9)
+	var ed10 = _ed_depart()
+	ed10.supprimer(["module:equipements"])
+	var a10 = Analyse.new(ed10.plan())
+	var c10 = ControleVol.new(ed10.plan(), a10)
+	ok = bool(a8.vie()["a_cabine"]) and absf(float(a8.vie()["pire_marge"]) - float(vie["pire_marge"])) < 1e-9 \
+		and absf(float(a9.bilan_cabine()["surface_trous"]) - 7.053) < 1e-6 and _avec_texte(c9, ControleVol.AVERTIT, "La cabine fuit") \
+		and float(a9.bilan_cabine()["temps_vide"]) < 0.5 and not bool(a10.vie()["survie"]["present"]) and _avec_texte(c10, ControleVol.INFO, "Pas de système de survie")
+	_resultat(ok, "Cabine : ancien vaisseau, verrière enlevée, sans système de survie", "ancien : cabine %s ; sans verrière : %s ouverts, vide en %s ; sans survie : %s" % [
+		a8.vie()["a_cabine"], Analyse.surface_trou_txt(float(a9.bilan_cabine()["surface_trous"])), Analyse.duree_txt(float(a9.bilan_cabine()["temps_vide"])),
+		_avec_texte(c10, ControleVol.INFO, "Pas de système de survie")])
+
+	# 7. dans le vide, une soute pressurisée trop fine (1 mm) cède d'un coup : un seul message ; la cabine du
+	#    pilote n'est pas touchée (pas de fuite, le régulateur ne remplit pas la soute : réserves gardées)
+	var ed11 = _ed_depart()
+	_cube(ed11, Vector3(2.0, 1.5, 1.0), 1.0, {"matiere": "aluminium_lithium", "epaisseur_m": 0.001})
+	ed11.pressuriser(VieABord.volumes_armature(ed11.donnees)[0]["panneaux"], true)
+	var vie11 = VieABord.pour(ed11.plan())
+	var reserve0: float = vie11.reserve_o2 + vie11.reserve_n2
+	var messages := []
+	for i in 600:
+		vie11.pas(0.1, 0.0, 3.0)
+		messages.append_array(vie11.evenements)
+		vie11.evenements.clear()
+	var soute_vide: bool = vie11.comps.size() == 2 and VieABord.pression_de(vie11.comps[1]) < 100.0
+	var garde: float = reserve0 - (vie11.reserve_o2 + vie11.reserve_n2)
+	ok = soute_vide and messages.size() == 1 and String(messages[0]) == "VOLUME FERMÉ 1 : 6 PAROIS ONT CÉDÉ (101 kPa de différence)" and not vie11.fuite() \
+		and absf(vie11.pression_cabine() - 101325.0) < 1.0 and garde < 0.01 and absf(vie11.autonomie() / 86400.0 - 20.0 / 0.084) < 1.0
+	_resultat(ok, "Cabine : une soute cède dans le vide, la cabine tient", "« %s » ; soute vide : %s ; cabine %s, fuite : %s ; réserves prises en 1 min : %s (l'oxygène dure encore %s)" % [
+		" / ".join(messages), soute_vide, Analyse.kpa_txt(vie11.pression_cabine()), vie11.fuite(), Analyse.masse_txt(garde), Analyse.duree_txt(vie11.autonomie())])
+
+
+func _tests_ecran_etape8() -> void:
+	_vider_dossier(DOSSIER_ESSAI)
+	Engine.set_meta("partie", {"plan": Plan.PLAN_PAR_DEFAUT, "depart": "", "plan_lu": true})
+	var at = (load(SCENE_ATELIER) as PackedScene).instantiate()
+	at.dossier_vaisseaux = DOSSIER_ESSAI
+	add_child(at)
+	await _attendre_atelier()
+	at.case_symetrie.button_pressed = false
+	at.case_parois.button_pressed = false
+	# 1. la tuile CABINE (avant AVANT LE VOL) ouvre sa page ; « Parois » colore la verrière en vert
+	var textes: Array = _textes_tuile(at.tableau.get_child(8))
+	(at.tableau.get_child(8) as Control).gui_input.emit(_clic_gauche())
+	await _attendre_atelier()
+	var verriere: Array = at.maillages.get("Cockpit_verriere", [])
+	var dehors: Array = at.maillages.get("Verriere", [])
+	var vert := false
+	for mi in verriere + dehors:
+		var m = (mi as MeshInstance3D).material_overlay
+		vert = vert or (m is StandardMaterial3D and (m as StandardMaterial3D).albedo_color.g > 0.8 and (m as StandardMaterial3D).albedo_color.r < 0.5)
+	var spins: Array = at.fiche_outils.find_children("*", "SpinBox", true, false)
+	var ok: bool = textes[0] == "CABINE" and textes[1] == "101,3 kPa" and at.fiche_titre.text == "Cabine et vie à bord" and at.case_parois.button_pressed \
+		and not verriere.is_empty() and vert and spins.size() == 1 and at.fiche_sections.get_child_count() >= 4
+	_resultat(ok, "Écran (étape 8) : la tuile CABINE et sa page", "« %s » ; page « %s » ; parois en couleur : %s (verrière verte : %s) ; %d réglage de pression" % [
+		" / ".join(textes), at.fiche_titre.text, at.case_parois.button_pressed, vert, spins.size()])
+	# 2. régler la pression : 60 kPa, la tuile suit ; annuler revient à 101,3
+	if not spins.is_empty():
+		(spins[0] as SpinBox).value = 60.0
+	await _attendre_atelier()
+	await _attendre_atelier()
+	var t2: Array = _textes_tuile(at.tableau.get_child(8))
+	var vie_60 := float((at.edition.donnees.get("vie", {}) as Dictionary).get("pression_kpa", 0.0))
+	at.annuler()
+	await _attendre_atelier()
+	await _attendre_atelier()
+	var t3: Array = _textes_tuile(at.tableau.get_child(8))
+	ok = absf(vie_60 - 60.0) < 1e-6 and t2[1] == "60,0 kPa" and t3[1] == "101,3 kPa"
+	_resultat(ok, "Écran (étape 8) : régler la pression de la cabine", "réglée : %s kPa, tuile « %s » ; annulé : « %s »" % [vie_60, t2[1], t3[1]])
+	at.case_parois.button_pressed = false
 	at.queue_free()
 	await get_tree().process_frame

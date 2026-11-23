@@ -13,6 +13,8 @@ extends RefCounted
 ##   - AU SOL (le vol commence posé devant le hangar) : le vaisseau tient-il sur ses roues (centre de gravité
 ##     au-dessus des roues), chaque amortisseur porte-t-il sa part du poids sans aller en butée ;
 ##   - EN VOL : moteurs, décollage, rotation possible sur chaque axe, poussée réduite par un couple ;
+##   - CABINE (étape 8) : parois qui cassent dans le vide (avertit), marge sous ×2 (information), fuites (une
+##     paroi enlevée, une matière qui laisse passer l'air), système de survie enlevé ;
 ##   - SYMÉTRIE : centre de gravité sur le côté, pièces sans jumelle (pour information).
 ## Étape 6, l'ARMATURE : un morceau d'armature posé à la fois sur deux pièces qui bougent l'une par rapport
 ## à l'autre (une aile et le fuselage) reste avec le fuselage, et avertit (il bloquerait l'aile dans la
@@ -36,6 +38,8 @@ const Edition = preload("res://scripts/atelier/edition.gd")
 const Catalogue = preload("res://scripts/atelier/catalogue.gd")
 const DessinVaisseau = preload("res://scripts/dessin_vaisseau.gd")
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
+const VieABord = preload("res://scripts/physique/vie_a_bord.gd")
+const Atmosphere = preload("res://scripts/physique/atmosphere.gd")
 const Style = preload("res://scripts/atelier/style.gd")
 const Armature = preload("res://scripts/atelier/armature.gd")
 
@@ -44,7 +48,7 @@ const AVERTIT := "avertit"
 const INFO := "info"
 const OK := "ok"
 const ORDRE_NIVEAUX := [BLOQUE, AVERTIT, INFO, OK]
-const CATEGORIES := ["Plan", "Vitesse du PC", "Lumière", "Au sol", "En vol", "Pièces mobiles", "Symétrie"]
+const CATEGORIES := ["Plan", "Vitesse du PC", "Lumière", "Au sol", "En vol", "Cabine", "Pièces mobiles", "Symétrie"]
 ## Étape 7 : le centre de gravité qui bouge de plus que ça quand une pièce mobile bouge avertit.
 const CG_MOBILE_AVERTIT := 0.3       # m
 const CG_MOBILE_INFO := 0.05         # m
@@ -107,6 +111,7 @@ func _init(p_plan, p_analyse = null, p_options := {}) -> void:
 	_lumiere()
 	_au_sol()
 	_en_vol()
+	_cabine()
 	_pieces_mobiles()
 	_symetrie()
 	elements.sort_custom(func(a, b): return ORDRE_NIVEAUX.find(a["niveau"]) < ORDRE_NIVEAUX.find(b["niveau"]))
@@ -311,6 +316,94 @@ func _armature() -> void:
 	_ajouter(INFO, "En vol", "L'air ne voit que les surfaces d'aile de l'armature",
 		"%s porte dans l'air comme une aile. Le reste de l'armature (tôles, vitres) compte pour la masse et le dessin, pas encore pour la traînée : elle viendra avec l'analyse de la coque construite." % _pluriel(portants.size(), "panneau"),
 		"%d" % portants.size())
+
+
+# =====================================================================
+# CABINE (étape 8)
+# =====================================================================
+const RAYON_PLANETE := 600000.0      # m, la planète du jeu (jeu.gd)
+
+
+func _cabine() -> void:
+	var a: Dictionary = analyse.vie()
+	var b: Dictionary = analyse.bilan_cabine()
+	var page := {"genre": "analyse", "id": "cabine"}
+	if not bool(b["a_cabine"]):
+		_ajouter(INFO, "Cabine", "Pas de cabine sous pression", "Le pilote respire l'air du dehors : dans le vide, il n'a que quelques secondes.", "", page)
+		return
+	var p := float(b["consigne"])
+	var rouges := []
+	var oranges := []
+	for c in a["compartiments"]:
+		if not bool(c["pressurise"]):
+			continue
+		for i in c["parois"]:
+			var w: Dictionary = a["parois"][i]
+			if not bool(w["presente"]) or not bool(w["etanche"]):
+				continue
+			if float(w["marge"]) < 1.0:
+				rouges.append(w)
+			elif float(w["marge"]) < VieABord.MARGE_SURE:
+				oranges.append(w)
+	if not rouges.is_empty():
+		rouges.sort_custom(func(x, y): return float(x["marge"]) < float(y["marge"]))
+		var w: Dictionary = rouges[0]   # la plus faible
+		var dehors := p - float(w["p_rupture_pa"])
+		var titre := ("%s casse dans le vide" % Analyse._majuscule(String(w["nom"]))) if rouges.size() == 1 \
+			else "%d parois cassent dans le vide" % rouges.size()
+		var qui := "Elle tient" if rouges.size() == 1 else "La plus faible (%s) tient" % String(w["nom"])
+		_ajouter(AVERTIT, "Cabine", titre,
+			"%s %s, l'air la pousse avec %s : en montant, elle cède quand l'air du dehors descend sous %s (%s), et le volume se vide d'un coup. Épaissis-la, prends une matière plus solide, ou baisse la pression de la cabine." % [
+			qui, Analyse.kpa_txt(float(w["p_rupture_pa"])), Analyse.kpa_txt(p), Analyse.kpa_txt(maxf(dehors, 0.0)), _altitude_txt(dehors)],
+			Analyse.marge_txt(float(w["marge"])), _groupe(rouges.map(func(x): return x["element"])))
+	if not oranges.is_empty():
+		var noms := PackedStringArray()
+		for w in oranges:
+			noms.append("%s %s" % [String(w["nom"]), Analyse.marge_txt(float(w["marge"]))])
+		_ajouter(INFO, "Cabine", "%s sous la marge de ×2" % _pluriel(oranges.size(), "paroi"),
+			"Elles tiennent, mais une cabine habitée doit tenir au moins deux fois sa pression (règle des structures sous pression) : %s." % ", ".join(noms),
+			"%d" % oranges.size(), _groupe(oranges.map(func(w): return w["element"])))
+	if float(b["surface_trous"]) > 0.0:
+		var noms2 := PackedStringArray()
+		for t in b["trous"]:
+			noms2.append("%s (%s)" % [String(t["nom"]), String(t.get("raison", "trou"))])
+		var suite := ("le régulateur compense, les réserves sont vides en %s" % Analyse.duree_txt(float(b["temps_reserve"]))) if bool(b["compense"]) \
+			else ("dans le vide, la cabine se vide en %s" % Analyse.duree_txt(float(b["temps_vide"])))
+		_ajouter(AVERTIT, "Cabine", "La cabine fuit : %s ouverts" % Analyse.surface_trou_txt(float(b["surface_trous"])),
+			"%s : %s." % [", ".join(noms2), suite], Analyse.surface_trou_txt(float(b["surface_trous"])), page)
+	for o in a["ouverts"]:
+		if bool(o["pressurise"]):
+			_ajouter(INFO, "Cabine", "Un volume pressurisé n'est plus fermé",
+				"%s de ses panneaux n'%s pas de voisin : il ne tient plus d'air (il n'est pas compté)." % [_pluriel(int(o["bords_ouverts"]), "bord"),
+				"a" if int(o["bords_ouverts"]) <= 1 else "ont"], "%d" % int(o["bords_ouverts"]),
+				_groupe((o["panneaux"] as Array).map(func(id): return {"genre": "ajout", "id": String(id)})))
+	if not bool(b["survie"]):
+		_ajouter(INFO, "Cabine", "Pas de système de survie",
+			"Sans lui, pas de régulateur ni de réserves : le pilote respire l'air de la cabine (%s d'oxygène), qui n'est pas renouvelé." % Analyse.masse_txt(float(b["masse_o2"])),
+			"", page)
+	if rouges.is_empty() and float(b["surface_trous"]) <= 0.0:
+		_ajouter(OK, "Cabine", "Cabine à %s, parois %s, oxygène pour %s" % [Analyse.kpa_txt(p), Analyse.marge_txt(float(b["pire_marge"])),
+			Analyse.duree_txt(float(b["jours_o2"]) * 86400.0) if bool(b["survie"]) else "quelques heures"],
+			"%s m³ d'air ; la paroi la plus faible tient %s fois la pression de la cabine." % [Analyse.nombre(float(b["volume"]), 1),
+			Analyse.nombre(float(b["pire_marge"]), 1)], Analyse.marge_txt(float(b["pire_marge"])), page)
+
+
+## Vers quelle altitude de la planète du jeu l'air a cette pression (Pa).
+static func _altitude_txt(p: float) -> String:
+	if p <= 0.0:
+		return "dans le vide seulement"
+	var atm = Atmosphere.new(RAYON_PLANETE, 0.0)
+	if float(atm.etat(0.0)[2]) <= p:
+		return "dès le sol"
+	var bas := 0.0
+	var haut := 200000.0
+	for i in 40:
+		var z := 0.5 * (bas + haut)
+		if float(atm.etat(z)[2]) > p:
+			bas = z
+		else:
+			haut = z
+	return "vers %s km d'altitude" % Analyse.nombre(bas / 1000.0, 1 if bas < 10000.0 else 0)
 
 
 # =====================================================================

@@ -229,6 +229,7 @@ func _construire() -> void:
 	placer_pieces_mobiles()
 	_trouver_roles()
 	_calculer_poussees()
+	vie = VieABord.pour(plan)
 
 
 # =====================================================================
@@ -930,6 +931,11 @@ var atmosphere = null
 var aero = Aerodynamique.new()
 var densite_air := 0.0            # kg/m³ autour du vaisseau
 var temperature_air := 0.0        # K
+var pression_air := 0.0           # Pa autour du vaisseau (0 dans le vide)
+## Atelier, étape 8 : la vie à bord (scripts/physique/vie_a_bord.gd) : pression et oxygène de la cabine,
+## parois qui cèdent, fuites (l'air qui s'échappe pousse le vaisseau). null : le vaisseau n'a pas de cabine.
+const VieABord = preload("res://scripts/physique/vie_a_bord.gd")
+var vie = null
 var vitesse_air := 0.0            # m/s : vitesse par rapport à l'air
 var force_air := Vector3.ZERO     # N, repère du vaisseau (dernier pas)
 ## Échauffement : nez du vaisseau (le point le plus chaud, au contact de l'air comprimé devant lui).
@@ -1077,10 +1083,17 @@ func _pas_corps(dt: float) -> void:
 		couple += f_air[1]
 	else:
 		densite_air = 0.0
+		pression_air = 0.0
 		vitesse_air = 0.0
 		force_air = Vector3.ZERO
 		aero.forces(Vector3.ZERO, omega, 0.0, 1.0, ailes, train, vertical)
 		_chauffer(dt, 340.0)   # loin de l'air, la coque rayonne et revient vers l'équilibre de l'espace
+	# étape 8 : la cabine (régulateur, fuites) ; l'air qui sort d'un trou pousse le vaisseau à cet endroit
+	if vie != null:
+		vie.pas(dt, pression_air, temperature_air)
+		if vie.force != Vector3.ZERO:
+			a_p += (base * vie.force) / masse
+			couple += vie.moment - centre_gravite.cross(vie.force)
 
 	# 3. Translation : méthode de Verlet (stable pour les orbites), appliquée à la vitesse propre u
 	#    (relativité restreinte). À petite vitesse, c'est exactement l'ancien calcul de Newton.
@@ -1567,6 +1580,7 @@ func _forces_air(base: Basis, dt: float) -> Array:
 	var et: Array = atmosphere.etat(z)
 	densite_air = et[0]
 	temperature_air = et[1]
+	pression_air = et[2]
 	var v_rel := Vector3(vx, vy, vz) - vitesse_sol(px, py, pz)   # l'air tourne avec la planète
 	vitesse_air = v_rel.length()
 	var res: Array = [Vector3.ZERO, Vector3.ZERO]
@@ -1972,6 +1986,8 @@ func placer_en_orbite(altitude_m: float) -> void:
 	avale = false
 	temps_univers = 0.0
 	temps_pilote = 0.0
+	if vie != null:
+		vie.remettre()   # recommencer : cabine réparée et remplie, réserves pleines
 	orientation = Quaternion.IDENTITY   # l'avant (-Z) est déjà dans le sens de la vitesse
 	omega = Vector3.ZERO
 	au_sol = false

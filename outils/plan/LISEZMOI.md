@@ -25,7 +25,9 @@ physique (`scripts/physique/vaisseau_physique.gd`) n'y ajoute que les lois. Le f
    ```
 
    Les moteurs, propulseurs, roues et plaques d'air sont écrits dans ce script, avec les mêmes valeurs
-   que l'ancien code du jeu.
+   que l'ancien code du jeu. La section « vie » (la cabine sous pression, étape 8 de l'atelier) aussi :
+   son volume d'air et la courbure de ses parois viennent de `cabine_cockpit_v27.py` (à relancer si le
+   cockpit change : `python outils/plan/cabine_cockpit_v27.py`, Python 3 + numpy, quelques minutes).
 
 3. Lancer les tests : `res://scenes/tests_atelier.tscn` (atelier), puis les tests de physique (F1).
 
@@ -34,6 +36,8 @@ physique (`scripts/physique/vaisseau_physique.gd`) n'y ajoute que les lois. Le f
 - `extraire_masses_blender.py` : masses, centres et inertie de chaque pièce du modèle Blender.
 - `masses_pieces_v27.json` : son résultat pour le modèle v27.
 - `composer_plan_v27.py` : écrit le plan du chasseur.
+- `cabine_cockpit_v27.py` : mesure la cabine sur le modèle du cockpit (volume d'air rempli par petits
+  cubes de 2 cm depuis la place du pilote, rayon de courbure de chaque paroi).
 - `ancien_code_v27.json` : ce que faisait le code d'avant l'atelier (vaisseau écrit dans le code). Les
   tests de l'atelier vérifient que le vaisseau construit par le plan fait la même chose : moteurs,
   propulseurs, ailes, vol vertical, train, plaques d'air.
