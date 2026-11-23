@@ -103,6 +103,8 @@ var image_fermeture := -1
 var tete := Vector2.ZERO             # x = tête levée / baissée, y = tête tournée à gauche / à droite (radians)
 var vue_interieure := true           # true = cockpit, false = vue extérieure (3e personne)
 var oeil_pilote := OEIL_PILOTE_DEFAUT
+var _oeil_plan := OEIL_PILOTE_DEFAUT  # l'œil du pilote dans le repère du plan (oeil_pilote = lui − centre de gravité)
+var corps_vaisseau: Node3D           # le dessin du vaisseau, décalé pour que son centre de gravité soit à l'origine
 # système de lumière (étape 8)
 var lumiere = null                   # scripts/lumiere_jeu.gd (null : ancien affichage)
 var avec_lumiere := false
@@ -476,6 +478,7 @@ func _creer_pilote_et_cockpit() -> void:
 	var corps := Node3D.new()
 	corps.position = -vaisseau.centre_gravite
 	pilote.add_child(corps)
+	corps_vaisseau = corps
 	exterieur = (load(MODELE_EXTERIEUR) as PackedScene).instantiate()
 	corps.add_child(exterieur)
 	cockpit = (load(MODELE_COCKPIT) as PackedScene).instantiate()
@@ -496,6 +499,7 @@ func _creer_pilote_et_cockpit() -> void:
 	var oeil := cockpit.find_child("Oeil_pilote", true, false) as Node3D
 	if oeil != null:
 		oeil_pilote = oeil.position
+	_oeil_plan = oeil_pilote
 	oeil_pilote -= vaisseau.centre_gravite   # la caméra est placée par rapport au centre de gravité
 	for m in exterieur.find_children("*", "GeometryInstance3D", true, false):
 		maillages_exterieurs.append(m)
@@ -569,8 +573,14 @@ func _appliquer_vue() -> void:
 
 
 ## Ailes et train : le modèle suit exactement l'état de la physique (mêmes angles que le calcul des poussées).
+## Étape 7 : les pièces mobiles posées dans l'atelier aussi (dessin.poser) ; et quand une pièce mobile
+## emmène sa masse, le centre de gravité se déplace dans le vaisseau : le dessin (et l'œil du pilote) se
+## décalent d'autant, puisque la scène tourne autour du centre de gravité.
 func _animer_modele() -> void:
-	modele.poser(vaisseau)
+	dessin.poser(vaisseau)
+	if corps_vaisseau != null:
+		corps_vaisseau.position = -vaisseau.centre_gravite
+	oeil_pilote = _oeil_plan - vaisseau.centre_gravite
 
 
 ## Modèle v19 : lueurs et jets des moteurs.

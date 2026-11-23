@@ -44,7 +44,10 @@ const AVERTIT := "avertit"
 const INFO := "info"
 const OK := "ok"
 const ORDRE_NIVEAUX := [BLOQUE, AVERTIT, INFO, OK]
-const CATEGORIES := ["Plan", "Vitesse du PC", "Lumière", "Au sol", "En vol", "Symétrie"]
+const CATEGORIES := ["Plan", "Vitesse du PC", "Lumière", "Au sol", "En vol", "Pièces mobiles", "Symétrie"]
+## Étape 7 : le centre de gravité qui bouge de plus que ça quand une pièce mobile bouge avertit.
+const CG_MOBILE_AVERTIT := 0.3       # m
+const CG_MOBILE_INFO := 0.05         # m
 
 ## Vitesse du PC (référence : le chasseur v27 sur le PC de Gwenaël, i3-1005G1 + Intel UHD).
 const IPS_REFERENCE := 60.0          # images/s du chasseur en cockpit (objectif atteint le 19/11, synchro écran)
@@ -104,6 +107,7 @@ func _init(p_plan, p_analyse = null, p_options := {}) -> void:
 	_lumiere()
 	_au_sol()
 	_en_vol()
+	_pieces_mobiles()
 	_symetrie()
 	elements.sort_custom(func(a, b): return ORDRE_NIVEAUX.find(a["niveau"]) < ORDRE_NIVEAUX.find(b["niveau"]))
 
@@ -438,7 +442,17 @@ static func _rayon_boite(o: Vector3, d: Vector3, b: AABB, l: float) -> bool:
 func _au_sol() -> void:
 	var roues: Array = plan.pieces_de_type("roue")
 	var poids: float = v.masse * Analyse.G_SOL
+	# étape 7 : dans la pose du départ devant le hangar (train sorti, ailes repliées) : les pièces mobiles
+	# emmènent le centre de gravité, et les roues posées sur une jambe de train sont à leur place
+	var avant: Dictionary = v.valeurs_commandes()
+	v.regler_commande("train", 1.0)
+	v.regler_commande("ailes", 0.0)
+	v.placer_pieces_mobiles()
 	var cg: Vector3 = v.centre_gravite
+	var points_roues: Array = (v.roues as Array).duplicate()
+	for c in avant:
+		v.regler_commande(c, float(avant[c]))
+	v.placer_pieces_mobiles()
 	sol = {"roues": roues.size(), "stable": false, "marge": 0.0, "parts": []}
 	if roues.is_empty():
 		_ajouter(AVERTIT, "Au sol", "Pas de train d'atterrissage",
@@ -450,7 +464,7 @@ func _au_sol() -> void:
 		_ajouter(AVERTIT, "Au sol", "Seulement %s" % _pluriel(roues.size(), "roue"),
 			"Il faut au moins trois roues pour tenir debout : il va pencher et poser la coque.", "%d" % roues.size())
 		return
-	var pts := roues.map(func(p): return (p["point"] as Vector3) - cg)
+	var pts := points_roues.map(func(q): return (q as Vector3) - cg)
 	var n := VaisseauPhysique._normale_points(pts, Vector3.UP)
 	if n.length() < 0.5:
 		n = Vector3.UP
@@ -506,6 +520,44 @@ func _au_sol() -> void:
 	_ajouter(OK, "Au sol", "Au sol : il tient sur ses roues",
 		"Centre de gravité à %s du bord des roues.%s" % [Analyse.longueur_txt(marge), (" Part du poids : " + ", ".join(lignes) + ".") if not lignes.is_empty() else ""],
 		Analyse.longueur_txt(marge), _groupe(roues_ids))
+
+
+# =====================================================================
+# PIÈCES MOBILES (étape 7)
+# =====================================================================
+## Combien le centre de gravité bouge avec chaque commande ; pièces mobiles posées qui ne portent rien.
+func _pieces_mobiles() -> void:
+	if plan.articulations.is_empty():
+		return
+	var m: Dictionary = analyse.mobiles()
+	for c in m["commandes"]:
+		var d := float(c["deplacement"])
+		var els := []
+		for x in m["articulations"]:
+			if x["commande"] == c["commande"] and not (x["element"] as Dictionary).is_empty():
+				els.append(x["element"])
+		var texte := "Quand « %s » passe de 0 (%s) à 1 (%s), %s bougent avec elles et le centre de gravité se déplace de %s." % [
+			String(c["nom"]), String(c["a_0"]), String(c["a_1"]), Analyse.masse_txt(float(c["masse"])), Analyse.longueur_txt(d)]
+		if d > CG_MOBILE_AVERTIT:
+			_ajouter(AVERTIT, "Pièces mobiles", "Le centre de gravité bouge beaucoup (%s)" % String(c["nom"]),
+				texte + " Les moteurs, réglés pour l'autre pose, feront tourner le vaisseau : les petits propulseurs devront compenser. Rapproche les masses de l'axe, ou équilibre de l'autre côté.",
+				Analyse.longueur_txt(d), _groupe(els))
+		else:
+			_ajouter(INFO if d > CG_MOBILE_INFO else OK, "Pièces mobiles", "%s : %s" % [Analyse._majuscule(String(c["nom"])),
+				"le centre de gravité bouge de " + Analyse.longueur_txt(d) if d > CG_MOBILE_INFO else "le centre de gravité bouge à peine"],
+				texte, Analyse.longueur_txt(d), _groupe(els))
+	# une charnière (ou un vérin…) posée qui ne porte rien d'autre que son battant : pour information
+	for x in m["articulations"]:
+		var el: Dictionary = x["element"]
+		if String(el.get("genre", "")) != "ajout":
+			continue
+		var a_elle := 0
+		for i in x["pieces"]:
+			if String(analyse.piece(i).get("ajout", "")) != String(el["id"]):
+				a_elle += 1
+		if a_elle == 0 and String(analyse.ajouts.get(el["id"], {}).get("modele", "")) in ["charniere", "verin"]:
+			_ajouter(INFO, "Pièces mobiles", "%s ne porte rien" % String(x["nom"]),
+				"Rien n'est posé sur sa partie qui bouge : elle bouge à vide. Pose une pièce dessus (elle suivra le mouvement).", "à vide", el)
 
 
 ## Enveloppe convexe (sens inverse des aiguilles d'une montre) : méthode de la « chaîne monotone ».

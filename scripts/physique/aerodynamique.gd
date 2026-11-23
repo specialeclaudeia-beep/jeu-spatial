@@ -33,8 +33,12 @@ var longueur := 10.0            # m, longueur du vaisseau (pour le régime molé
 ## Plaques : {point, normale (pose de référence), surface (m²), allongement, corde (m, 0 = inconnue),
 ## biplan (gêne des ailes proches), groupe (prise du son), art (index dans _arts, −1 = fixe), d_axe (m)}.
 var plaques: Array = []
-## Charnières qui portent des plaques (ailes) : {point, axe, angle_0, angle_1, angle_ref (degrés), phase, commande}.
+## Pièces mobiles qui portent des plaques (ailes) : {id, art (articulation du plan), charniere (bool)}. Étape 7 :
+## n'importe quelle articulation (charnière, vérin, tuyère), elle-même portée ou non par une autre.
 var _arts: Array = []
+var _articulations: Dictionary = {}   # toutes les articulations du plan (pour les chaînes porte_par)
+var _cle_xf := Vector3(-1.0, -1.0, -1.0)   # commandes du dernier calcul des places (ailes, train, vertical)
+var _xfs: Array = []                       # place de chaque pièce mobile de _arts pour ces commandes
 ## Fuselage (projections du modèle 3D) : surface de face, de côté, de dessus (m²), centre de ces surfaces.
 var face := 0.0
 var cote := 0.0
@@ -73,6 +77,8 @@ func configurer(plan, cg: Vector3) -> void:
 	train_surface = float(tr.get("surface_m2", 0.0))
 	plaques = []
 	_arts = []
+	_articulations = plan.articulations
+	_cle_xf = Vector3(-1.0, -1.0, -1.0)
 	var index_art := {}
 	var groupes := {}
 	for p in plan.pieces_de_type("surface_air"):
@@ -80,18 +86,15 @@ func configurer(plan, cg: Vector3) -> void:
 		var d_axe := 0.0
 		var id := String(p.get("articulation", ""))
 		var a: Dictionary = plan.articulations.get(id, {})
-		if not a.is_empty() and a["type"] == "charniere":
+		if not a.is_empty():
 			if not index_art.has(id):
 				index_art[id] = _arts.size()
-				var c := String(a["commande"])
-				var a0 := float(a["angle_0_deg"])
-				var a1 := float(a["angle_1_deg"])
-				_arts.append({"point": a["point"], "axe": a["axe"], "angle_0": a0, "angle_1": a1, "art": a,
-					"commande": c, "angle_ref": lerpf(a0, a1, Plan.progression(a, plan.valeur_reference(c)))})
+				_arts.append({"id": id, "art": a, "charniere": a["type"] == "charniere"})
 			k = index_art[id]
-			# distance de la plaque à l'axe de la charnière (pour la gêne entre ailes proches)
-			var r: Vector3 = (p["point"] as Vector3) - (a["point"] as Vector3)
-			d_axe = (r - (a["axe"] as Vector3) * r.dot(a["axe"])).length()
+			if a["type"] == "charniere":
+				# distance de la plaque à l'axe de la charnière (pour la gêne entre ailes proches)
+				var r: Vector3 = (p["point"] as Vector3) - (a["point"] as Vector3)
+				d_axe = (r - (a["axe"] as Vector3) * r.dot(a["axe"])).length()
 		var g := String(p.get("groupe", p["id"]))
 		if not groupes.has(g):
 			groupes[g] = groupes.size()
@@ -179,7 +182,8 @@ static func cx_face(m: float) -> float:
 ## (donc −vitesse du vaisseau par rapport à l'air) ; omega = rotation du vaisseau (repère du vaisseau) ;
 ## rho, son = densité et vitesse du son ; ailes = ouverture (0..1) ; train = sorti (0..1).
 ## Renvoie [force (N, repère du vaisseau), couple (N·m, repère du vaisseau, autour du centre de gravité)].
-func forces(vent_corps: Vector3, omega: Vector3, rho: float, son: float, ailes: float, train: float) -> Array:
+func forces(vent_corps: Vector3, omega: Vector3, rho: float, son: float, ailes: float, train: float,
+		vertical := 0.0) -> Array:
 	_f_cumul = Vector3.ZERO
 	_c_cumul = Vector3.ZERO
 	prise_f.fill(Vector3.ZERO)   # prise du son (lecture seule)
@@ -209,25 +213,33 @@ func forces(vent_corps: Vector3, omega: Vector3, rho: float, son: float, ailes: 
 	# 1. Les plaques : bandes d'aile et dérives. Une plaque posée sur une charnière (aile) tourne avec elle.
 	#    Ailes repliées l'une sur l'autre, ou très proches : elles se gênent (biplan) ; l'écart entre l'aile
 	#    du haut et celle du bas, rapporté à la corde, dit de combien.
-	var rots := []
+	var valeurs := {"ailes": ailes, "train": train, "vertical": vertical}
+	var cle := Vector3(ailes, train, vertical)
+	if cle != _cle_xf:
+		_cle_xf = cle
+		_xfs = []
+		for ar in _arts:
+			_xfs.append(Plan.transformation(_articulations, ar["id"], valeurs))
 	var ouvertures := PackedFloat64Array()
 	for ar in _arts:
-		var c := ailes if ar["commande"] == "ailes" else (train if ar["commande"] == "train" else 0.0)
-		var angle := lerpf(float(ar["angle_0"]), float(ar["angle_1"]), Plan.progression(ar["art"], c))
-		rots.append(Basis(ar["axe"], deg_to_rad(angle - float(ar["angle_ref"]))))
-		ouvertures.append(deg_to_rad(absf(angle - float(ar["angle_0"]))))
+		var a: Dictionary = ar["art"]
+		var o := 0.0
+		if ar["charniere"]:
+			var angle := lerpf(float(a["angle_0_deg"]), float(a["angle_1_deg"]),
+				Plan.progression(a, float(valeurs.get(String(a["commande"]), 0.0))))
+			o = deg_to_rad(absf(angle - float(a["angle_0_deg"])))
+		ouvertures.append(o)
 	for pl in plaques:
 		var p: Vector3 = pl["point"]
 		var normale: Vector3 = pl["normale"]
 		var gene := 1.0
 		var k: int = pl["art"]
 		if k >= 0:
-			var rot: Basis = rots[k]
-			var pivot: Vector3 = _arts[k]["point"]
-			p = pivot + rot * (p - pivot)
-			normale = rot * normale
+			var xf: Transform3D = _xfs[k]
+			p = xf * p
+			normale = xf.basis * normale
 		var corde: float = pl["corde"]
-		if pl["biplan"] and k >= 0 and corde > 0.0:
+		if pl["biplan"] and k >= 0 and _arts[k]["charniere"] and corde > 0.0:
 			var ecart := 2.0 * float(pl["d_axe"]) * sin(ouvertures[k])
 			gene = 0.5 + 0.35 * clampf(ecart / corde, 0.0, 1.0)
 		_surface = pl["groupe"]

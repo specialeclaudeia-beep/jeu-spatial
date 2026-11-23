@@ -16,7 +16,7 @@ choses qui ne sont pas dans le dépôt (trop lourdes) : l'extension `addons/nobo
 Le jeu s'ouvre sur l'**écran d'accueil** (provisoire) : **Atelier**, **Jouer** (le dernier vaisseau,
 posé au sol devant le hangar) et **Charger un vaisseau**.
 
-## Atelier (étapes 2 à 5)
+## Atelier (étapes 2 à 7)
 L'atelier est un écran à part : le jeu (planète, lumière, son) n'est chargé qu'au clic sur **Lancer**,
 et il est libéré quand on revient (F3 dans le jeu). Le vaisseau est posé dans un hangar, sur ses roues
 (même physique que le jeu : ses amortisseurs s'écrasent sous son poids), ailes repliées.
@@ -148,6 +148,28 @@ et il est libéré quand on revient (F3 dans le jeu). Le vaisseau est posé dans
   bougent l'une par rapport à l'autre, elle reste avec le fuselage, et le contrôle avant le vol prévient.
   Seules les **surfaces d'aile** portent dans l'air pour l'instant (la traînée d'une coque construite
   viendra avec l'analyse de l'air).
+
+### Les pièces mobiles (étape 7)
+- Catalogue **Pièces mobiles** : **charnière motorisée** (un battant qui tourne de 0° à 90°, réglable),
+  **vérin** (une tige qui sort), **aile repliable** (repliée à sa base), **jambe de train** (elle rentre
+  vers l'avant ou l'arrière ; roue avant qui tourne au choix ; amortisseur réglé pour le poids porté).
+  Chacune suit une commande du vaisseau : **ailes**, **train d'atterrissage** ou **vol vertical** (choix
+  dans sa fiche).
+- **Poser sur une pièce mobile** : une pièce posée sur le battant d'une charnière, la tige d'un vérin, une
+  aile repliable… la suit. Une pièce mobile peut en porter une autre (une charnière sur une aile qui se
+  replie) : les mouvements s'ajoutent. Avec la symétrie, la jumelle va sur la pièce jumelle.
+- **Tout suit, en vol comme dans l'atelier** : les moteurs et propulseurs posés dessus tournent avec,
+  les ailes posées dessus portent selon leur nouvelle position, les roues montent et descendent, la masse
+  bouge, donc le **centre de gravité et l'inertie** changent. Une pièce qui bouge pousse le vaisseau dans
+  l'autre sens (le moment cinétique est gardé : dans le vide, il tourne un peu pendant le mouvement, puis
+  s'arrête).
+- Bouton **Mouvements ▾** (en haut) : essayer chaque commande dans le hangar (0 ou 1), régler la durée
+  d'un mouvement (enregistrée dans le plan), revenir à la pose du hangar. Les fiches des pièces mobiles
+  ont aussi leurs boutons **Essayer**. Si une partie passe sous le sol du hangar, un avis le dit.
+- Page **Pièces mobiles** (tuile **Centre de gravité**, ou le menu) : la masse emmenée par chaque
+  commande, de combien et vers où le centre de gravité bouge, la liste des pièces mobiles. Le contrôle
+  avant le vol **avertit** si le centre de gravité bouge de plus de 30 cm, et signale une charnière ou un
+  vérin qui ne porte rien.
 Le visuel (hangar, menus, couleurs, formes des pièces) est provisoire ; la physique est la vraie.
 
 ## Commandes
@@ -484,8 +506,8 @@ façon Star Wars (jet de 3 000 m/s), qui suit de vraies lois là où elles exist
   `pieces_toutes_faites.gd` : les pièces à poser (réglages, masse, dessin) ; `edition.gd` : les changements
   du plan (poser, symétrie, régler, enlever, annuler / refaire, enregistrer).
   `controle_vol.gd` : le contrôle avant le vol (vitesse du PC, lumière, au sol, en vol, symétrie).
-  `outils/captures_atelier.gd`, `captures_atelier_etape3.gd`, `captures_atelier_etape4.gd` et
-  `captures_atelier_etape5.gd` : captures d'écran de l'atelier et du départ.
+  `outils/captures_atelier.gd`, `captures_atelier_etape3.gd` à `captures_atelier_etape7.gd` : captures
+  d'écran de l'atelier et du départ.
 - `scripts/dessin_vaisseau.gd` : le dessin du vaisseau d'après son plan (modules enlevés cachés, chaque
   pièce du plan dessinée, pièces posées fusionnées dans le jeu, compte des surfaces et triangles) ; le
   même dans l'atelier et dans le jeu.

@@ -313,6 +313,7 @@ func _lancer() -> void:
 	_tests_grandes_distances()
 	_tests_lune()
 	_tests_atmosphere()
+	_tests_masses_mobiles()
 
 	var duree := (Time.get_ticks_msec() - debut) / 1000.0
 	var couleur := "#5fe08a" if reussis == total else "#ffcc55"
@@ -3007,3 +3008,64 @@ static func _acc_max(pas_max: float) -> int:
 		if Jeu.pas_physique(a) <= maxf(pas_max, Jeu.PAS):
 			best = a
 	return best
+
+
+# =====================================================================
+# TESTS : LES PIÈCES MOBILES EMMÈNENT LEUR MASSE (atelier, étape 7)
+# =====================================================================
+## Chasseur : la tuyère (496 kg) qui tourne pour le vol vertical, et les ailes (réacteurs compris) qui se
+## replient emmènent leur masse : le centre de gravité et l'inertie changent. Dans le vide, sans moteur, le
+## moment cinétique total se garde : pendant le mouvement le vaisseau tourne un peu dans l'autre sens, puis
+## il s'arrête avec la pièce (rien de magique : c'est la pièce qui pousse sur le vaisseau).
+func _tests_masses_mobiles() -> void:
+	var v = _nouveau(false)
+	var cg0: Vector3 = v.centre_gravite
+	var exact: bool = cg0 == v.plan.proprietes_masse()["centre"]
+	# vol vertical complet : la tuyère tourne de 90° (chaque anneau de sa part), le centre de gravité suit
+	v.regler_commande("vertical", 1.0)
+	v.placer_pieces_mobiles()
+	var cg_v: Vector3 = v.centre_gravite
+	var m_tuyere := 0.0
+	var mz := Vector3.ZERO
+	for p in v.plan.pieces:
+		if String(p.get("articulation", "")) == "tuyere":
+			var mc: Dictionary = p["masse_calculee"]
+			m_tuyere += float(mc["masse"])
+	# (déplacement attendu : la tuyère, 496 kg, monte et avance de quelques dizaines de cm ; le vaisseau en
+	#  pèse 8,5 t : le centre de gravité bouge de l'ordre du centimètre)
+	var d_v: float = (cg_v - cg0).length()
+	v.regler_commande("vertical", 0.0)
+	v.placer_pieces_mobiles()
+	var revenu: bool = v.centre_gravite == cg0
+	# mouvement réel des ailes, dans le vide : moment cinétique total gardé, puis arrêt
+	v = _nouveau(false)
+	v.omega = Vector3.ZERO
+	var q0: Quaternion = v.orientation
+	v.ouvrir_ailes(false)
+	var l_max := 0.0
+	var l_int_max := 0.0
+	for i in int(v.duree_ailes * 120.0) + 10:
+		v.pas(1.0 / 120.0)
+		var l_tot: Vector3 = Basis(v.orientation) * (v.tenseur_inertie * v.omega + v._l_interne)
+		l_max = maxf(l_max, l_tot.length())
+		l_int_max = maxf(l_int_max, v._l_interne.length())
+	var tourne := rad_to_deg(v.orientation.angle_to(q0))
+	# mouvement de la tuyère (vol vertical) dans le vide : le même, la tuyère n'est pas symétrique
+	var w = _nouveau(false)
+	w.omega = Vector3.ZERO
+	var q1: Quaternion = w.orientation
+	w.passer_vol_vertical(true)
+	var lw_max := 0.0
+	var lw_int := 0.0
+	for i in int(w.duree_vertical * 120.0) + 10:
+		w.pas(1.0 / 120.0)
+		var l2: Vector3 = Basis(w.orientation) * (w.tenseur_inertie * w.omega + w._l_interne)
+		lw_max = maxf(lw_max, l2.length())
+		lw_int = maxf(lw_int, w._l_interne.length())
+	var tourne_v := rad_to_deg(w.orientation.angle_to(q1))
+	var ok: bool = exact and revenu and m_tuyere > 400.0 and d_v > 0.002 and d_v < 0.1 and l_max < 1e-3 * maxf(l_int_max, 1.0) \
+		and v.omega.length() < 1e-6 and lw_int > 1.0 and lw_max < 1e-3 * lw_int and w.omega.length() < 1e-6 and tourne_v > 0.01 and tourne_v < 3.0
+	_resultat(ok, "Pièces mobiles : la tuyère et les ailes emmènent leur masse",
+		"Centre de gravité exact au départ : %s. Vol vertical : tuyère de %.0f kg, centre de gravité déplacé de %.1f mm, revenu : %s. Ailes repliées dans le vide : moment cinétique des ailes %.1f N·m·s au plus, total gardé à %s près, rotation finale %s rad/s (tourné de %.3f°, symétrique). Tuyère : %.1f N·m·s, total à %s près, le vaisseau a tourné de %.3f° puis s'est arrêté (%s rad/s)." % [
+		exact, m_tuyere, d_v * 1000.0, revenu, l_int_max, String.num_scientific(l_max), String.num_scientific(v.omega.length()), tourne, lw_int,
+		String.num_scientific(lw_max), tourne_v, String.num_scientific(w.omega.length())])
