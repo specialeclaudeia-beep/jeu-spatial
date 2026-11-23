@@ -23,8 +23,10 @@ extends RefCounted
 const Catalogue = preload("res://scripts/atelier/catalogue.gd")
 const FORMAT := "plan-vaisseau"
 ## Version 2 (atelier, étape 3) : pièces toutes faites (ensembles avec « modele » et « reglages »), type
-## « bloc », modules. Un plan de version 1 se lit toujours.
-const VERSION := 2
+## « bloc », modules. Version 3 (étape 6) : l'ARMATURE (connecteurs, poutres entre deux connecteurs, panneaux
+## remplis entre 3 ou 4 connecteurs : scripts/atelier/armature.gd), types « panneau », bloc en « boule »,
+## poutres en tube. Un plan de version 1 ou 2 se lit toujours.
+const VERSION := 3
 const PLAN_PAR_DEFAUT := "res://vaisseaux/chasseur_v27.plan.json"
 
 var donnees := {}                  # le plan tel qu'il est écrit
@@ -136,6 +138,7 @@ static func progression(a: Dictionary, c: float) -> float:
 # =====================================================================
 const POINTS := ["centre", "point", "position", "pivot"]
 const VECTEURS := ["direction", "normale", "course"]
+const LISTES_POINTS := ["sommets"]   # listes de points (coins d'un panneau)
 
 
 func _aplatir(liste: Array, arts: Array, xf: Transform3D, prefixe: String, art_herite: String, profondeur: int) -> void:
@@ -181,10 +184,12 @@ func _aplatir(liste: Array, arts: Array, xf: Transform3D, prefixe: String, art_h
 			var debut := pieces.size()
 			_aplatir(sous_pieces, sous_arts, xf2, id + "/", art, profondeur + 1)
 			if p.has("modele"):
-				# pièce toute faite posée dans l'atelier : ses morceaux savent de quelle pièce ils viennent
+				# pièce toute faite (ou élément d'armature) posée dans l'atelier : ses morceaux savent de quelle
+				# pièce ils viennent
 				for k in range(debut, pieces.size()):
 					pieces[k]["ajout"] = id
 					pieces[k]["nom_ajout"] = String(p.get("nom", id))
+					pieces[k]["modele_ajout"] = String(p["modele"])
 			continue
 		pieces.append(_placer_piece(p, xf, id, art))
 
@@ -205,6 +210,12 @@ func _placer_piece(p: Dictionary, xf: Transform3D, id: String, art: String) -> D
 	for k in VECTEURS:
 		if q.has(k):
 			q[k] = b * Catalogue.vecteur(q[k])
+	for k in LISTES_POINTS:
+		if q.has(k) and q[k] is Array:
+			var placees := []
+			for x in q[k]:
+				placees.append(xf * Catalogue.vecteur(x))
+			q[k] = placees
 	for k in ["direction", "normale"]:
 		if q.has(k) and (q[k] as Vector3).length() > 0.0:
 			q[k] = (q[k] as Vector3).normalized()
@@ -244,6 +255,9 @@ func _champs_presents(p: Dictionary, t: String, id: String) -> bool:
 			ok = false
 	if ok and p.has("matiere") and p["matiere"] != null and not Catalogue.MATIERES.has(String(p["matiere"])):
 		erreurs.append("pièce « %s » : matière « %s » inconnue" % [id, p["matiere"]])
+		ok = false
+	if ok and t == "panneau" and (not p["sommets"] is Array or not ((p["sommets"] as Array).size() in [3, 4])):
+		erreurs.append("panneau « %s » : il faut 3 ou 4 coins" % id)
 		ok = false
 	return ok
 

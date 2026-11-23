@@ -14,6 +14,10 @@ extends RefCounted
 ##     au-dessus des roues), chaque amortisseur porte-t-il sa part du poids sans aller en butée ;
 ##   - EN VOL : moteurs, décollage, rotation possible sur chaque axe, poussée réduite par un couple ;
 ##   - SYMÉTRIE : centre de gravité sur le côté, pièces sans jumelle (pour information).
+## Étape 6, l'ARMATURE : un morceau d'armature posé à la fois sur deux pièces qui bougent l'une par rapport
+## à l'autre (une aile et le fuselage) reste avec le fuselage, et avertit (il bloquerait l'aile dans la
+## réalité) ; ses connecteurs (fabriqués tout seuls) ne comptent pas dans les pièces posées ; dans l'air,
+## seuls ses panneaux « portants » comptent pour l'instant (pour information).
 ## Chaque point a un NIVEAU (réponse de Gwenaël, Q21) :
 ##   - "bloque" : ce qui casserait le jeu (plan illisible, pièce qui flotte, vaisseau trop lourd pour le PC) :
 ##     le vol ne part pas ;
@@ -33,6 +37,7 @@ const Catalogue = preload("res://scripts/atelier/catalogue.gd")
 const DessinVaisseau = preload("res://scripts/dessin_vaisseau.gd")
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
 const Style = preload("res://scripts/atelier/style.gd")
+const Armature = preload("res://scripts/atelier/armature.gd")
 
 const BLOQUE := "bloque"
 const AVERTIT := "avertit"
@@ -94,6 +99,7 @@ func _init(p_plan, p_analyse = null, p_options := {}) -> void:
 	analyse = p_analyse if p_analyse != null else Analyse.new(plan)
 	v = analyse.v
 	_plan_tient()
+	_armature()
 	_vitesse_pc()
 	_lumiere()
 	_au_sol()
@@ -217,7 +223,7 @@ func _vitesse_pc() -> void:
 	var phys_ms := PAS_PAR_IMAGE * FACTEUR_PC * US_PAR_POUSSEE * 1e-3 * float(poussees - int(ref["poussees"]))
 	var longueur := _boite().size
 	charge = {"compte": c, "sans_fusion": sans_fusion, "cockpit": ck, "unites": u, "part": part, "ips": ips,
-		"poussees": poussees, "physique_ms": phys_ms, "pieces_posees": analyse.ajouts.size(), "taille": longueur,
+		"poussees": poussees, "physique_ms": phys_ms, "pieces_posees": _nb_posees(), "taille": longueur,
 		"surfaces": int(c["surfaces"]) + int(ck["surfaces"]), "triangles": int(c["triangles"]) + int(ck["triangles"])}
 	var texte := "Dessin : %s %% du chasseur de départ (%s surfaces, %s triangles%s). Physique : %s moteurs et propulseurs%s. " % [
 		Analyse.nombre(100.0 * part), Analyse.nombre(charge["surfaces"]), Analyse.nombre(charge["triangles"]),
@@ -235,7 +241,7 @@ func _vitesse_pc() -> void:
 		_ajouter(AVERTIT, "Vitesse du PC", "Le jeu risque de ralentir : environ %d images par seconde" % roundi(ips), texte, valeur)
 	else:
 		_ajouter(OK, "Vitesse du PC", "Vitesse du PC : environ %d images par seconde" % roundi(ips), texte, valeur)
-	var n: int = analyse.ajouts.size()
+	var n: int = _nb_posees()
 	if n > PIECES_POSEES_MAX:
 		_ajouter(AVERTIT, "Vitesse du PC", "%d pièces posées : plus que les %d prévues au début" % [n, PIECES_POSEES_MAX],
 			"La limite de départ était de %d pièces posées (question 7). Le jeu peut aller au-delà si ton PC suit : essaie, et regarde le compteur d'images." % PIECES_POSEES_MAX, "%d" % n)
@@ -263,11 +269,44 @@ func _boite() -> AABB:
 					b = b.expand(p[k])
 	for id in analyse.ajouts:
 		var e: Dictionary = analyse.ajouts[id]
-		var bb := Pieces.boite(String(e["modele"]), e.get("reglages", {}))
+		var bb := Analyse.boite_ajout(e)
 		var xf := Edition.xf_de(e)
 		for k in 8:
 			b = b.expand(xf * bb.get_endpoint(k))
 	return b
+
+
+## Pièces posées (toutes faites, poutres et panneaux ; les connecteurs se fabriquent tout seuls).
+func _nb_posees() -> int:
+	return analyse.ajouts.keys().filter(func(i): return String(analyse.ajouts[i].get("modele", "")) != Armature.CONNECTEUR).size()
+
+
+# =====================================================================
+# ARMATURE
+# =====================================================================
+## Un morceau d'armature tenu par deux pièces qui bougent l'une par rapport à l'autre ; ce que voit l'air.
+func _armature() -> void:
+	if analyse.armature.is_empty():
+		return
+	var g := Armature.graphe(plan.donnees)
+	for m in Armature.morceaux(g):
+		var arts: Array = (m["articulations"] as Dictionary).keys()
+		if arts.size() < 2:
+			continue
+		var noms := PackedStringArray()
+		for a in arts:
+			noms.append(Analyse._majuscule(Analyse._mots(String(a)))
+				if String(a) != "" else "le fuselage")
+		var elts: Array = (m["connecteurs"] as Array).filter(func(c): return String(g["connecteurs"][c].get("fixe_a", "")) != "") \
+			.map(func(c): return {"genre": "ajout", "id": String(c)})
+		_ajouter(AVERTIT, "Plan", "Une armature relie des pièces qui bougent l'une par rapport à l'autre",
+			"Ses connecteurs sont posés sur %s : elle reste avec le fuselage, et dans un vrai vaisseau elle empêcherait la pièce mobile de bouger. Enlève une poutre, ou pose ce morceau sur une seule pièce." % " et ".join(noms),
+			_pluriel((m["poutres"] as Array).size(), "poutre"), _groupe(elts))
+	var portants: Array = analyse.armature.keys().filter(func(i): return String(analyse.armature[i].get("modele", "")) == Armature.PANNEAU \
+		and String((analyse.armature[i].get("reglages", {}) as Dictionary).get("portant", "non")) == "oui")
+	_ajouter(INFO, "En vol", "L'air ne voit que les surfaces d'aile de l'armature",
+		"%s porte dans l'air comme une aile. Le reste de l'armature (tôles, vitres) compte pour la masse et le dessin, pas encore pour la traînée : elle viendra avec l'analyse de la coque construite." % _pluriel(portants.size(), "panneau"),
+		"%d" % portants.size())
 
 
 # =====================================================================

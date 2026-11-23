@@ -28,6 +28,12 @@ extends Node3D
 ## jeu (pièce qui flotte, vaisseau trop lourd pour le PC) ; pour un simple avertissement, une fenêtre
 ## explique et propose « Lancer quand même ».
 ##
+## Étape 6 : l'ARMATURE (scripts/atelier/armature.gd). Dans le catalogue, « Armature : tracer des poutres »
+## (clic, clic : une poutre ; les suivantes partent du bout de la dernière ; finir sur une poutre la coupe en
+## T ; les connecteurs se font tout seuls) et « Armature : remplir une zone » (une zone fermée par 3 ou 4
+## poutres s'allume en vert : clic pour y mettre un panneau). G sur un connecteur le déplace (ses poutres et
+## ses panneaux suivent). Symétrie (M), annuler, enregistrer : comme les pièces posées.
+##
 ## Visuel PROVISOIRE (hangar, menus, couleurs, dessin des pièces posées). La physique, elle, est la vraie :
 ## après chaque changement, le vaisseau est reconstruit par le même code que le jeu (plan → physique), il se
 ## repose sur ses roues, et le tableau ingénieur est recalculé.
@@ -45,6 +51,7 @@ const Edition = preload("res://scripts/atelier/edition.gd")
 const Pieces = preload("res://scripts/atelier/pieces_toutes_faites.gd")
 const DessinVaisseau = preload("res://scripts/dessin_vaisseau.gd")
 const ControleVol = preload("res://scripts/atelier/controle_vol.gd")
+const Armature = preload("res://scripts/atelier/armature.gd")
 
 const MODELE_EXTERIEUR := "res://modeles/vaisseau/vaisseau_exterieur.glb"
 const MODELE_COCKPIT := "res://modeles/vaisseau/cockpit.glb"
@@ -59,6 +66,9 @@ const GRILLE := 0.1                      # m : pas de la grille de pose (Ctrl : 
 const PAS_ROTATION := 15.0               # degrés
 const MARGE_CONTACT := 0.04              # m : une pièce à moins de 4 cm d'une autre la touche
 const SAUVEGARDE_AUTO_S := 120.0
+const AIDE_POUTRE := "Clic : départ, clic : arrivée (les poutres s'enchaînent)   ·   sur une poutre : la couper (connecteur en T)   ·   Ctrl : sans la grille   ·   Maj : le long d'un axe   ·   M : symétrie   ·   Échap ou clic droit : lâcher le départ, puis arrêter"
+const AIDE_REMPLIR := "Clic sur une zone verte : la remplir (une zone déjà remplie prend ces réglages)   ·   M : symétrie   ·   Échap ou clic droit : arrêter"
+const AIDE_DEPLACER := "Clic : poser le connecteur là   ·   Ctrl : sans la grille   ·   Maj : le long d'un axe   ·   Échap ou clic droit : annuler"
 const AIDE := "Molette (ou Alt + clic) : tourner   ·   Maj + molette : déplacer   ·   Roulette : zoom   ·   Clic : choisir (Ctrl : plusieurs)   ·   I : salle à part   ·   G : déplacer la pièce   ·   Maj + D : dupliquer   ·   Suppr : enlever   ·   Ctrl + Z / Ctrl + Y : annuler / refaire   ·   M : symétrie   ·   Ctrl + S : enregistrer"
 const AIDE_POSE := "Clic : poser (Maj + clic : en poser d'autres)   ·   R / T / E : tourner de 15° (Maj : dans l'autre sens)   ·   Ctrl : sans la grille de 10 cm   ·   M : symétrie   ·   Échap ou clic droit : annuler"
 
@@ -115,6 +125,8 @@ var pose := {}                           # pièce en train d'être posée (vide 
 var _fantome: Node3D
 var _fantome_jumeau: Node3D
 var _cache_pendant_pose: Array = []
+var trace := {}                          # outil de l'armature en cours (vide : aucun) : voir commencer_trace
+var _trace_visuel: Node3D
 
 # interface
 var ui: Control
@@ -410,6 +422,10 @@ func _rafraichir() -> void:
 	_rechoisir()
 	if not pose.is_empty():
 		_maj_pose_exclusions()
+	if not trace.is_empty():
+		_maj_trace()
+		if not trace.is_empty():
+			_fiche_trace()
 	_verifier_dans = 2
 
 
@@ -707,6 +723,8 @@ func _repere_piece(p: Dictionary) -> Node3D:
 func choisir(genre: String, id: String, garder_pose := false) -> void:
 	if not garder_pose and not pose.is_empty():
 		finir_pose()
+	if not garder_pose and not trace.is_empty():
+		finir_trace()
 	selection = {"genre": genre, "id": id}
 	var ids := _montrer_choix()
 	match genre:
@@ -751,6 +769,8 @@ func choisir(genre: String, id: String, garder_pose := false) -> void:
 func choisir_groupe(elements: Array, garder_pose := false) -> void:
 	if not garder_pose and not pose.is_empty():
 		finir_pose()
+	if not garder_pose and not trace.is_empty():
+		finir_trace()
 	var propres := []
 	var vus := {}
 	for e in elements:
@@ -926,8 +946,13 @@ func _appliquer_salle() -> void:
 	while encore:
 		encore = false
 		for a in analyse.ajouts:
-			var sur := String(analyse.ajouts[a].get("fixe_a", ""))
-			if not cles.has(a) and sur != "" and cles.has(sur):
+			var ea: Dictionary = analyse.ajouts[a]
+			var sur := String(ea.get("fixe_a", ""))
+			# l'armature : une poutre ou un panneau suit ses connecteurs, un connecteur ses poutres
+			var lie := (ea.get("noeuds", []) as Array).any(func(n): return cles.has(String(n)))
+			if not lie and String(ea["modele"]) == Armature.CONNECTEUR:
+				lie = Armature.poutres_de(Armature.graphe(plan.donnees), a).any(func(q): return cles.has(q))
+			if not cles.has(a) and ((sur != "" and cles.has(sur)) or lie):
 				cles[a] = true
 				for i in _pieces_de({"genre": "ajout", "id": a}):
 					ids[i] = true
@@ -1218,6 +1243,9 @@ func _unhandled_input(e: InputEvent) -> void:
 		elif b.button_index == MOUSE_BUTTON_RIGHT and b.pressed and not pose.is_empty():
 			finir_pose()
 			get_viewport().set_input_as_handled()
+		elif b.button_index == MOUSE_BUTTON_RIGHT and b.pressed and not trace.is_empty():
+			lacher_trace()
+			get_viewport().set_input_as_handled()
 	elif e is InputEventMouseMotion:
 		_souris = (e as InputEventMouseMotion).position
 		_demande_survol = _souris
@@ -1231,7 +1259,9 @@ func _unhandled_input(e: InputEvent) -> void:
 			return
 		match k.keycode:
 			KEY_ESCAPE:
-				if not pose.is_empty():
+				if not trace.is_empty():
+					lacher_trace()
+				elif not pose.is_empty():
 					finir_pose()
 				elif selection.is_empty() and not salle.is_empty():
 					sortir_salle()
@@ -1267,6 +1297,7 @@ func _unhandled_input(e: InputEvent) -> void:
 					dupliquer_selection()
 			KEY_M:
 				case_symetrie.button_pressed = not case_symetrie.button_pressed
+				_demande_survol = _souris
 			KEY_R, KEY_T, KEY_E:
 				if not pose.is_empty():
 					var s := -1 if k.shift_pressed else 1
@@ -1293,6 +1324,9 @@ func _physics_process(_delta: float) -> void:
 		if not pose.is_empty():
 			calculer_pose(pos)
 			valider_pose()
+		elif not trace.is_empty():
+			calculer_trace(pos)
+			valider_trace()
 		else:
 			var id := piece_sous(pos)
 			var genre := "ajout" if analyse.ajouts.has(id) else "piece"
@@ -1310,6 +1344,12 @@ func _physics_process(_delta: float) -> void:
 			if not camera.glisse_en_cours():
 				calculer_pose(pos)
 			bulle.visible = false
+		elif not trace.is_empty():
+			if not camera.glisse_en_cours():
+				calculer_trace(pos)
+			bulle.text = String(trace["texte"])
+			bulle.visible = bulle.text != "" and not camera.glisse_en_cours()
+			bulle.position = pos + Vector2(16, 14)
 		else:
 			var id := "" if camera.glisse_en_cours() else piece_sous(pos)
 			_survoler(id, pos)
@@ -1336,7 +1376,7 @@ func _survoler(id: String, pos: Vector2) -> void:
 		return
 	if analyse.ajouts.has(id):
 		var e: Dictionary = analyse.ajouts[id]
-		bulle.text = "%s · %s%s" % [String(e.get("nom", id)), Pieces.resume(String(e["modele"]), e.get("reglages", {})),
+		bulle.text = "%s · %s%s" % [String(e.get("nom", id)), Analyse.resume_ajout(e),
 			"   (ne touche rien)" if flottantes.has(id) else ""]
 	else:
 		var p: Dictionary = analyse.piece(id)
@@ -1381,6 +1421,7 @@ func commencer_pose(modele_piece: String, reglages: Dictionary, deplace := "") -
 		return
 	if not pose.is_empty():
 		finir_pose()
+	finir_trace()
 	if deplace == "":
 		deselectionner()
 	var base := Basis.IDENTITY
@@ -1603,6 +1644,513 @@ func valider_pose() -> void:
 
 
 # =====================================================================
+# L'ARMATURE : TRACER DES POUTRES, REMPLIR DES ZONES, DÉPLACER UN CONNECTEUR (étape 6)
+# =====================================================================
+## Commence un outil de l'armature. outil : "poutre" (clic, clic : une poutre ; les suivantes partent du
+## bout de la dernière), "remplir" (clic sur une zone fermée par 3 ou 4 poutres), "deplacer" (le connecteur
+## depart["noeud"] suit la souris ; clic : le poser). reglages : ceux des poutres ou des panneaux.
+func commencer_trace(outil: String, reglages := {}, depart := {}) -> void:
+	finir_pose()
+	finir_trace()
+	var modele := Armature.PANNEAU if outil == "remplir" else Armature.POUTRE
+	if outil != "deplacer":
+		deselectionner()
+	trace = {"outil": outil, "reglages": Armature.reglages_complets(modele, reglages), "depart": {}, "bout": {},
+		"point": Vector3.ZERO, "art": "", "pret": false, "texte": "", "refus": "", "zone": {}, "zones": [], "noeud": "",
+		"exclure": []}
+	if outil == "deplacer":
+		trace["noeud"] = String(depart.get("noeud", ""))
+	else:
+		trace["depart"] = depart.duplicate()
+	_trace_visuel = Node3D.new()
+	_trace_visuel.name = "Trace_armature"
+	corps.add_child(_trace_visuel)
+	_maj_trace()
+	aide.text = {"poutre": AIDE_POUTRE, "remplir": AIDE_REMPLIR, "deplacer": AIDE_DEPLACER}[outil]
+	_fiche_trace()
+	_demande_survol = _souris if _souris.x >= 0.0 else get_viewport().get_visible_rect().size * 0.5
+
+
+## Après un changement du plan : les zones à remplir, ce que le rayon ne doit pas toucher (le connecteur
+## qu'on déplace, ses poutres et ses panneaux).
+func _maj_trace() -> void:
+	if trace.is_empty():
+		return
+	var g := Armature.graphe(edition.donnees)
+	trace["zones"] = Armature.zones(edition.donnees, g) if trace["outil"] == "remplir" else []
+	var d: Dictionary = trace["depart"]
+	if d.has("noeud") and not g["connecteurs"].has(String(d["noeud"])):
+		trace["depart"] = {}
+	var ex := []
+	var noeud := String(trace["noeud"])
+	if noeud != "":
+		if not g["connecteurs"].has(noeud):
+			finir_trace()
+			return
+		var autour := [noeud]
+		autour.append_array(Armature.poutres_de(g, noeud))
+		for q in g["panneaux"]:
+			if (g["panneaux"][q]["noeuds"] as Array).has(noeud):
+				autour.append(q)
+		for i in autour:
+			for b in _corps_ajouts.get(i, []):
+				if is_instance_valid(b):
+					ex.append((b as StaticBody3D).get_rid())
+	trace["exclure"] = ex
+	_demande_survol = _souris
+
+
+func finir_trace() -> void:
+	if _trace_visuel != null and is_instance_valid(_trace_visuel):
+		_trace_visuel.get_parent().remove_child(_trace_visuel)
+		_trace_visuel.queue_free()
+	_trace_visuel = null
+	var en_cours := not trace.is_empty()
+	trace = {}
+	if not en_cours:
+		return
+	if aide != null:
+		aide.text = AIDE
+	if arbre != null:
+		var it := arbre.get_selected()
+		if it != null and it.get_metadata(0) is Dictionary and String(it.get_metadata(0)["genre"]) == "modele_armature":
+			arbre.deselect_all()
+	if selection.is_empty() and fiche != null:
+		fiche.visible = false
+
+
+## Échap (ou clic droit) : on lâche le départ de la poutre ; sans départ, l'outil s'arrête.
+func lacher_trace() -> void:
+	if trace["outil"] == "poutre" and not (trace["depart"] as Dictionary).is_empty():
+		trace["depart"] = {}
+		_demande_survol = _souris
+	else:
+		finir_trace()
+
+
+func calculer_trace(pos_ecran: Vector2) -> void:
+	calculer_trace_rayon(camera.project_ray_origin(pos_ecran), camera.project_ray_normal(pos_ecran))
+
+
+## Ce que vise un rayon (repère du monde) pour l'outil en cours : sert aussi aux tests.
+func calculer_trace_rayon(depart: Vector3, dir: Vector3) -> void:
+	if trace.is_empty():
+		return
+	dir = dir.normalized()
+	if trace["outil"] == "remplir":
+		_viser_zone(depart, dir)
+	else:
+		_viser_bout(depart, dir)
+	_dessiner_trace()
+
+
+## Place d'un connecteur dans le monde (dans le hangar, une aile repliée emmène les siens).
+func _monde_noeud(e: Dictionary) -> Vector3:
+	return corps.global_transform * (vaisseau_pose.transformation_articulation(String(e.get("articulation", ""))) * Armature.position(e))
+
+
+## Le bout d'une poutre sous la souris : un connecteur (sous la souris ou tout près du rayon), sinon un
+## point d'une poutre (elle sera coupée là), sinon un point d'une pièce (grille de 10 cm, Ctrl : sans), sinon
+## un point dans le vide sur le plan de construction (passe par le départ, face à la caméra le long d'un
+## axe du vaisseau). Maj : le long d'un axe du vaisseau depuis le départ.
+func _viser_bout(o: Vector3, dir: Vector3) -> void:
+	var vers_corps := corps.global_transform.affine_inverse()
+	var deplace := String(trace["noeud"])
+	var r := _rayon_monde(o, dir, trace["exclure"])
+	var touche := INF if r.is_empty() else o.distance_to(r["position"] as Vector3)
+	var bout := {}
+	var point := Vector3.ZERO
+	var art := ""
+	var texte := ""
+	# 1. un connecteur (pas celui qu'on déplace)
+	if deplace == "":
+		var meilleur := ""
+		var le_plus_pres := INF
+		for cid in analyse.armature:
+			var e: Dictionary = analyse.armature[cid]
+			if String(e["modele"]) != Armature.CONNECTEUR:
+				continue
+			var w := _monde_noeud(e)
+			var loin := (w - o).dot(dir)
+			if loin <= 0.0 or loin > touche + 0.3:
+				continue
+			var ecart := (w - o - dir * loin).length()
+			if ecart <= maxf(0.06, loin * 0.012) and loin < le_plus_pres:
+				le_plus_pres = loin
+				meilleur = cid
+		if meilleur != "":
+			var e2: Dictionary = analyse.armature[meilleur]
+			bout = {"noeud": meilleur}
+			point = Armature.position(e2)
+			art = String(e2.get("articulation", ""))
+			texte = "sur %s" % analyse.nom_element(meilleur)
+	if bout.is_empty() and not r.is_empty():
+		var sid := String(r["collider"].get_meta("piece", ""))
+		art = _articulation_de(sid)
+		var a_inv: Transform3D = vaisseau_pose.transformation_articulation(art).affine_inverse()
+		point = a_inv * (vers_corps * (r["position"] as Vector3))
+		var n := (a_inv.basis * (vers_corps.basis * (r["normal"] as Vector3))).normalized()
+		var e3: Dictionary = analyse.armature.get(sid, {})
+		if not e3.is_empty() and String(e3["modele"]) == Armature.POUTRE:
+			var nn: Array = e3["noeuds"]
+			var pa := Armature.position(analyse.armature.get(String(nn[0]), {}))
+			var pb := Armature.position(analyse.armature.get(String(nn[1]), {}))
+			point = Geometry3D.get_closest_point_to_segment(point, pa, pb)
+			bout = {"point": point, "poutre": sid}
+			texte = "coupe %s (connecteur en T)" % analyse.nom_element(sid)
+		else:
+			if not Input.is_key_pressed(KEY_CTRL):
+				point = sur_grille(point, n)
+			bout = {"point": point, "fixe_a": sid, "articulation": art}
+			texte = "posé sur %s" % analyse.nom_element(sid)
+	if bout.is_empty():
+		# dans le vide : le plan de construction passe par le départ (ou le connecteur déplacé)
+		var origine := Vector3.ZERO
+		var art_o := ""
+		var d: Dictionary = trace["depart"]
+		var e_o: Dictionary = analyse.armature.get(deplace if deplace != "" else String(d.get("noeud", "")), {})
+		if not e_o.is_empty():
+			origine = Armature.position(e_o)
+			art_o = String(e_o.get("articulation", ""))
+		elif d.has("point"):
+			origine = d["point"]
+			art_o = String(d.get("articulation", ""))
+		else:
+			origine = analyse.v.centre_gravite
+		var xf_o: Transform3D = corps.global_transform * vaisseau_pose.transformation_articulation(art_o)
+		var axe := Vector3.RIGHT
+		for a in [Vector3.RIGHT, Vector3.UP, Vector3.BACK]:
+			if absf((xf_o.basis * a).normalized().dot(dir)) > absf((xf_o.basis * axe).normalized().dot(dir)):
+				axe = a
+		var x = Plane((xf_o.basis * axe).normalized(), xf_o * origine).intersects_ray(o, dir)
+		if x == null:
+			trace["pret"] = false
+			return
+		point = xf_o.affine_inverse() * (x as Vector3)
+		if not Input.is_key_pressed(KEY_CTRL):
+			point = sur_grille(point, axe)
+		art = art_o
+		bout = {"point": point, "fixe_a": "", "articulation": ""}
+		texte = "dans le vide"
+	# Maj : le long d'un axe du vaisseau depuis le départ (ou depuis la place du connecteur déplacé)
+	var p0 = null
+	if deplace != "":
+		p0 = Armature.position(analyse.armature[deplace])
+	elif not (trace["depart"] as Dictionary).is_empty():
+		p0 = Edition._point_du_bout(trace["depart"], edition.donnees)
+	if Input.is_key_pressed(KEY_SHIFT) and p0 != null and not bout.has("noeud"):
+		var dd := point - (p0 as Vector3)
+		var k := 0
+		for i in 3:
+			if absf(dd[i]) > absf(dd[k]):
+				k = i
+		var seul := Vector3.ZERO
+		seul[k] = dd[k]
+		point = (p0 as Vector3) + seul
+		bout = {"point": point, "fixe_a": "", "articulation": ""}
+		texte = "le long de l'axe %s" % ["gauche-droite", "haut-bas", "avant-arrière"][k]
+	if symetrie and not bout.has("noeud") and absf(point.x) <= Armature.SUR_L_AXE:
+		point.x = 0.0
+		bout["point"] = point
+	trace["bout"] = bout
+	trace["point"] = point
+	trace["art"] = art
+	trace["pret"] = true
+	trace["refus"] = ""
+	if deplace != "":
+		trace["texte"] = "%s → %s · %s" % [analyse.nom_element(deplace), Analyse.vecteur_txt(point), texte]
+	elif p0 != null:
+		var l := (p0 as Vector3).distance_to(point)
+		if l < Armature.LONGUEUR_MIN:
+			trace["refus"] = "trop courte (5 cm au moins)"
+		elif l > Armature.LONGUEUR_MAX:
+			trace["refus"] = "trop longue (25 m au plus)"
+		trace["pret"] = trace["refus"] == ""
+		trace["texte"] = "%s · %s%s" % [Analyse.longueur_txt(l), texte, "" if trace["pret"] else "   (%s)" % trace["refus"]]
+	else:
+		trace["texte"] = "départ : " + texte
+
+
+## La zone fermée sous la souris (devant la coque) : libre, ou déjà remplie (elle prend alors les réglages).
+func _viser_zone(o: Vector3, dir: Vector3) -> void:
+	var r := _rayon_monde(o, dir)
+	var touche := INF if r.is_empty() else o.distance_to(r["position"] as Vector3)
+	var meilleure := {}
+	var loin_min := INF
+	for z in trace["zones"]:
+		var pts := (z["noeuds"] as Array).map(func(i): return _monde_noeud(analyse.armature.get(String(i), {})))
+		for t in Catalogue.triangles_panneau(pts):
+			var x = Geometry3D.ray_intersects_triangle(o, dir, pts[t[0]], pts[t[1]], pts[t[2]])
+			if x != null and o.distance_to(x) < loin_min:
+				loin_min = o.distance_to(x)
+				meilleure = z
+	if loin_min > touche + 0.15:
+		meilleure = {}   # cachée par la coque
+	trace["zone"] = meilleure
+	trace["pret"] = not meilleure.is_empty()
+	if meilleure.is_empty():
+		trace["texte"] = ""
+		return
+	var e_r := String(meilleure["rempli"])
+	var pts_plan := (meilleure["noeuds"] as Array).map(func(i): return Armature.position(analyse.armature.get(String(i), {})))
+	var surface := Catalogue.surface_panneau(pts_plan)
+	trace["texte"] = ("%s (déjà remplie : clic pour lui donner ces réglages)" % analyse.nom_element(e_r)) if e_r != "" \
+		else "Zone libre · %d coins · %s m²%s" % [pts_plan.size(), Analyse.nombre(surface, 2), "" if bool(meilleure["a_plat"]) else " (pas à plat : deux triangles pliés)"]
+
+
+## Les fantômes : la poutre (et le connecteur au bout) ou la zone, en vert (rouge : impossible), et leurs
+## jumeaux de l'autre côté.
+func _dessiner_trace() -> void:
+	if _trace_visuel == null:
+		return
+	for c in _trace_visuel.get_children():
+		_trace_visuel.remove_child(c)
+		c.queue_free()
+	var m: StandardMaterial3D = _materiau_fantome if bool(trace["pret"]) else _materiau_fantome_rouge
+	var cotes := [1.0, -1.0] if symetrie else [1.0]
+	if trace["outil"] == "remplir":
+		var z: Dictionary = trace["zone"]
+		if z.is_empty():
+			return
+		var cam := corps.global_transform.affine_inverse() * camera.global_position
+		for s in cotes:
+			var pts := []
+			for i in z["noeuds"]:
+				var e: Dictionary = analyse.armature.get(String(i), {})
+				var art := String(e.get("articulation", ""))
+				var p := Armature.position(e)
+				if s < 0.0:
+					p.x = -p.x
+					art = edition.nom_miroir(art)
+				pts.append(vaisseau_pose.transformation_articulation(art) * p)
+			var n := Armature.normale(pts).normalized()
+			var c0 := Vector3.ZERO
+			for p in pts:
+				c0 += p
+			c0 /= float(pts.size())
+			var vers := 0.012 if (cam - c0).dot(n) >= 0.0 else -0.012
+			var st := SurfaceTool.new()
+			st.begin(Mesh.PRIMITIVE_TRIANGLES)
+			for t in Catalogue.triangles_panneau(pts):
+				for k in t:
+					st.set_normal(n)
+					st.add_vertex((pts[k] as Vector3) + n * vers)
+			var mi := MeshInstance3D.new()
+			mi.mesh = st.commit()
+			mi.material_override = m
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_trace_visuel.add_child(mi)
+		return
+	if (trace["bout"] as Dictionary).is_empty():
+		return
+	var r: Dictionary = trace["reglages"]
+	var section := float(r.get("section_m", 0.08))
+	var bout_art := String(trace["art"])
+	var p1: Vector3 = trace["point"]
+	var depart = null
+	var art0 := ""
+	var deplace := String(trace["noeud"])
+	var voisins := []   # [place, articulation] des bouts des poutres qui suivent (outil déplacer)
+	if deplace != "":
+		var g := Armature.graphe(edition.donnees)
+		for x in g["voisins"].get(deplace, []):
+			var ev: Dictionary = g["connecteurs"][String(x[0])]
+			voisins.append([Armature.position(ev), String(ev.get("articulation", ""))])
+			section = maxf(section, float(Armature.reglages_complets(Armature.POUTRE, g["poutres"][String(x[1])].get("reglages", {}))["section_m"]))
+	elif not (trace["depart"] as Dictionary).is_empty():
+		depart = Edition._point_du_bout(trace["depart"], edition.donnees)
+		var e0: Dictionary = analyse.armature.get(String((trace["depart"] as Dictionary).get("noeud", "")), {})
+		art0 = String(e0.get("articulation", (trace["depart"] as Dictionary).get("articulation", "")))
+		if depart != null:
+			voisins.append([depart, art0])
+	var rayon := maxf(section * Armature.DIAMETRE_CONNECTEUR * 0.5, 0.025)
+	for s in cotes:
+		if s < 0.0 and absf(p1.x) <= Armature.SUR_L_AXE and voisins.all(func(v): return absf((v[0] as Vector3).x) <= Armature.SUR_L_AXE):
+			continue   # sur l'axe : son propre jumeau
+		var xf1: Transform3D = vaisseau_pose.transformation_articulation(bout_art if s > 0.0 else edition.nom_miroir(bout_art))
+		var q1 := xf1 * Vector3(p1.x * s, p1.y, p1.z)
+		_fantome_boule(q1, rayon, m)
+		for v in voisins:
+			var xf0: Transform3D = vaisseau_pose.transformation_articulation(String(v[1]) if s > 0.0 else edition.nom_miroir(String(v[1])))
+			var q0 := xf0 * Vector3((v[0] as Vector3).x * s, (v[0] as Vector3).y, (v[0] as Vector3).z)
+			if deplace == "":
+				_fantome_boule(q0, rayon, m)
+			if q0.distance_to(q1) > 1e-4:
+				var mi := MeshInstance3D.new()
+				mi.mesh = DessinVaisseau._forme("cylindre", Vector3(section * 0.5, section * 0.5, q0.distance_to(q1)))
+				mi.transform = Transform3D(Armature.base_z(q1 - q0) * Basis(Vector3.RIGHT, PI * 0.5), (q0 + q1) * 0.5)
+				mi.material_override = m
+				mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				_trace_visuel.add_child(mi)
+
+
+func _fantome_boule(p: Vector3, rayon: float, m: Material) -> void:
+	var mi := MeshInstance3D.new()
+	mi.mesh = DessinVaisseau._forme("boule", Vector3.ONE * rayon)
+	mi.position = p
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_trace_visuel.add_child(mi)
+
+
+## Le clic de l'outil : une poutre (et on continue depuis son bout), une zone remplie, un connecteur posé.
+func valider_trace() -> void:
+	if trace.is_empty() or not bool(trace["pret"]):
+		if not trace.is_empty() and String(trace["refus"]) != "":
+			montrer_avis("Poutre impossible ici : %s." % trace["refus"])
+		return
+	match String(trace["outil"]):
+		"poutre":
+			var depart: Dictionary = trace["depart"]
+			if depart.is_empty():
+				trace["depart"] = (trace["bout"] as Dictionary).duplicate()
+				_demande_survol = _souris
+				return
+			var res: Dictionary = edition.tracer_poutre(depart, trace["bout"], trace["reglages"], symetrie)
+			if String(res["erreur"]) != "":
+				montrer_avis("Poutre refusée : %s." % res["erreur"])
+				return
+			trace["depart"] = {"noeud": String(res["fin"])}
+		"remplir":
+			var z: Dictionary = trace["zone"]
+			if String(z["rempli"]) != "":
+				edition.repeindre(String(z["rempli"]), trace["reglages"])
+			elif edition.remplir(z["noeuds"], trace["reglages"], symetrie).is_empty():
+				montrer_avis("Cette zone ne peut pas être remplie.")
+		"deplacer":
+			var noeud := String(trace["noeud"])
+			var b: Dictionary = trace["bout"]
+			var refus: String = edition.deplacer_noeud(noeud, trace["point"], String(b.get("fixe_a", "")), String(b.get("articulation", "")))
+			if refus != "":
+				montrer_avis("Déplacement refusé : %s." % refus)
+				return
+			finir_trace()
+			selection = {"genre": "ajout", "id": noeud}
+
+
+## La fiche pendant un outil : ce qu'il fait, les réglages des prochaines poutres ou des prochains panneaux.
+func _fiche_trace() -> void:
+	if fiche == null:
+		return
+	var outil := String(trace["outil"])
+	var titres := {"poutre": "Tracer des poutres", "remplir": "Remplir des zones", "deplacer": "Déplacer un connecteur"}
+	var notes := {
+		"poutre": "Clic : le départ (un connecteur, une poutre, la coque ou le vide), clic : l'arrivée. La poutre suivante part du bout de la dernière (Échap : lâcher le départ ; encore Échap : arrêter). Finir sur une poutre la coupe : connecteur en T. Les connecteurs se fabriquent tout seuls. Grille de 10 cm (Ctrl : sans), Maj : le long d'un axe du vaisseau, M : symétrie.",
+		"remplir": "Une zone fermée par 3 ou 4 poutres s'allume en vert sous la souris : clic pour la remplir d'un panneau (une zone déjà remplie prend ces réglages). Une diagonale coupe un carré en deux triangles. Échap : arrêter.",
+		"deplacer": "Le connecteur suit la souris (grille de 10 cm, Ctrl : sans, Maj : le long d'un axe) ; ses poutres et ses panneaux suivent, son jumeau aussi. Clic : le poser là. Échap : annuler."}
+	var sous: String = "armature · " + (("prochaines poutres : " if outil == "poutre" else "prochains panneaux : ")
+		+ Armature.texte_reglages(Armature.PANNEAU if outil == "remplir" else Armature.POUTRE, trace["reglages"])
+		if outil != "deplacer" else analyse.nom_element(String(trace["noeud"])))
+	_afficher_fiche({"titre": titres[outil], "sous_titre": sous, "lignes": [], "note": notes[outil]})
+	if outil != "deplacer":
+		var modele := Armature.PANNEAU if outil == "remplir" else Armature.POUTRE
+		fiche_outils.add_child(Style.label("RÉGLAGES", 11, Style.TEXTE_DOUX))
+		_controles_reglages(modele, trace["reglages"], func(cle, x):
+			var r: Dictionary = (trace["reglages"] as Dictionary).duplicate()
+			r[cle] = x
+			trace["reglages"] = Armature.reglages_complets(modele, r)
+			fiche_sous_titre.text = "armature · %s%s" % ["prochaines poutres : " if outil == "poutre" else "prochains panneaux : ",
+				Armature.texte_reglages(modele, trace["reglages"])]
+			_demande_survol = _souris)
+	if outil == "remplir":
+		_bouton_fiche("Remplir toutes les zones libres", func():
+			var n: int = edition.remplir_tout(trace["reglages"], symetrie)
+			montrer_avis("%s." % ("Aucune zone libre" if n == 0 else "%d zone%s remplie%s (Ctrl + Z pour les enlever)" % [n, "s" if n > 1 else "", "s" if n > 1 else ""])))
+	_bouton_fiche("Terminer   (Échap)", finir_trace)
+
+
+## Les réglages d'un modèle de l'armature (listes de choix, nombres) ; quand(cle, valeur) à chaque changement.
+func _controles_reglages(modele: String, r: Dictionary, quand: Callable) -> void:
+	for d in Armature.MODELES[modele]["reglages"]:
+		var cle: String = d["cle"]
+		var ligne := HBoxContainer.new()
+		var nom := Style.label(String(d["nom"]), 13, Style.TEXTE)
+		nom.custom_minimum_size = Vector2(130, 0)
+		ligne.add_child(nom)
+		if d.has("choix"):
+			var o := OptionButton.new()
+			o.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			o.focus_mode = Control.FOCUS_NONE
+			o.fit_to_longest_item = false
+			o.clip_text = true
+			o.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			o.custom_minimum_size = Vector2(150, 0)
+			var choix: Array = d["choix"]
+			for k in choix.size():
+				var c := String(choix[k])
+				o.add_item(Analyse._majuscule(Armature.nom_matiere(c)) if Catalogue.MATIERES.has(c) else String(Armature.NOMS_CHOIX.get(c, c)), k)
+				if c == String(r[cle]):
+					o.select(k)
+			o.item_selected.connect(func(k): quand.call(cle, String(choix[k])))
+			ligne.add_child(o)
+		else:
+			var s := SpinBox.new()
+			s.min_value = float(d["min"])
+			s.max_value = float(d["max"])
+			s.step = float(d["pas"])
+			s.value = float(r[cle])
+			s.suffix = String(d["unite"])
+			s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			s.value_changed.connect(func(x): quand.call(cle, x))
+			ligne.add_child(s)
+		fiche_outils.add_child(ligne)
+
+
+## Les outils d'un élément de l'armature, dans sa fiche : ses réglages (et pour toute l'armature), la place
+## d'un connecteur, tracer à partir de lui.
+func _outils_armature(id: String) -> void:
+	var e: Dictionary = analyse.armature[id]
+	var modele := String(e["modele"])
+	var boutons := HBoxContainer.new()
+	boutons.add_theme_constant_override("separation", 4)
+	fiche_outils.add_child(boutons)
+	if modele == Armature.CONNECTEUR:
+		_bouton_fiche("Déplacer (G)", deplacer_selection, boutons)
+		_bouton_fiche("Tracer d'ici", func():
+			var g := Armature.graphe(edition.donnees)
+			var ps := Armature.poutres_de(g, id)
+			commencer_trace("poutre", g["poutres"][ps[0]].get("reglages", {}) if not ps.is_empty() else {}, {"noeud": id}), boutons)
+	_bouton_fiche("Enlever (Suppr)", supprimer_selection, boutons)
+	if flottantes.has(id):
+		var l := Style.label("Elle ne touche rien : relie-la au vaisseau par une poutre, ou enlève-la.", 13, Style.ROUGE)
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		fiche_outils.add_child(l)
+	if modele == Armature.CONNECTEUR:
+		fiche_outils.add_child(Style.label("PLACE (m, repère du vaisseau, ailes ouvertes)", 11, Style.TEXTE_DOUX))
+		var ligne := HBoxContainer.new()
+		ligne.add_theme_constant_override("separation", 3)
+		var pos: Array = e.get("position", [0.0, 0.0, 0.0])
+		for k in 3:
+			var s := SpinBox.new()
+			s.min_value = -40.0
+			s.max_value = 40.0
+			s.step = 0.01
+			s.value = float(pos[k])
+			s.prefix = ["X", "Y", "Z"][k]
+			s.suffix = " m"
+			s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			s.custom_minimum_size = Vector2(80, 0)
+			s.value_changed.connect(func(x):
+				var p := Armature.position(edition.element(id))
+				p[k] = x
+				var refus: String = edition.deplacer_noeud(id, p, String(e.get("fixe_a", "")), String(e.get("articulation_appui", "")))
+				if refus != "":
+					montrer_avis("Déplacement refusé : %s." % refus))
+			ligne.add_child(s)
+		fiche_outils.add_child(ligne)
+	else:
+		fiche_outils.add_child(Style.label("RÉGLAGES", 11, Style.TEXTE_DOUX))
+		_controles_reglages(modele, Armature.reglages_complets(modele, e.get("reglages", {})), func(cle, x): edition.regler(id, cle, x))
+		var tous: Array = edition.armature(modele).map(func(x): return String(x["id"]))
+		_bouton_fiche("Appliquer ces réglages à %s (%d)" % ["toutes les poutres" if modele == Armature.POUTRE else "tous les panneaux", tous.size()],
+			func(): edition.regler_armature(tous, Armature.reglages_complets(modele, e.get("reglages", {}))))
+	_bouton_fiche("Choisir toute l'armature", func(): choisir("categorie", "armature"))
+	if String(e.get("symetrique", "")) != "" and analyse.ajouts.has(String(e["symetrique"])):
+		_bouton_fiche("Séparer de son jumeau", func(): edition.separer_symetrie(id))
+	fiche_outils.add_child(HSeparator.new())
+
+
+# =====================================================================
 # MODIFIER : enlever, déplacer, dupliquer, régler, annuler
 # =====================================================================
 func supprimer_selection() -> void:
@@ -1653,6 +2201,12 @@ func supprimer_selection() -> void:
 
 func deplacer_selection() -> void:
 	var id := _ajout_choisi()
+	if id != "" and analyse.armature.has(id):
+		if String(analyse.armature[id]["modele"]) == Armature.CONNECTEUR:
+			commencer_trace("deplacer", {}, {"noeud": id})
+		else:
+			montrer_avis("Une poutre ou un panneau suit ses connecteurs : choisis un connecteur, puis G.")
+		return
 	if id != "":
 		var e: Dictionary = analyse.ajouts[id]
 		commencer_pose(String(e["modele"]), e.get("reglages", {}), id)
@@ -1660,6 +2214,9 @@ func deplacer_selection() -> void:
 
 func dupliquer_selection() -> void:
 	var id := _ajout_choisi()
+	if id != "" and analyse.armature.has(id):
+		montrer_avis("L'armature ne se duplique pas : trace de nouvelles poutres (catalogue, « Armature »).")
+		return
 	if id != "":
 		var e: Dictionary = analyse.ajouts[id]
 		commencer_pose(String(e["modele"]), e.get("reglages", {}))
@@ -1717,6 +2274,12 @@ func verifier_flottantes() -> void:
 	var espace := get_world_3d().direct_space_state
 	for id in analyse.ajouts:
 		contacts[id] = contacts_de(id, espace)
+	# l'armature tient aussi par ses liens : une poutre ou un panneau à ses connecteurs, et l'inverse
+	for id in analyse.armature:
+		for n in analyse.armature[id].get("noeuds", []):
+			if contacts.has(String(n)):
+				(contacts[id] as Array).append(String(n))
+				(contacts[String(n)] as Array).append(id)
 	var encore := true
 	while encore:
 		encore = false
@@ -1747,7 +2310,7 @@ func verifier_flottantes() -> void:
 ## Ce que touche une pièce posée (ids des pièces du chasseur ou des autres pièces posées).
 func contacts_de(id: String, espace: PhysicsDirectSpaceState3D) -> Array:
 	var e: Dictionary = analyse.ajouts[id]
-	var bb := Pieces.boite(String(e["modele"]), e.get("reglages", {}))
+	var bb := Analyse.boite_ajout(e)
 	var xf: Transform3D = corps.global_transform * vaisseau_pose.transformation_articulation(String(e.get("articulation", ""))) * Edition.xf_de(e)
 	var centre := xf * bb.get_center()
 	var b := xf.basis.orthonormalized()
@@ -2310,6 +2873,9 @@ func _bouton_fiche(texte: String, quand: Callable, parent: Control = null) -> Bu
 
 ## Les réglages d'une pièce posée (poussée, dimensions, matière…), sa place, et ses boutons.
 func _outils_ajout(id: String) -> void:
+	if analyse.armature.has(id):
+		_outils_armature(id)
+		return
 	var e: Dictionary = analyse.ajouts[id]
 	var modele_piece := String(e["modele"])
 	var r: Dictionary = Pieces.reglages_complets(modele_piece, e.get("reglages", {}))
@@ -2445,6 +3011,32 @@ func remplir_catalogue() -> void:
 		it.set_metadata(0, {"genre": "modele", "id": str(k)})
 		it.set_tooltip_text(0, "%s\n%s\n\nClic : la poser sur le vaisseau." % [Pieces.resume(pr[2], pr[3]), description])
 		n_poser += 1
+	# l'armature : tracer des poutres, remplir des zones
+	for k in Armature.PROPOSITIONS.size():
+		var pa: Array = Armature.PROPOSITIONS[k]
+		var desc := String(Armature.MODELES[pa[2]]["description"])
+		if cherche and not Analyse.correspond_texte("%s %s %s %s armature" % [pa[0], pa[1], Armature.nom_modele(pa[2]), desc], r):
+			continue
+		if not cats.has(pa[0]):
+			var ca := arbre.create_item(poser)
+			ca.set_text(0, String(pa[0]))
+			ca.set_selectable(0, false)
+			ca.set_selectable(1, false)
+			ca.set_custom_color(0, Style.TEXTE_DOUX)
+			ca.set_metadata(0, {"genre": "section", "id": "poser_" + String(pa[0])})
+			ca.collapsed = false if cherche else bool(_replies.get("section_poser_" + String(pa[0]), false))
+			cats[pa[0]] = ca
+		var ia := arbre.create_item(cats[pa[0]])
+		ia.set_text(0, String(pa[1]))
+		var mu := Armature.masse_unite(String(pa[2]), pa[3])
+		ia.set_text(1, "%s %s" % [Analyse.nombre(float(mu[0]), 1), mu[1]])
+		ia.set_text_alignment(1, HORIZONTAL_ALIGNMENT_RIGHT)
+		ia.set_custom_color(1, Style.TEXTE_DOUX)
+		ia.set_custom_color(0, Style.ACCENT)
+		ia.set_metadata(0, {"genre": "modele_armature", "id": str(k)})
+		ia.set_tooltip_text(0, "%s\n%s\n\nClic : %s." % [Armature.texte_reglages(String(pa[2]), pa[3]), desc,
+			"remplir les zones fermées du vaisseau" if pa[2] == Armature.PANNEAU else "tracer des poutres sur le vaisseau"])
+		n_poser += 1
 	poser.set_text(1, str(n_poser))
 	if n_poser == 0:
 		poser.free()
@@ -2456,14 +3048,17 @@ func remplir_catalogue() -> void:
 		var ids: Array = par_cat[c[0]]
 		var genre := "piece"
 		if c[0] == "ajouts":
-			ids = analyse.ajouts.keys()   # les pièces posées entières, pas leurs morceaux
+			ids = analyse.ajouts.keys().filter(func(i): return not analyse.armature.has(i))   # les pièces posées entières
+			genre = "ajout"
+		elif c[0] == "armature":
+			ids = analyse.armature.keys()   # connecteurs, poutres, panneaux entiers
 			genre = "ajout"
 		var trouves: Array
 		if not cherche or Analyse.correspond_texte(c[1], r):
 			trouves = ids
 		elif genre == "ajout":
 			trouves = ids.filter(func(i): return Analyse.correspond_texte("%s %s" % [analyse.nom_element(i),
-				Pieces.nom(String(analyse.ajouts[i]["modele"]))], r))
+				Pieces.nom(String(analyse.ajouts[i]["modele"])) if not analyse.armature.has(i) else Armature.nom_modele(String(analyse.ajouts[i]["modele"]))], r))
 		else:
 			trouves = ids.filter(func(i): return analyse.correspond(i, r))
 		if trouves.is_empty():
@@ -2475,13 +3070,13 @@ func remplir_catalogue() -> void:
 		cat.set_text_alignment(1, HORIZONTAL_ALIGNMENT_RIGHT)
 		cat.set_custom_color(1, Style.TEXTE_DOUX)
 		cat.set_metadata(0, {"genre": "categorie", "id": c[0]})
-		cat.collapsed = false if cherche else bool(_replies.get(c[0], c[0] != "ajouts"))
+		cat.collapsed = false if cherche else bool(_replies.get(c[0], not (c[0] in ["ajouts", "armature"])))
 		for i in trouves:
 			var it := arbre.create_item(cat)
 			if genre == "ajout":
 				it.set_text(0, analyse.nom_element(i))
 				it.set_text(1, "%s kg" % Analyse.nombre(analyse.masse_ajout(i), 0))
-				it.set_tooltip_text(0, "%s (%s)" % [Pieces.resume(String(analyse.ajouts[i]["modele"]), analyse.ajouts[i].get("reglages", {})), i])
+				it.set_tooltip_text(0, "%s (%s)" % [Analyse.resume_ajout(analyse.ajouts[i]), i])
 				if flottantes.has(i):
 					it.set_custom_color(0, Style.ROUGE)
 			else:
@@ -2585,6 +3180,10 @@ func _choix_dans_liste() -> void:
 	if String(m["genre"]) == "modele":
 		var pr: Array = Pieces.PROPOSITIONS[int(m["id"])]
 		commencer_pose(String(pr[2]), pr[3])
+		return
+	if String(m["genre"]) == "modele_armature":
+		var pa: Array = Armature.PROPOSITIONS[int(m["id"])]
+		commencer_trace("remplir" if pa[2] == Armature.PANNEAU else "poutre", pa[3])
 		return
 	if Input.is_key_pressed(KEY_CTRL) and String(m["genre"]) in ["piece", "ajout", "module"]:
 		basculer_dans_selection(String(m["genre"]), String(m["id"]))

@@ -48,16 +48,20 @@ const TYPES := {
 		"description": "Pièce modélisée (dans Blender) : sa masse, son centre et son inertie propre sont donnés.",
 		"champs": ["masse_kg", "centre", "inertie_propre"], "facultatifs": ["matiere", "surface_m2", "articulation", "note"]},
 	"bloc": {"nom": "bloc", "pese": true,
-		"description": "Masse donnée, de forme simple (boîte ou cylindre le long de son axe Z local) : son inertie est calculée.",
+		"description": "Masse donnée, de forme simple (boîte, cylindre le long de son axe Z local, ou boule) : son inertie est calculée.",
 		"champs": ["masse_kg", "position", "forme", "dimensions_m"],
 		"facultatifs": ["rotation_deg", "matiere", "articulation", "note"]},
 	"masse": {"nom": "masse ponctuelle", "pese": true,
 		"description": "Équipement compté comme une masse en un point (ordinateurs, pilote, réservoir d'air…).",
 		"champs": ["masse_kg", "centre"], "facultatifs": ["articulation", "note"]},
 	"poutre": {"nom": "poutre", "pese": true,
-		"description": "Barre pleine de section rectangulaire, posée le long de son axe Z local.",
+		"description": "Barre de section rectangulaire (pleine, ou tube si « paroi_m ») ou tube rond (« profil » : rond), posée le long de son axe Z local.",
 		"champs": ["matiere", "position", "longueur_m", "largeur_m", "hauteur_m"],
-		"facultatifs": ["rotation_deg", "articulation", "note"]},
+		"facultatifs": ["rotation_deg", "profil", "paroi_m", "articulation", "note"]},
+	"panneau": {"nom": "panneau", "pese": true,
+		"description": "Surface plane remplie entre 3 ou 4 coins (« sommets ») d'une armature, de l'épaisseur et de la matière choisies. 4 coins qui ne sont pas à plat : deux triangles plats.",
+		"champs": ["matiere", "sommets", "epaisseur_m"],
+		"facultatifs": ["articulation", "note"]},
 	"plaque": {"nom": "plaque", "pese": true,
 		"description": "Plaque pleine (panneau de coque, cloison), à plat dans son plan XZ local.",
 		"champs": ["matiere", "position", "longueur_m", "largeur_m", "epaisseur_m"],
@@ -85,7 +89,8 @@ const TYPES := {
 	"ensemble": {"nom": "ensemble", "pese": true,
 		"description": "Un petit plan dans le plan : ses pièces bougent ensemble.",
 		"champs": [], "facultatifs": ["pieces", "plan", "articulations", "position", "rotation_deg", "miroir_x",
-			"articulation", "nom", "note", "modele", "reglages", "fixe_a", "symetrique"]},
+			"articulation", "nom", "note", "modele", "reglages", "fixe_a", "symetrique",
+			"noeuds", "longueur_m", "surface_m2", "articulation_appui"]},
 }
 
 ## Types d'articulations (pièces mobiles) : ce qui fait bouger une pièce par rapport au vaisseau.
@@ -117,12 +122,26 @@ static func masse_piece(p: Dictionary) -> Dictionary:
 			var a: float = float(p["largeur_m"])
 			var b: float = float(p["hauteur_m"]) if t == "poutre" else float(p["epaisseur_m"])
 			var c: float = float(p["longueur_m"])
-			var m := dens * a * b * c
-			# boîte pleine : I = m/12 · (somme des carrés des deux autres côtés)
-			var local := Basis(Vector3(m / 12.0 * (b * b + c * c), 0, 0), Vector3(0, m / 12.0 * (a * a + c * c), 0),
-				Vector3(0, 0, m / 12.0 * (a * a + b * b)))
+			var mi := _boite_pleine(dens, a, b, c)
+			if t == "poutre" and String(p.get("profil", "")) == "rond":
+				# tube rond (diamètre extérieur = largeur) : cylindre extérieur moins cylindre intérieur
+				var ro := a * 0.5
+				var ri := maxf(ro - float(p.get("paroi_m", ro)), 0.0)
+				mi = _cylindre_plein(dens, ro, c)
+				if ri > 0.0:
+					var creux := _cylindre_plein(dens, ri, c)
+					mi = [float(mi[0]) - float(creux[0]), _moins(mi[1], creux[1])]
+			elif t == "poutre" and p.has("paroi_m"):
+				# tube rectangulaire : boîte extérieure moins boîte intérieure (même longueur)
+				var e := float(p["paroi_m"])
+				if 2.0 * e < minf(a, b):
+					var creux2 := _boite_pleine(dens, a - 2.0 * e, b - 2.0 * e, c)
+					mi = [float(mi[0]) - float(creux2[0]), _moins(mi[1], creux2[1])]
 			var r := rotation(p.get("rotation_deg", [0.0, 0.0, 0.0]))
-			return {"masse": m, "centre": vecteur(p["position"]), "inertie": de_basis(r * local * r.transposed())}
+			var local: Basis = mi[1]
+			return {"masse": float(mi[0]), "centre": vecteur(p["position"]), "inertie": de_basis(r * local * r.transposed())}
+		"panneau":
+			return masse_panneau(MATIERES[p["matiere"]]["densite"], p["sommets"], float(p["epaisseur_m"]))
 		"bloc":
 			var m := float(p["masse_kg"])
 			var dim: Array = p["dimensions_m"]
@@ -133,6 +152,13 @@ static func masse_piece(p: Dictionary) -> Dictionary:
 				var l := float(dim[1])
 				var ix := m * (3.0 * r * r + l * l) / 12.0
 				local = Basis(Vector3(ix, 0, 0), Vector3(0, ix, 0), Vector3(0, 0, m * r * r * 0.5))
+			elif String(p["forme"]) == "boule":
+				# boule : diamètre (et épaisseur de paroi si elle est creuse). Pleine : I = 2/5 · m · R² ;
+				# creuse (R dehors, r dedans) : I = 2/5 · m · (R⁵ − r⁵) / (R³ − r³)
+				var rb2 := float(dim[0]) * 0.5
+				var ri2 := maxf(rb2 - float(dim[1]), 0.0) if dim.size() > 1 else 0.0
+				var ib := 0.4 * m * (pow(rb2, 5) - pow(ri2, 5)) / maxf(pow(rb2, 3) - pow(ri2, 3), 1e-12)
+				local = Basis(Vector3(ib, 0, 0), Vector3(0, ib, 0), Vector3(0, 0, ib))
 			else:
 				# boîte pleine : x, y, z
 				var a := float(dim[0])
@@ -145,6 +171,102 @@ static func masse_piece(p: Dictionary) -> Dictionary:
 	if p.has("masse_kg") and p.has("centre"):
 		return {"masse": float(p["masse_kg"]), "centre": vecteur(p["centre"]), "inertie": zero}
 	return {"masse": 0.0, "centre": Vector3.ZERO, "inertie": zero}
+
+
+## Boîte pleine (côtés a, b, c le long de X, Y, Z) : [masse, inertie autour de son centre].
+static func _boite_pleine(dens: float, a: float, b: float, c: float) -> Array:
+	var m := dens * a * b * c
+	return [m, Basis(Vector3(m / 12.0 * (b * b + c * c), 0, 0), Vector3(0, m / 12.0 * (a * a + c * c), 0),
+		Vector3(0, 0, m / 12.0 * (a * a + b * b)))]
+
+
+## Cylindre plein de rayon r et de longueur l le long de Z : [masse, inertie autour de son centre].
+static func _cylindre_plein(dens: float, r: float, l: float) -> Array:
+	var m := dens * PI * r * r * l
+	var ix := m * (3.0 * r * r + l * l) / 12.0
+	return [m, Basis(Vector3(ix, 0, 0), Vector3(0, ix, 0), Vector3(0, 0, 0.5 * m * r * r))]
+
+
+static func _moins(a: Basis, b: Basis) -> Basis:
+	return Basis(a.x - b.x, a.y - b.y, a.z - b.z)
+
+
+## Les triangles d'un panneau (indices des coins) : un triangle, ou un quadrilatère coupé en deux par sa
+## plus courte diagonale (à plat, les deux façons donnent la même surface ; pas à plat, c'est le pli le plus
+## court, celui d'une tôle pliée).
+static func triangles_panneau(s: Array) -> Array:
+	if s.size() == 3:
+		return [[0, 1, 2]]
+	if s.size() != 4:
+		return []
+	if (vecteur(s[0]) - vecteur(s[2])).length() <= (vecteur(s[1]) - vecteur(s[3])).length():
+		return [[0, 1, 2], [0, 2, 3]]
+	return [[0, 1, 3], [1, 2, 3]]
+
+
+## Masse, centre et inertie d'un panneau plein (plaque mince d'épaisseur e entre ses coins, coins au milieu
+## de l'épaisseur). Pour chaque triangle de coins a, b, c (masse m) : ∫ r·rᵀ dm = m/12 · (a·aᵀ + b·bᵀ + c·cᵀ
+## + s·sᵀ) avec s = a + b + c ; ramené au centre de gravité (Huygens), plus l'épaisseur (m·e²/12 le long de
+## la normale) ; inertie = trace · 1 − ce tableau.
+static func masse_panneau(densite, sommets: Array, e: float) -> Dictionary:
+	var dens := float(densite)
+	var pts := []
+	for q in sommets:
+		pts.append(vecteur(q))
+	var m := 0.0
+	var premier := Vector3.ZERO
+	var c := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # ∫ x², y², z², xy, xz, yz
+	var normale := Vector3.ZERO
+	for t in triangles_panneau(pts):
+		var a: Vector3 = pts[t[0]]
+		var b: Vector3 = pts[t[1]]
+		var d: Vector3 = pts[t[2]]
+		var n := (b - a).cross(d - a)
+		var mi := dens * 0.5 * n.length() * e
+		if mi <= 0.0:
+			continue
+		normale += n if n.dot(normale) >= 0.0 else -n
+		var s := a + b + d
+		m += mi
+		premier += s * (mi / 3.0)
+		var k := mi / 12.0
+		for v in [a, b, d, s]:
+			c[0] += k * v.x * v.x
+			c[1] += k * v.y * v.y
+			c[2] += k * v.z * v.z
+			c[3] += k * v.x * v.y
+			c[4] += k * v.x * v.z
+			c[5] += k * v.y * v.z
+	if m <= 0.0:
+		return {"masse": 0.0, "centre": Vector3.ZERO, "inertie": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
+	var g := premier / m
+	c[0] -= m * g.x * g.x
+	c[1] -= m * g.y * g.y
+	c[2] -= m * g.z * g.z
+	c[3] -= m * g.x * g.y
+	c[4] -= m * g.x * g.z
+	c[5] -= m * g.y * g.z
+	var nn := normale.normalized()
+	var ke := m * e * e / 12.0
+	c[0] += ke * nn.x * nn.x
+	c[1] += ke * nn.y * nn.y
+	c[2] += ke * nn.z * nn.z
+	c[3] += ke * nn.x * nn.y
+	c[4] += ke * nn.x * nn.z
+	c[5] += ke * nn.y * nn.z
+	var tr: float = c[0] + c[1] + c[2]
+	return {"masse": m, "centre": g, "inertie": [tr - c[0], tr - c[1], tr - c[2], -c[3], -c[4], -c[5]]}
+
+
+## Surface (m²) d'un panneau.
+static func surface_panneau(sommets: Array) -> float:
+	var pts := []
+	for q in sommets:
+		pts.append(vecteur(q))
+	var a := 0.0
+	for t in triangles_panneau(pts):
+		a += 0.5 * ((pts[t[1]] as Vector3) - (pts[t[0]] as Vector3)).cross((pts[t[2]] as Vector3) - (pts[t[0]] as Vector3)).length()
+	return a
 
 
 ## [x, y, z] → Vector3.
