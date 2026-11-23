@@ -12,9 +12,12 @@ extends RefCounted
 ## Étape 4 : l'ANALYSE INGÉNIEUR complète : analyse de n'importe quelle sélection (masse, part, centre,
 ## inertie propre, ce que devient le vaisseau sans elle), répartition des masses, poussées et couple moteur
 ## par moteur et par axe, défauts de symétrie gauche-droite, et les chiffres de la salle à part.
+## Étape 6 : l'ARMATURE (poutres, connecteurs, panneaux) a sa catégorie, ses fiches (forme d'un connecteur,
+## longueur d'une poutre, surface d'un panneau…) et sa part dans la tuile MASSE.
 
 const Catalogue = preload("res://scripts/atelier/catalogue.gd")
 const Pieces = preload("res://scripts/atelier/pieces_toutes_faites.gd")
+const Armature = preload("res://scripts/atelier/armature.gd")
 const Plan = preload("res://scripts/atelier/plan.gd")
 const VaisseauPhysique = preload("res://scripts/physique/vaisseau_physique.gd")
 
@@ -31,6 +34,7 @@ const CATEGORIES := [
 	["equipements", "Équipements (masses)"],
 	["air", "Surfaces d'air"],
 	["contact", "Points de contact de la coque"],
+	["armature", "Armature (poutres, panneaux)"],
 	["ajouts", "Pièces ajoutées"],
 ]
 
@@ -55,7 +59,7 @@ const MOTS := {
 
 ## Morceaux d'une pièce toute faite (scripts/atelier/pieces_toutes_faites.gd) → mots affichés.
 const MORCEAUX := {"corps": "corps", "poussee": "poussée", "air": "surface d'air", "poutre": "poutre",
-	"plaque": "plaque", "boite": "boîte", "reservoir": "réservoir"}
+	"plaque": "plaque", "boite": "boîte", "reservoir": "réservoir", "connecteur": "connecteur", "panneau": "panneau"}
 
 var plan
 var v               # physique du vaisseau (comme dans le jeu, sans planète : pose de référence)
@@ -64,6 +68,7 @@ var _par_id := {}   # id → pièce du plan (mise à plat)
 var _rcs_par_id := {}
 var _moteur_par_id := {}
 var ajouts := {}    # id d'une pièce posée dans l'atelier → son ensemble dans le plan (modèle, réglages…)
+var armature := {}  # les éléments de l'armature parmi eux (connecteurs, poutres, panneaux)
 var _symetrie = null # défauts de symétrie (calculés une fois, à la demande)
 
 
@@ -76,6 +81,8 @@ func _init(p_plan = null) -> void:
 	for e in plan.donnees.get("pieces", []):
 		if e is Dictionary and e.has("modele"):
 			ajouts[String(e["id"])] = e
+			if Armature.est(e):
+				armature[String(e["id"])] = e
 	for t in v.rcs:
 		_rcs_par_id[t["id"]] = t
 	for m in v.moteurs:
@@ -125,6 +132,7 @@ func tableau() -> Dictionary:
 		"couple_moteurs": couple, "force_moteurs": force, "decalage_poussee": decalage, "couple_compense": compense,
 		"couple_max": v.couple_max, "acceleration_rotation": acc_rot,
 		"centre_gravite": v.centre_gravite, "inertie": v.inertie,
+		"masse_armature": float(_masse_de(pieces_par_categorie()["armature"])[0]),
 	}
 
 
@@ -136,7 +144,8 @@ func tuiles() -> Array:
 	var ar: Vector3 = t["acceleration_rotation"]
 	var cg: Vector3 = t["centre_gravite"]
 	return [
-		["MASSE", "%s kg" % nombre(t["masse"], 1), "%d pièces · masse constante (pas de carburant)" % t["pieces"]],
+		["MASSE", "%s kg" % nombre(t["masse"], 1), ("%d pièces · dont armature %s kg · masse constante" % [t["pieces"], nombre(t["masse_armature"], 1)])
+			if t["masse_armature"] > 0.0 else "%d pièces · masse constante (pas de carburant)" % t["pieces"]],
 		["POUSSÉE VERS L'AVANT", "%s kN" % nombre(t["poussee_avant"] / 1000.0), _texte_poussee_avant(t)],
 		["POUSSÉE / POIDS", nombre(t["poussee_poids"], 1), "accélère à %s g au sol" % nombre(t["poussee_poids"], 1)],
 		["DÉCOLLAGE VERTICAL", "%s kN" % nombre(t["poussee_verticale"] / 1000.0),
@@ -184,7 +193,7 @@ static func _texte_couple(t: Dictionary) -> String:
 # =====================================================================
 static func categorie(p: Dictionary) -> String:
 	if p.has("ajout"):
-		return "ajouts"
+		return "armature" if Armature.est_modele(String(p.get("modele_ajout", ""))) else "ajouts"
 	match String(p.get("type", "")):
 		"moteur":
 			return "moteurs"
@@ -440,11 +449,13 @@ func masse_ajout(id: String) -> float:
 	return float(_masse_de(pieces_ajout(id))[0])
 
 
-## Fiche d'une pièce posée dans l'atelier (pièce toute faite).
+## Fiche d'une pièce posée dans l'atelier (pièce toute faite, ou élément de l'armature).
 func fiche_ajout(id: String) -> Dictionary:
 	var e: Dictionary = ajouts.get(id, {})
 	if e.is_empty():
 		return {"titre": id, "sous_titre": "pièce inconnue", "lignes": [], "note": ""}
+	if Armature.est(e):
+		return fiche_armature(id)
 	var modele := String(e["modele"])
 	var r: Dictionary = Pieces.reglages_complets(modele, e.get("reglages", {}))
 	var ids := pieces_ajout(id)
@@ -483,6 +494,76 @@ func fiche_ajout(id: String) -> Dictionary:
 		lignes.append(["Jumelle (symétrie)", nom_element(sym)])
 	return {"titre": String(e.get("nom", id)), "sous_titre": "pièce posée · " + id, "lignes": lignes,
 		"note": String(Pieces.MODELES[modele]["description"]) if Pieces.existe(modele) else ""}
+
+
+## Fiche d'un élément de l'armature : connecteur (sa forme, ses poutres), poutre (longueur, profil),
+## panneau (surface, coins, s'il porte dans l'air).
+func fiche_armature(id: String) -> Dictionary:
+	var e: Dictionary = armature.get(id, {})
+	if e.is_empty():
+		return {"titre": id, "sous_titre": "élément inconnu", "lignes": [], "note": ""}
+	var modele := String(e["modele"])
+	var g := Armature.graphe(plan.donnees)
+	var mc := _masse_de(pieces_ajout(id))
+	var lignes := []
+	var r: Dictionary = Armature.reglages_complets(modele, e.get("reglages", {}))
+	match modele:
+		Armature.CONNECTEUR:
+			var genre := Armature.genre_connecteur(g, id)
+			lignes.append(["Forme", _majuscule(String(genre["nom"]))])
+			var poutres := Armature.poutres_de(g, id)
+			lignes.append(["Poutres qui y arrivent", ", ".join(PackedStringArray(poutres.map(func(i): return nom_element(i)))) if not poutres.is_empty() else "aucune"])
+			var q: Dictionary = (e.get("pieces", [{}]) as Array)[0] if not (e.get("pieces", []) as Array).is_empty() else {}
+			if not q.is_empty():
+				var dims: Array = q["dimensions_m"]
+				lignes.append(["Boule", ("creuse de %s, paroi %s" % [longueur_txt(float(dims[0])), longueur_txt(float(dims[1]))]) if dims.size() > 1
+					else "pleine de %s" % longueur_txt(float(dims[0]))])
+				lignes.append(["Matière", _majuscule(String(Catalogue.MATIERES[String(q["matiere"])]["nom"]))])
+			lignes.append(["Place", vecteur_txt(e.get("position", [0, 0, 0])) + " m"])
+			var support := String(e.get("fixe_a", ""))
+			lignes.append(["Posé sur", nom_element(support) if nom_element(support) != "" else "rien (il tient par ses poutres)"])
+		Armature.POUTRE:
+			var n: Array = e.get("noeuds", [])
+			var l := float(e.get("longueur_m", 0.0))
+			var q2: Dictionary = (e.get("pieces", [{}]) as Array)[0] if not (e.get("pieces", []) as Array).is_empty() else {}
+			lignes.append(["Longueur", "%s (entre les centres des connecteurs ; %s de métal)" % [longueur_txt(l), longueur_txt(float(q2.get("longueur_m", l)))]])
+			lignes.append(["Profil", "%s de %s%s" % [Armature.NOMS_CHOIX[String(r["profil"])], longueur_txt(float(r["section_m"])),
+				", paroi %s" % longueur_txt(float(r["paroi_m"])) if String(r["profil"]) != "plein_carre" else ""]])
+			lignes.append(["Matière", _majuscule(String(Catalogue.MATIERES[String(r["matiere"])]["nom"]))])
+			lignes.append(["Entre", " et ".join(PackedStringArray(n.map(func(i): return nom_element(String(i)))))])
+		Armature.PANNEAU:
+			var n2: Array = e.get("noeuds", [])
+			lignes.append(["Surface", "%s m² (%d coins)" % [nombre(float(e.get("surface_m2", 0.0)), 2), n2.size()]])
+			lignes.append(["Épaisseur", longueur_txt(float(r["epaisseur_m"]))])
+			lignes.append(["Matière", _majuscule(String(Catalogue.MATIERES[String(r["matiere"])]["nom"]))])
+			lignes.append(["Coins", ", ".join(PackedStringArray(n2.map(func(i): return nom_element(String(i)))))])
+			for i in pieces_ajout(id):
+				var p := piece(i)
+				if String(p["type"]) == "surface_air":
+					lignes.append(["Porte dans l'air", "%s m², allongement %s" % [nombre(float(p["surface_m2"]), 2), nombre(float(p["allongement"]), 1)]])
+	lignes.append(["Masse", "%s kg (%s %% du vaisseau)" % [nombre(mc[0], 2), nombre(100.0 * float(mc[0]) / masse_totale, 2)]])
+	var art := String(e.get("articulation", ""))
+	if art != "" and plan.articulations.has(art):
+		lignes.append(["Pièce mobile", _texte_articulation(plan.articulations[art])])
+	var sym := String(e.get("symetrique", ""))
+	if sym != "" and ajouts.has(sym):
+		lignes.append(["Jumeau (symétrie)", nom_element(sym)])
+	return {"titre": String(e.get("nom", id)), "sous_titre": "armature · " + id, "lignes": lignes,
+		"note": String(Armature.MODELES[modele]["description"])}
+
+
+## Boîte (repère de l'élément) qui contient le dessin d'une pièce posée (toute faite ou de l'armature).
+static func boite_ajout(e: Dictionary) -> AABB:
+	if Armature.est(e):
+		return Armature.boite(e)
+	return Pieces.boite(String(e["modele"]), e.get("reglages", {}))
+
+
+## Résumé d'une ligne d'une pièce posée (toute faite ou de l'armature).
+static func resume_ajout(e: Dictionary) -> String:
+	if Armature.est(e):
+		return Armature.resume(e)
+	return Pieces.resume(String(e["modele"]), e.get("reglages", {}))
 
 
 ## Fiche d'un module du chasseur.
@@ -630,7 +711,7 @@ func lignes_groupe(ids: Array) -> Array:
 		lignes.append(["Centre de la sélection", vecteur_txt(g["centre"]) + " m"])
 		lignes.append(["Écart au centre de gravité", longueur_txt(((g["centre"] as Vector3) - v.centre_gravite).length())])
 		var ib: Basis = g["inertie"]
-		lignes.append(["Inertie propre (tangage / lacet / roulis)", "%s / %s / %s kg·m²" % [nombre(ib.x.x), nombre(ib.y.y), nombre(ib.z.z)]])
+		lignes.append(["Inertie propre (tangage / lacet / roulis)", "%s / %s / %s kg·m²" % [chiffres(ib.x.x), chiffres(ib.y.y), chiffres(ib.z.z)]])
 	var pousse := []
 	if float(g["poussee_principale"]) > 0.0:
 		pousse.append("%s kN vers l'avant" % nombre(float(g["poussee_principale"]) / 1000.0, 1))
@@ -1026,6 +1107,13 @@ func tuiles_groupe(ids: Array) -> Array:
 # NOMBRES EN FRANÇAIS
 # =====================================================================
 ## 8534.6 → « 8 534,6 » (espace fine entre les milliers, virgule).
+## Un nombre avec 3 chiffres utiles (une petite pièce n'a pas une inertie de « 0 ») : 12 345, 1,23, 0,000 512.
+static func chiffres(x: float) -> String:
+	if absf(x) < 1e-12 or absf(x) >= 100.0:
+		return nombre(x)
+	return nombre(x, clampi(2 - int(floor(log(absf(x)) / log(10.0))), 0, 9))
+
+
 static func nombre(x: float, decimales := 0) -> String:
 	var negatif := x < 0.0
 	var t := ("%." + str(decimales) + "f") % absf(x)

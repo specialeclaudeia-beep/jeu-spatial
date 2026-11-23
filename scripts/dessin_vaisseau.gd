@@ -22,12 +22,16 @@ extends RefCounted
 ##
 ## Les lueurs et les jets des moteurs posés portent, comme ceux du modèle Blender, une étiquette « extras »
 ## (type lueur / panache) : le jeu les allume selon la vraie poussée de leur moteur (id_physique).
+## Étape 6 : l'ARMATURE (scripts/atelier/armature.gd) est dessinée comme les pièces posées : poutres
+## (boîte ou cylindre), connecteurs (petite boule) et panneaux (plaque plate entre leurs coins, d'épaisseur
+## réelle ; en verre : une vitre). Elle est fusionnée par matière dans le jeu comme le reste.
 ## Rien ici ne change la physique : le dessin suit le plan.
 
 const Plan = preload("res://scripts/atelier/plan.gd")
 const Pieces = preload("res://scripts/atelier/pieces_toutes_faites.gd")
 const Edition = preload("res://scripts/atelier/edition.gd")
 const Catalogue = preload("res://scripts/atelier/catalogue.gd")
+const Armature = preload("res://scripts/atelier/armature.gd")
 
 const MODELE_EXTERIEUR := "res://modeles/vaisseau/vaisseau_exterieur.glb"
 const COULEUR_LUEUR_FAIBLE := [0.0, 0.25, 1.0]
@@ -35,7 +39,8 @@ const COULEUR_LUEUR_FORTE := [0.55, 0.0, 1.0]
 const COULEUR_VERRE := Color(0.32, 0.46, 0.6, 0.28)   # (atelier ; dans le jeu, le système de lumière la refait)
 const SANS_OMBRE_SOUS := 0.12                          # m : une forme plus petite que ça ne fait pas d'ombre
 ## Types de pièces du plan qui ont une forme à dessiner quand le modèle Blender ne les dessine pas.
-const TYPES_DESSINES := ["bloc", "poutre", "plaque", "structure", "moteur", "propulseur", "roue", "surface_air"]
+const TYPES_DESSINES := ["bloc", "poutre", "plaque", "panneau", "structure", "moteur", "propulseur", "roue", "surface_air"]
+const SEGMENTS_BOULE := 10       # côtés d'une boule (connecteur) : petite, elle n'a pas besoin de plus
 
 var exterieur: Node3D
 var modele                       # ModeleVaisseau (pose des ailes, du train…)
@@ -145,6 +150,11 @@ static func elements(p_plan) -> Array:
 	var sortie := []
 	var ids := ids_depart()
 	for e in p_plan.donnees.get("pieces", []):
+		if Armature.est(e):
+			if not (e.get("pieces", []) as Array).is_empty():
+				sortie.append({"id": String(e["id"]), "genre": "ajout", "articulation": String(e.get("articulation", "")),
+					"xf": Edition.xf_de(e), "formes": Armature.dessin(e), "armature": true})
+			continue
 		if not (e is Dictionary and e.has("modele")) or not Pieces.existe(String(e["modele"])):
 			continue
 		var id := String(e["id"])
@@ -182,6 +192,9 @@ static func _element_brut(p: Dictionary) -> Dictionary:
 			if String(p["forme"]) == "cylindre":
 				var r := float(dim[0]) * 0.5
 				formes.append(_f("cylindre", Vector3(r, r, float(dim[1])), Transform3D(vers_z, Vector3.ZERO), couleur, metal, 0.45, vitre))
+			elif String(p["forme"]) == "boule":
+				var rb := float(dim[0]) * 0.5
+				formes.append(_f("boule", Vector3(rb, rb, rb), Transform3D.IDENTITY, couleur, metal, 0.45, vitre))
 			else:
 				formes.append(_f("boite", Vector3(float(dim[0]), float(dim[1]), float(dim[2])), Transform3D.IDENTITY, couleur, metal, 0.45, vitre))
 		"poutre":
@@ -192,6 +205,12 @@ static func _element_brut(p: Dictionary) -> Dictionary:
 			xf = Transform3D(base, Catalogue.vecteur(p["position"]))
 			formes.append(_f("boite", Vector3(float(p["largeur_m"]), float(p["epaisseur_m"]), float(p["longueur_m"])), Transform3D.IDENTITY,
 				couleur, metal, 0.5, vitre))
+		"panneau":
+			# coins déjà placés dans le repère du vaisseau : dessinés tels quels (épaisseur le long de la normale)
+			var fp := _f("panneau", Vector3.ONE, Transform3D.IDENTITY, couleur, metal, 0.5, vitre)
+			fp["sommets"] = (p["sommets"] as Array).duplicate()
+			fp["epaisseur"] = float(p["epaisseur_m"])
+			formes.append(fp)
 		"structure":
 			# boîte pleine qui a la même masse et la même inertie propre (axes du vaisseau)
 			var m := maxf(float(p["masse_kg"]), 1e-6)
@@ -384,7 +403,7 @@ func _dessiner_element(el: Dictionary, refs: Dictionary) -> void:
 				brillants.append(mi)
 			"lueur":
 				mi.name = "Lueur_" + nom
-				mi.mesh = _forme(String(f["forme"]), t)
+				mi.mesh = maillage_forme(f)
 				mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 				mi.set_meta("extras", {"type": "lueur", "id_physique": id_phys,
 					"couleur_faible": COULEUR_LUEUR_FAIBLE, "couleur_forte": COULEUR_LUEUR_FORTE,
@@ -393,7 +412,7 @@ func _dessiner_element(el: Dictionary, refs: Dictionary) -> void:
 				brillants.append(mi)
 			_:
 				mi.name = ("Piece_" if ajout else "Forme_") + nom + "_%d" % liste.size()
-				mi.mesh = _forme(String(f["forme"]), t)
+				mi.mesh = maillage_forme(f)
 				if bool(f.get("vitre", false)):
 					# vitre : transparente ; dans le jeu, le système de lumière la remplace par une vraie vitre
 					var verre := StandardMaterial3D.new()
@@ -436,6 +455,10 @@ static func _plus_grand_cote(forme: String, t: Vector3) -> float:
 			return maxf(2.0 * maxf(t.x, t.y), t.z)
 		"gelule":
 			return maxf(2.0 * t.x, t.y)
+		"boule":
+			return 2.0 * t.x
+		"panneau":
+			return maxf(t.x, t.z)
 	return maxf(t.x, maxf(t.y, t.z))
 
 
@@ -511,8 +534,70 @@ static func cotes_cylindre(rayon: float) -> int:
 	return clampi(roundi(6.0 + 28.0 * rayon), 8, 20)
 
 
+## Le maillage d'une forme du dessin (boîte, cylindre, gélule, boule, panneau).
+static func maillage_forme(f: Dictionary) -> Mesh:
+	if String(f["forme"]) == "panneau":
+		return panneau(f["sommets"], float(f.get("epaisseur", 0.002)))
+	return _forme(String(f["forme"]), f["taille"])
+
+
+## Un panneau plat entre ses coins (3 ou 4, au milieu de l'épaisseur) : dessus, dessous et chants, chaque
+## face tournée vers l'extérieur. 4 coins pas à plat : deux triangles plats (pliés le long de la plus
+## courte diagonale, comme sa masse : Catalogue.triangles_panneau).
+static func panneau(sommets: Array, epaisseur: float) -> ArrayMesh:
+	var pts := []
+	for q in sommets:
+		pts.append(Catalogue.vecteur(q))
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var tris := Catalogue.triangles_panneau(pts)
+	var n_moy := Armature.normale(pts)
+	n_moy = n_moy.normalized() if n_moy.length() > 1e-9 else Vector3.UP
+	var demi := maxf(epaisseur, 0.0005) * 0.5
+	for t in tris:
+		var a: Vector3 = pts[t[0]]
+		var b: Vector3 = pts[t[1]]
+		var c: Vector3 = pts[t[2]]
+		var n := (b - a).cross(c - a)
+		n = n.normalized() if n.length() > 1e-12 else n_moy
+		if n.dot(n_moy) < 0.0:
+			n = -n
+		_tri(st, a + n_moy * demi, b + n_moy * demi, c + n_moy * demi, n)
+		_tri(st, a - n_moy * demi, b - n_moy * demi, c - n_moy * demi, -n)
+	var centre := Vector3.ZERO
+	for q in pts:
+		centre += q
+	centre /= float(pts.size())
+	for k in pts.size():
+		var a2: Vector3 = pts[k]
+		var b2: Vector3 = pts[(k + 1) % pts.size()]
+		var dehors := (b2 - a2).cross(n_moy).normalized()
+		if dehors.dot((a2 + b2) * 0.5 - centre) < 0.0:
+			dehors = -dehors
+		_tri(st, a2 + n_moy * demi, b2 + n_moy * demi, b2 - n_moy * demi, dehors)
+		_tri(st, a2 + n_moy * demi, b2 - n_moy * demi, a2 - n_moy * demi, dehors)
+	st.index()
+	return st.commit()
+
+
+## Un triangle vu de face du côté de sa normale n (Godot : sommets dans le sens des aiguilles d'une montre
+## vus de face).
+static func _tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, n: Vector3) -> void:
+	var ordre := [a, b, c] if (b - a).cross(c - a).dot(n) < 0.0 else [a, c, b]
+	for p in ordre:
+		st.set_normal(n)
+		st.add_vertex(p)
+
+
 static func _forme(forme: String, t: Vector3) -> Mesh:
 	match forme:
+		"boule":
+			var s := SphereMesh.new()
+			s.radius = maxf(t.x, 0.001)
+			s.height = 2.0 * s.radius
+			s.radial_segments = SEGMENTS_BOULE
+			s.rings = SEGMENTS_BOULE / 2
+			return s
 		"cylindre":
 			var c := CylinderMesh.new()
 			c.top_radius = maxf(t.x, 0.001)
@@ -600,7 +685,7 @@ static func compter(p_plan, fusion := true) -> Dictionary:
 		for f in el["formes"]:
 			var role := String(f["role"])
 			var t: Vector3 = f["taille"]
-			var tri := triangles_forme(String(f["forme"]) if role != "panache" else "cone", t)
+			var tri := triangles_de(f) if role != "panache" else triangles_forme("cone", t)
 			r["formes"] += 1
 			match role:
 				"panache":
@@ -632,6 +717,14 @@ static func compter(p_plan, fusion := true) -> Dictionary:
 						if ombre:
 							r["surfaces_ombre"] += 1
 	return r
+
+
+## Nombre de triangles d'une forme du dessin (un panneau : dessus, dessous et chants).
+static func triangles_de(f: Dictionary) -> int:
+	if String(f["forme"]) == "panneau":
+		var n := (f["sommets"] as Array).size()
+		return 2 * (n - 2) + 2 * n
+	return triangles_forme(String(f["forme"]), f["taille"])
 
 
 ## Nombre de triangles d'une forme simple (le même maillage que celui du dessin).

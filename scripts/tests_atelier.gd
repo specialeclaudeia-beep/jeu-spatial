@@ -34,6 +34,7 @@ const DessinVaisseau = preload("res://scripts/dessin_vaisseau.gd")
 const ModeleVaisseau = preload("res://scripts/modele_vaisseau.gd")
 const AtelierScript = preload("res://scripts/atelier/atelier.gd")
 const ControleVol = preload("res://scripts/atelier/controle_vol.gd")
+const Armature = preload("res://scripts/atelier/armature.gd")
 const Objets = preload("res://scripts/lumiere/objets.gd")
 const SCENE_ACCUEIL := "res://scenes/accueil.tscn"
 const DOSSIER_ESSAI := "user://essais_atelier_etape3/"
@@ -81,6 +82,7 @@ func _ready() -> void:
 	_tests_analyse_etape4()
 	_tests_dessin_etape5()
 	_tests_controle_vol()
+	_tests_armature()
 	# l'écran de l'atelier s'ouvre sur le chasseur de départ, et ce que les tests enregistrent ne touche pas
 	# aux vaisseaux ni au dernier vaisseau ouvert du joueur
 	var partie_avant = Engine.get_meta("partie") if Engine.has_meta("partie") else null
@@ -90,6 +92,7 @@ func _ready() -> void:
 	await _tests_ecran_etape3()
 	await _tests_ecran_etape4()
 	await _tests_ecran_etape5()
+	await _tests_ecran_etape6()
 	if partie_avant != null:
 		Engine.set_meta("partie", partie_avant)
 	else:
@@ -1914,6 +1917,282 @@ func _tests_controle_vol() -> void:
 # =====================================================================
 # ÉTAPE 5 — C. DANS L'ÉCRAN : tuile, page, fenêtre de Lancer, Jouer de l'accueil
 # =====================================================================
+# =====================================================================
+# 6. L'ARMATURE (étape 6) : poutres, connecteurs, panneaux
+# =====================================================================
+static func _ed_vide():
+	return Edition.new({"format": "plan-vaisseau", "version": Plan.VERSION, "nom": "essai armature", "commandes": {}, "pieces": []}, "")
+
+
+func _tests_armature() -> void:
+	# 1. masses : tubes (carré, rond) et barre pleine, panneau (plaque mince), connecteur en boule creuse
+	var al := float(Catalogue.MATIERES["aluminium_lithium"]["densite"])
+	var tc: Dictionary = Catalogue.masse_piece({"type": "poutre", "matiere": "aluminium_lithium", "position": [0, 0, 0],
+		"longueur_m": 2.0, "largeur_m": 0.08, "hauteur_m": 0.08, "paroi_m": 0.003})
+	var m_tc := al * 2.0 * (0.08 * 0.08 - 0.074 * 0.074)
+	var iz_tc := al * 2.0 * (pow(0.08, 4) - pow(0.074, 4)) / 6.0
+	var tr: Dictionary = Catalogue.masse_piece({"type": "poutre", "matiere": "aluminium_lithium", "position": [0, 0, 0],
+		"longueur_m": 1.0, "largeur_m": 0.06, "hauteur_m": 0.06, "profil": "rond", "paroi_m": 0.002})
+	var m_tr := al * PI * (0.03 * 0.03 - 0.028 * 0.028)
+	var iz_tr := 0.5 * m_tr * (0.03 * 0.03 + 0.028 * 0.028)
+	var pn: Dictionary = Catalogue.masse_panneau(al, [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]], 0.002)
+	var m_pn := al * 0.002
+	var bo: Dictionary = Catalogue.masse_piece({"type": "bloc", "masse_kg": 3.0, "position": [0, 0, 0], "forme": "boule", "dimensions_m": [0.2, 0.01]})
+	var i_bo := 0.4 * 3.0 * (pow(0.1, 5) - pow(0.09, 5)) / (pow(0.1, 3) - pow(0.09, 3))
+	var ok := absf(float(tc["masse"]) - m_tc) < 1e-6 and absf(float(tc["inertie"][2]) - iz_tc) < 1e-7 \
+		and absf(float(tr["masse"]) - m_tr) < 1e-6 and absf(float(tr["inertie"][2]) - iz_tr) < 1e-8 \
+		and absf(float(pn["masse"]) - m_pn) < 1e-6 and (pn["centre"] as Vector3).distance_to(Vector3(0.5, 0, 0.5)) < 1e-6 \
+		and absf(float(pn["inertie"][1]) - m_pn / 6.0) < 1e-5 and absf(float(pn["inertie"][0]) - m_pn * (1.0 + 0.002 * 0.002) / 12.0) < 1e-5 \
+		and absf(float(pn["inertie"][3])) < 1e-5 and absf(float(pn["inertie"][4])) < 1e-5 and absf(float(bo["inertie"][0]) - i_bo) < 1e-6
+	_resultat(ok, "Armature : masses des tubes, panneaux et connecteurs", "tube carré 8 cm × 2 m %.3f kg (%.3f), tube rond %.3f kg (%.3f), panneau 1 m² %.3f kg, I %.4f (%.4f), boule creuse I %.6f (%.6f)" % [
+		float(tc["masse"]), m_tc, float(tr["masse"]), m_tr, float(pn["masse"]), float(pn["inertie"][1]), m_pn / 6.0, float(bo["inertie"][0]), i_bo])
+	# 2. tracer : un carré de poutres en symétrie (4 connecteurs, 4 poutres de chaque côté), les connecteurs
+	#    prennent leur forme, une zone carrée à remplir de chaque côté
+	var ed = _ed_vide()
+	var a := {"point": Vector3(1.0, 0.0, 0.0)}
+	var r1: Dictionary = ed.tracer_poutre(a, {"point": Vector3(1.0, 0.0, -1.0)}, {}, true)
+	var r2: Dictionary = ed.tracer_poutre({"noeud": r1["fin"]}, {"point": Vector3(2.0, 0.0, -1.0)}, {}, true)
+	var r3: Dictionary = ed.tracer_poutre({"noeud": r2["fin"]}, {"point": Vector3(2.0, 0.0, 0.0)}, {}, true)
+	var r4: Dictionary = ed.tracer_poutre({"noeud": r3["fin"]}, {"noeud": r1["debut"]}, {}, true)
+	var g := Armature.graphe(ed.donnees)
+	var zones: Array = Armature.zones(ed.donnees)
+	var genre: String = Armature.genre_connecteur(g, String(r1["debut"]))["nom"]
+	var jumeau := String(ed.element(String(r1["debut"])).get("symetrique", ""))
+	var pj: Vector3 = Armature.position(ed.element(jumeau)) if jumeau != "" else Vector3.INF
+	ok = r1["erreur"] == "" and r4["erreur"] == "" and g["connecteurs"].size() == 8 and g["poutres"].size() == 8 \
+		and zones.size() == 2 and genre == "connecteur d'angle (90°)" and pj.distance_to(Vector3(-1, 0, 0)) < 1e-6 \
+		and String(ed.element(String(r1["poutres"][0])).get("symetrique", "")) == String(r1["poutres"][1])
+	_resultat(ok, "Armature : tracer des poutres en symétrie", "%d connecteurs, %d poutres, %d zones, coin : « %s », jumeau en %s" % [
+		g["connecteurs"].size(), g["poutres"].size(), zones.size(), genre, pj])
+	# 3. remplir la zone (et sa jumelle) ; physique : masse exacte, centre de gravité sur l'axe
+	var p1 = ed.plan()
+	var masse_avant := float(p1.proprietes_masse()["masse"])
+	var poses: Array = ed.remplir(zones[0]["noeuds"], {"epaisseur_m": 0.003}, true)
+	var p2 = ed.plan()
+	var mp: Dictionary = p2.proprietes_masse()
+	var attendu := 2.0 * al * 1.0 * 0.003
+	var v2 = VaisseauPhysique.new(p2)
+	ok = poses.size() == 2 and p2.valide() and absf(float(mp["masse"]) - masse_avant - attendu) < 1e-6 \
+		and absf((mp["centre"] as Vector3).x) < 1e-9 and absf(v2.masse - float(mp["masse"])) < 1e-6 \
+		and Armature.zones(ed.donnees).filter(func(z): return z["rempli"] == "").is_empty()
+	_resultat(ok, "Armature : remplir une zone d'un panneau (et sa jumelle)", "%d panneaux, +%.3f kg (attendu %.3f), centre x = %s, plan valide : %s" % [
+		poses.size(), float(mp["masse"]) - masse_avant, attendu, (mp["centre"] as Vector3).x, p2.valide()])
+	# 4. finir sur une poutre la coupe : connecteur en T, deux poutres ; de l'autre côté pareil ; les
+	#    morceaux sont jumeaux deux à deux
+	var r5: Dictionary = ed.tracer_poutre({"point": Vector3(1.5, 1.0, -0.5)}, {"point": Vector3(1.5, 0.0, -1.0), "poutre": String(r2["poutres"][0])}, {}, true)
+	g = Armature.graphe(ed.donnees)
+	var t_nom: String = Armature.genre_connecteur(g, String(r5["fin"]))["nom"]
+	var jumelles_ok := true
+	for pid in g["poutres"]:
+		var j := String(g["poutres"][pid].get("symetrique", ""))
+		jumelles_ok = jumelles_ok and j != "" and String(g["poutres"][j].get("symetrique", "")) == pid
+	ok = r5["erreur"] == "" and g["poutres"].size() == 12 and g["connecteurs"].size() == 12 and t_nom == "connecteur en T" and jumelles_ok \
+		and g["panneaux"].size() == 2
+	_resultat(ok, "Armature : finir sur une poutre la coupe (connecteur en T)", "%d poutres, %d connecteurs, « %s », toutes jumelles deux à deux : %s, panneaux gardés : %d" % [
+		g["poutres"].size(), g["connecteurs"].size(), t_nom, jumelles_ok, g["panneaux"].size()])
+	# 5. erreurs : trop courte, en double, deux bouts au même endroit (rien ne change, pas d'annulation de trop)
+	var n_avant: int = (ed.donnees["pieces"] as Array).size()
+	var e1: Dictionary = ed.tracer_poutre({"noeud": r1["debut"]}, {"point": Vector3(1.0, 0.0, -0.02)}, {}, true)
+	var e2: Dictionary = ed.tracer_poutre({"noeud": r1["debut"]}, {"noeud": r1["fin"]}, {}, true)
+	var e3: Dictionary = ed.tracer_poutre({"noeud": r1["debut"]}, {"point": Vector3(30.0, 0.0, 0.0)}, {}, true)
+	ok = e1["erreur"] != "" and e2["erreur"] != "" and e3["erreur"] != "" and (ed.donnees["pieces"] as Array).size() == n_avant
+	_resultat(ok, "Armature : poutres refusées", "« %s » · « %s » · « %s »" % [e1["erreur"], e2["erreur"], e3["erreur"]])
+	# 6. déplacer un connecteur : ses poutres et son panneau suivent, son jumeau aussi (en miroir)
+	var coin := String(r3["fin"])
+	var err: String = ed.deplacer_noeud(coin, Vector3(2.2, 0.0, 0.2))
+	var jc := String(ed.element(coin).get("symetrique", ""))
+	var pan: Dictionary = ed.element(String(poses[0]))
+	var surf := float(pan.get("surface_m2", 0.0))
+	var long_p := float(ed.element(String(r3["poutres"][0])).get("longueur_m", 0.0))
+	ok = err == "" and Armature.position(ed.element(jc)).distance_to(Vector3(-2.2, 0.0, 0.2)) < 1e-6 and surf > 1.0 \
+		and absf(long_p - Vector3(2.0, 0.0, -1.0).distance_to(Vector3(2.2, 0.0, 0.2))) < 1e-3 and ed.plan().valide()
+	_resultat(ok, "Armature : déplacer un connecteur (et son jumeau)", "jumeau en %s, panneau %.3f m², poutre %.3f m" % [
+		Armature.position(ed.element(jc)), surf, long_p])
+	# 7. régler une poutre : sa jumelle aussi ; un réglage pour toute l'armature
+	var pid0 := String(r1["poutres"][0])
+	ed.regler(pid0, "section_m", 0.12)
+	var s_j := float(ed.element(String(ed.element(pid0)["symetrique"]))["reglages"]["section_m"])
+	var d_conn := float(ed.element(String(r1["debut"]))["pieces"][0]["dimensions_m"][0])
+	var n_mat: int = ed.regler_armature(ed.armature(Armature.POUTRE).map(func(e): return String(e["id"])), {"matiere": "titane"})
+	ok = absf(s_j - 0.12) < 1e-9 and absf(d_conn - 0.17) < 1e-9 and n_mat == 12 \
+		and ed.armature(Armature.POUTRE).all(func(e): return e["reglages"]["matiere"] == "titane")
+	_resultat(ok, "Armature : régler une poutre, puis toute l'armature", "jumelle %.2f m, connecteur %.3f m (1,4 × 12 cm), %d poutres en titane" % [s_j, d_conn, n_mat])
+	# 8. enlever un connecteur emmène ses poutres et ses panneaux (et ceux du jumeau) ; Ctrl + Z remet tout
+	var avant_suppr: Dictionary = ed.donnees.duplicate(true)
+	ed.supprimer([String(r1["debut"])])
+	g = Armature.graphe(ed.donnees)
+	var reste_ok: bool = (g["panneaux"] as Dictionary).is_empty() and not (g["connecteurs"] as Dictionary).has(String(r1["debut"]))
+	for id in g["connecteurs"]:
+		reste_ok = reste_ok and not Armature.poutres_de(g, id).is_empty()
+	var poutres_apres: int = g["poutres"].size()
+	ed.annuler()
+	ok = reste_ok and poutres_apres == 8 and ed.donnees == avant_suppr
+	_resultat(ok, "Armature : enlever un connecteur (en cascade), puis annuler", "%d poutres restent, sans connecteur seul ni panneau : %s ; annulé à l'identique : %s" % [
+		poutres_apres, reste_ok, ed.donnees == avant_suppr])
+	# 9. sur l'axe : un connecteur au milieu est son propre jumeau, une poutre le long de l'axe n'a pas de jumelle
+	var ra: Dictionary = ed.tracer_poutre({"point": Vector3(0.03, 2.0, 0.0)}, {"point": Vector3(0.0, 2.0, -1.5)}, {}, true)
+	var ra2: Dictionary = ed.tracer_poutre({"noeud": ra["debut"]}, {"noeud": r1["debut"]}, {}, true)
+	var milieu: Vector3 = Armature.position(ed.element(String(ra["debut"])))
+	ok = ra["poutres"].size() == 1 and absf(milieu.x) == 0.0 and ra2["poutres"].size() == 2
+	_resultat(ok, "Armature : connecteurs sur l'axe du vaisseau", "poutre sur l'axe : %d (sans jumelle), connecteur ramené en x = %s, poutre vers un côté : %d (avec jumelle)" % [
+		ra["poutres"].size(), milieu.x, ra2["poutres"].size()])
+	# 10. remplir tout ; enregistrer puis relire : même armature, même masse
+	var ed2 = _ed_vide()
+	var q1: Dictionary = ed2.tracer_poutre({"point": Vector3(0.5, 0.0, 0.0)}, {"point": Vector3(0.5, 0.0, -1.0)}, {}, false)
+	var q2: Dictionary = ed2.tracer_poutre({"noeud": q1["fin"]}, {"point": Vector3(0.5, 1.0, -0.5)}, {}, false)
+	ed2.tracer_poutre({"noeud": q2["fin"]}, {"noeud": q1["debut"]}, {}, false)
+	ed2.tracer_poutre({"noeud": q2["fin"]}, {"point": Vector3(1.5, 0.5, -0.5)}, {}, false)
+	ed2.tracer_poutre({"point": Vector3(1.5, 0.5, -0.5)}, {"noeud": q1["debut"]}, {}, false)
+	var n_remplis: int = ed2.remplir_tout({"matiere": "verre_aluminosilicate"}, false)
+	_vider_dossier(DOSSIER_ESSAI)
+	var err2: Error = ed2.enregistrer(DOSSIER_ESSAI)
+	var relu = Plan.new()
+	var lu: bool = relu.charger(ed2.chemin)
+	var ed3 = Edition.new(relu.donnees, ed2.chemin)
+	var m2 := float(ed2.plan().proprietes_masse()["masse"])
+	var m3 := float(ed3.plan().proprietes_masse()["masse"])
+	ok = n_remplis == 2 and err2 == OK and lu and absf(m2 - m3) < 1e-9 and ed3.armature().size() == ed2.armature().size() \
+		and ed3.armature().all(func(e): return JSON.stringify(e.get("noeuds", [])) == JSON.stringify(ed2.element(String(e["id"])).get("noeuds", [])))
+	_resultat(ok, "Armature : remplir toutes les zones, enregistrer, relire", "%d zones remplies (vitres), %.3f kg relus (%.3f), %d éléments" % [n_remplis, m3, m2, ed3.armature().size()])
+	# 11. dessin : chaque élément de l'armature a sa forme ; un panneau est fermé, ses faces vers l'extérieur
+	var els: Array = DessinVaisseau.elements(ed2.plan()).filter(func(el): return el.get("armature", false))
+	var f_pan: Dictionary = {}
+	for el in els:
+		for f in el["formes"]:
+			if String(f["forme"]) == "panneau":
+				f_pan = f
+	var m_pan: Mesh = DessinVaisseau.maillage_forme(f_pan) if not f_pan.is_empty() else null
+	var compte: Dictionary = DessinVaisseau.compter(ed2.plan())
+	ok = els.size() == ed2.armature().size() and m_pan != null and _faces_dehors(m_pan, _signe_boite()) == 1.0 \
+		and bool(f_pan["vitre"]) and int(compte["vitres"]) == 2 and DessinVaisseau.triangles_de(f_pan) == 8
+	_resultat(ok, "Armature : dessin des poutres, connecteurs et panneaux", "%d éléments dessinés, vitre : %s, faces dehors : %.2f, %d triangles par panneau, %d vitres comptées" % [
+		els.size(), f_pan.get("vitre", false), _faces_dehors(m_pan, _signe_boite()) if m_pan != null else 0.0,
+		DessinVaisseau.triangles_de(f_pan) if not f_pan.is_empty() else 0, int(compte["vitres"])])
+
+
+
+## Les propositions d'armature du catalogue (la liste est refaite à chaque changement : les chercher à nouveau).
+static func _propositions_armature(at) -> Array:
+	var props := []
+	var it: TreeItem = at.arbre.get_root()
+	while it != null:
+		var m = it.get_metadata(0)
+		if m is Dictionary and String(m["genre"]) == "modele_armature":
+			props.append(it)
+		it = it.get_next_in_tree()
+	return props
+
+
+static func _proposition_armature(at, modele: String) -> TreeItem:
+	for i in _propositions_armature(at):
+		if Armature.PROPOSITIONS[int(i.get_metadata(0)["id"])][2] == modele:
+			return i
+	return null
+
+
+## Un rayon (repère du monde) qui tombe d'en haut sur un point du vaisseau (repère du vaisseau).
+static func _rayon_dessus(at, p: Vector3) -> Array:
+	var xf: Transform3D = at.corps.global_transform
+	var bas: Vector3 = -(xf.basis * Vector3.UP).normalized()
+	return [xf * p - bas * 20.0, bas]
+
+
+func _viser(at, p: Vector3) -> void:
+	var r := _rayon_dessus(at, p)
+	at.calculer_trace_rayon(r[0], r[1])
+
+
+func _tests_ecran_etape6() -> void:
+	_vider_dossier(DOSSIER_ESSAI)
+	Engine.set_meta("partie", {"plan": Plan.PLAN_PAR_DEFAUT, "depart": "", "plan_lu": true})
+	var at = (load(SCENE_ATELIER) as PackedScene).instantiate()
+	at.dossier_vaisseaux = DOSSIER_ESSAI
+	add_child(at)
+	await _attendre_atelier()
+	at.case_symetrie.button_pressed = true
+	# 1. le catalogue propose l'armature ; un clic sur « tube carré » lance l'outil de traçage
+	var props: Array = _propositions_armature(at)
+	_proposition_armature(at, Armature.POUTRE).select(0)
+	await get_tree().process_frame
+	var ok: bool = props.size() == Armature.PROPOSITIONS.size() and not at.trace.is_empty() and at.trace["outil"] == "poutre" \
+		and at.fiche_titre.text == "Tracer des poutres"
+	_resultat(ok, "Écran (étape 6) : le catalogue lance le traçage", "%d propositions d'armature ; outil « %s », fiche « %s »" % [
+		props.size(), at.trace.get("outil", ""), at.fiche_titre.text])
+	# 2. un carré tracé à la souris dans le vide, à droite du vaisseau (le dernier clic revient sur le premier
+	#    connecteur) : 4 poutres + leurs jumelles, 4 connecteurs d'angle de chaque côté
+	var coins := [Vector3(9.0, 0.0, -0.5), Vector3(10.0, 0.0, -0.5), Vector3(10.0, 0.0, 0.5), Vector3(9.0, 0.0, 0.5), Vector3(9.0, 0.0, -0.5)]
+	var textes := []
+	for c in coins:
+		_viser(at, c)
+		textes.append(String(at.trace["texte"]))
+		at.valider_trace()
+		await get_tree().process_frame
+	var poutres: Array = at.edition.armature(Armature.POUTRE)
+	var connecteurs: Array = at.edition.armature(Armature.CONNECTEUR)
+	var g := Armature.graphe(at.edition.donnees)
+	var angles := connecteurs.filter(func(e): return String(Armature.genre_connecteur(g, String(e["id"]))["nom"]).begins_with("connecteur d'angle"))
+	ok = textes[0] == "départ : dans le vide" and textes[1].begins_with("1,00 m") and textes[4].begins_with("1,00 m · sur ") \
+		and poutres.size() == 8 and connecteurs.size() == 8 and angles.size() == 8
+	_resultat(ok, "Écran (étape 6) : tracer un carré à la souris (symétrie)", "bulles « %s » … « %s » ; %d poutres, %d connecteurs (%d d'angle)" % [
+		textes[0], textes[4], poutres.size(), connecteurs.size(), angles.size()])
+	# Échap lâche le départ, puis arrête l'outil
+	var ev := InputEventKey.new()
+	ev.keycode = KEY_ESCAPE
+	ev.pressed = true
+	at._unhandled_input(ev)
+	var lache: bool = not at.trace.is_empty() and (at.trace["depart"] as Dictionary).is_empty()
+	at._unhandled_input(ev)
+	ok = lache and at.trace.is_empty()
+	_resultat(ok, "Écran (étape 6) : Échap lâche le départ, puis arrête", "départ lâché : %s ; outil arrêté : %s" % [lache, at.trace.is_empty()])
+	# 3. remplir : la zone sous la souris s'allume, un clic y met un panneau (et sa jumelle)
+	_proposition_armature(at, Armature.PANNEAU).select(0)
+	await get_tree().process_frame
+	_viser(at, Vector3(9.5, 0.0, 0.0))
+	var libre := String(at.trace["texte"])
+	var zones: int = (at.trace["zones"] as Array).size()
+	at.valider_trace()
+	await get_tree().process_frame
+	_viser(at, Vector3(9.5, 0.0, 0.0))
+	var deja := String(at.trace["texte"])
+	var panneaux: Array = at.edition.armature(Armature.PANNEAU)
+	ok = zones == 2 and libre.begins_with("Zone libre · 4 coins · 1,00 m²") and panneaux.size() == 2 and deja.contains("déjà remplie")
+	_resultat(ok, "Écran (étape 6) : remplir une zone à la souris", "%d zones ; « %s » ; %d panneaux ; puis « %s »" % [zones, libre, panneaux.size(), deja])
+	at.finir_trace()
+	await _attendre_atelier()
+	await _attendre_atelier()
+	# 4. ce carré ne touche pas le vaisseau : ses pièces flottent toutes ensemble (liées par leurs connecteurs)
+	var ids: Array = at.analyse.armature.keys()
+	ok = ids.size() == 18 and ids.all(func(i): return at.flottantes.has(i)) and at.maillages.has(String(poutres[0]["id"]))
+	_resultat(ok, "Écran (étape 6) : l'armature dessinée, et vue flotter", "%d éléments, %d qui flottent ; poutre dessinée : %s" % [
+		ids.size(), at.flottantes.size(), at.maillages.has(String(poutres[0]["id"]))])
+	# 5. la fiche d'une poutre : ses réglages, « Appliquer ces réglages à toutes les poutres (8) »
+	var pid := String(poutres[0]["id"])
+	at.choisir("ajout", pid)
+	await get_tree().process_frame
+	var boutons: Array = _boutons(at.fiche_outils)
+	ok = boutons.has("Appliquer ces réglages à toutes les poutres (8)") and boutons.has("Choisir toute l'armature")
+	_resultat(ok, "Écran (étape 6) : la fiche d'une poutre", "« %s » : %s" % [at.fiche_titre.text, boutons])
+	# 6. G sur un connecteur : il suit la souris, ses poutres et son panneau suivent, son jumeau aussi
+	var coin := ""
+	for e in connecteurs:
+		if (Armature.position(e) - Vector3(10.0, 0.0, -0.5)).length() < 0.2 and Armature.position(e).x > 0.0:
+			coin = String(e["id"])
+	var avant: Vector3 = Armature.position(at.analyse.armature[coin])
+	at.choisir("ajout", coin)
+	at.deplacer_selection()
+	var outil := String(at.trace.get("outil", ""))
+	_viser(at, avant + Vector3(0.5, 0.0, -0.5))
+	at.valider_trace()
+	await get_tree().process_frame
+	var apres: Vector3 = Armature.position(Armature.graphe(at.edition.donnees)["connecteurs"][coin])
+	var jum := String(Armature.graphe(at.edition.donnees)["connecteurs"][coin].get("symetrique", ""))
+	var p_jum: Vector3 = Armature.position(Armature.graphe(at.edition.donnees)["connecteurs"][jum]) if jum != "" else Vector3.ZERO
+	ok = outil == "deplacer" and apres.is_equal_approx(avant + Vector3(0.5, 0.0, -0.5)) and p_jum.is_equal_approx(Vector3(-apres.x, apres.y, apres.z)) \
+		and at.trace.is_empty() and at.edition.armature(Armature.PANNEAU).size() == 2
+	_resultat(ok, "Écran (étape 6) : déplacer un connecteur (G)", "outil « %s » ; %s → %s, jumeau en %s" % [outil, Analyse.vecteur_txt(avant), Analyse.vecteur_txt(apres), Analyse.vecteur_txt(p_jum)])
+	at.queue_free()
+	await get_tree().process_frame
+
 static func _boutons(n: Node) -> Array:
 	return n.find_children("*", "Button", true, false).map(func(b): return (b as Button).text)
 

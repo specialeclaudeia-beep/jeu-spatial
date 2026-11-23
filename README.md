@@ -118,6 +118,36 @@ et il est libéré quand on revient (F3 dans le jeu). Le vaisseau est posé dans
   **Revenir** et **▶ Lancer quand même**. Le chasseur de départ part tout de suite, comme avant.
   **Jouer** (accueil) passe par le même contrôle (avec **Ouvrir l'atelier**).
 - Mesurer la vitesse avec un vaisseau de l'atelier : `-- --mesure --plan user://vaisseaux/<nom>.plan.json`.
+
+### L'armature : poutres, connecteurs, panneaux (étape 6)
+- Dans le catalogue, **Armature : tracer des poutres** (tube carré, tube rond, carbone, barre pleine) :
+  clic pour le départ, clic pour l'arrivée ; la poutre suivante part du bout de la dernière (**Échap** ou
+  clic droit : lâcher le départ ; encore une fois : arrêter). Un bout se pose **sur un connecteur**, **sur
+  la coque** (il est alors fixé à cette pièce), **dans le vide** (sur un plan face à la caméra, qui passe
+  par le départ) ou **sur une poutre** : elle est coupée là (**connecteur en T**). Grille de 10 cm (Ctrl :
+  sans), Maj : le long d'un axe du vaisseau, **M** : symétrie (une poutre qui traverse le milieu est sa
+  propre jumelle). Trop courte (moins de 5 cm), trop longue (plus de 25 m) ou en double : refusée.
+- Les **connecteurs se fabriquent tout seuls** à chaque bout : leur forme suit les poutres qui s'y croisent
+  (embout, manchon, connecteur d'angle avec son angle, en T, en X, de coin, en étoile). C'est une boule
+  (creuse, paroi double de celle du tube ; pleine pour une barre pleine) de 1,4 fois la plus grosse poutre.
+- **Armature : remplir une zone** (tôle d'aluminium, carbone, vitre, bouclier thermique, surface d'aile) :
+  une zone fermée par 3 ou 4 poutres **s'allume en vert** sous la souris, un clic la remplit d'un panneau
+  plat (une diagonale coupe un carré en deux triangles ; un quadrilatère pas tout à fait plat devient deux
+  triangles). **Remplir toutes les zones libres** d'un coup, ou cliquer une zone déjà remplie pour lui
+  donner d'autres réglages.
+- **Masses vraies** : tube (carré ou rond) ou barre pleine sur sa longueur utile (d'un connecteur à
+  l'autre), boule creuse ou pleine pour le connecteur, plaque pour le panneau (surface × épaisseur ×
+  densité), avec leurs inerties. Le tableau ingénieur les compte (« dont armature … kg ») et les analyse
+  comme le reste (catégorie **Armature**, fiches, salle à part).
+- **G** sur un connecteur le déplace : ses poutres et ses panneaux suivent, son jumeau aussi. Enlever un
+  connecteur enlève ses poutres et ses panneaux ; enlever une poutre enlève les panneaux qu'elle borde.
+  Les fiches règlent la matière, le profil, la section et la paroi d'une poutre (ou de toutes), la
+  matière et l'épaisseur d'un panneau (ou de tous).
+- L'armature **tient par ses liens** : un morceau posé sur la coque est tenu, un morceau seul dans le vide
+  flotte (refusé au lancement). Posée sur une aile, elle suit l'aile ; posée à la fois sur deux pièces qui
+  bougent l'une par rapport à l'autre, elle reste avec le fuselage, et le contrôle avant le vol prévient.
+  Seules les **surfaces d'aile** portent dans l'air pour l'instant (la traînée d'une coque construite
+  viendra avec l'analyse de l'air).
 Le visuel (hangar, menus, couleurs, formes des pièces) est provisoire ; la physique est la vraie.
 
 ## Commandes

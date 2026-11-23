@@ -10,12 +10,19 @@ extends RefCounted
 ## Symétrie : une pièce posée en symétrie a une jumelle, de l'autre côté du plan gauche-droite du vaisseau
 ## (x = 0). Les deux sont liées (« symetrique ») : déplacer, régler ou supprimer l'une fait pareil pour l'autre.
 ## Positions et orientations : repère du plan, dans sa pose de référence (ailes ouvertes, train rentré).
+##
+## Étape 6 : l'ARMATURE (scripts/atelier/armature.gd). On trace des poutres d'un point à un autre (un
+## connecteur se fabrique à chaque bout ; finir sur une poutre la coupe et fait un connecteur en T), on
+## remplit une zone fermée par 3 ou 4 poutres d'un panneau, on déplace un connecteur (ses poutres et ses
+## panneaux suivent). En symétrie, tout a sa jumelle de l'autre côté. Enlever un connecteur enlève ses
+## poutres ; enlever une poutre enlève les panneaux qu'elle bordait.
 
 signal change
 
 const Plan = preload("res://scripts/atelier/plan.gd")
 const Catalogue = preload("res://scripts/atelier/catalogue.gd")
 const Pieces = preload("res://scripts/atelier/pieces_toutes_faites.gd")
+const Armature = preload("res://scripts/atelier/armature.gd")
 
 const DOSSIER := "user://vaisseaux/"
 const HISTOIRE_MAX := 80                          # nombre de retours en arrière possibles
@@ -46,6 +53,8 @@ func _init(d: Dictionary = {}, chemin_source := "") -> void:
 		if e is Dictionary and e.has("modele") and Pieces.existe(String(e["modele"])):
 			e["reglages"] = Pieces.reglages_complets(String(e["modele"]), e.get("reglages", {}))
 			e["pieces"] = Pieces.pieces(String(e["modele"]), e["reglages"], String(e["id"]))
+	if Armature.a_armature(donnees):
+		Armature.refaire(donnees)
 
 
 ## Le plan relu à partir du texte actuel (scripts/atelier/plan.gd).
@@ -126,9 +135,14 @@ func est_ajout(id: String) -> bool:
 	return not e.is_empty() and e.has("modele")
 
 
-## Les pièces toutes faites posées (ensembles avec un modèle), dans l'ordre du plan.
+## Les pièces toutes faites posées (ensembles avec un modèle, sans l'armature), dans l'ordre du plan.
 func ajouts() -> Array:
-	return (donnees["pieces"] as Array).filter(func(e): return e is Dictionary and e.has("modele"))
+	return (donnees["pieces"] as Array).filter(func(e): return e is Dictionary and e.has("modele") and not Armature.est(e))
+
+
+## L'armature (connecteurs, poutres, panneaux), dans l'ordre du plan ; modele : seulement ceux-là.
+func armature(modele := "") -> Array:
+	return (donnees["pieces"] as Array).filter(func(e): return Armature.est(e) and (modele == "" or String(e["modele"]) == modele))
 
 
 ## Les modules du chasseur : {clé: {"nom": …, "ids": [pièces de premier niveau]}} (dans l'ordre du plan).
@@ -280,8 +294,8 @@ static func _nom_ajout(modele: String, n: int, x: float) -> String:
 ## Déplace (et tourne) une pièce toute faite ; sa jumelle suit, de l'autre côté.
 func placer(id: String, xf: Transform3D, fixe_a := "", articulation := "") -> void:
 	var e := element(id)
-	if e.is_empty() or not e.has("modele"):
-		return
+	if e.is_empty() or not e.has("modele") or Armature.est(e):
+		return   # (l'armature se déplace par ses connecteurs : deplacer_noeud)
 	_avant()
 	_poser(e, xf, fixe_a, articulation)
 	var j := element(String(e.get("symetrique", "")))
@@ -314,6 +328,9 @@ func deplacer_a_la_main(id: String, xf: Transform3D) -> void:
 func regler(id: String, cle: String, valeur) -> void:
 	var e := element(id)
 	if e.is_empty() or not e.has("modele"):
+		return
+	if Armature.est(e):
+		regler_armature([id], {cle: valeur})
 		return
 	var modele := String(e["modele"])
 	var r: Dictionary = (e.get("reglages", {}) as Dictionary).duplicate()
@@ -349,6 +366,7 @@ func supprimer(ids: Array) -> int:
 		a_enlever[s] = true
 		if e.has("symetrique"):
 			a_enlever[String(e["symetrique"])] = true
+	_cascade_armature(a_enlever)
 	if a_enlever.is_empty():
 		return 0
 	_avant()
@@ -362,6 +380,8 @@ func supprimer(ids: Array) -> int:
 	for e in reste:
 		if e is Dictionary and e.has("symetrique") and a_enlever.has(String(e["symetrique"])):
 			e.erase("symetrique")
+	if Armature.a_armature(donnees):
+		Armature.refaire(donnees)   # les connecteurs qui n'ont plus de poutre partent aussi
 	_apres()
 	return a_enlever.size()
 
@@ -377,6 +397,391 @@ func separer_symetrie(id: String) -> void:
 	if not j.is_empty():
 		j.erase("symetrique")
 	_apres()
+
+
+# =====================================================================
+# L'ARMATURE : poutres, connecteurs, panneaux (étape 6)
+# =====================================================================
+## Le connecteur à cette place (à 1 cm près), ou "".
+func connecteur_a(p: Vector3, sauf := "") -> String:
+	var meilleur := ""
+	var d_min := Armature.MEME_POINT
+	for e in armature(Armature.CONNECTEUR):
+		var d := Armature.position(e).distance_to(p)
+		if d <= d_min and String(e["id"]) != sauf:
+			d_min = d
+			meilleur = String(e["id"])
+	return meilleur
+
+
+## La poutre qui passe à moins de 2 cm de ce point (loin de ses bouts), ou "".
+func poutre_par(p: Vector3) -> String:
+	var g := Armature.graphe(donnees)
+	var meilleur := ""
+	var d_min := 0.02
+	for id in g["poutres"]:
+		var n: Array = g["poutres"][id]["noeuds"]
+		var a := Armature.position(g["connecteurs"][String(n[0])])
+		var b := Armature.position(g["connecteurs"][String(n[1])])
+		var q := Geometry3D.get_closest_point_to_segment(p, a, b)
+		if q.distance_to(a) < Armature.LONGUEUR_MIN or q.distance_to(b) < Armature.LONGUEUR_MIN:
+			continue
+		if q.distance_to(p) <= d_min:
+			d_min = q.distance_to(p)
+			meilleur = String(id)
+	return meilleur
+
+
+func _nouveau_connecteur(p: Vector3, fixe_a: String, art: String) -> String:
+	var n := _numero_libre(Armature.CONNECTEUR)
+	var id := "%s_%d" % [Armature.CONNECTEUR, n]
+	var e := {"id": id, "type": "ensemble", "modele": Armature.CONNECTEUR, "nom": "Connecteur %d" % n,
+		"position": [snappedf(p.x, 0.0001), snappedf(p.y, 0.0001), snappedf(p.z, 0.0001)], "rotation_deg": [0.0, 0.0, 0.0],
+		"reglages": {}, "pieces": []}
+	if fixe_a != "":
+		e["fixe_a"] = fixe_a
+		if art != "":
+			e["articulation_appui"] = art
+	pieces_racine().append(e)
+	return id
+
+
+func _nouvelle_poutre(a: String, b: String, r: Dictionary) -> String:
+	var n := _numero_libre(Armature.POUTRE)
+	var id := "%s_%d" % [Armature.POUTRE, n]
+	pieces_racine().append({"id": id, "type": "ensemble", "modele": Armature.POUTRE, "nom": "Poutre %d" % n,
+		"noeuds": [a, b], "reglages": Armature.reglages_complets(Armature.POUTRE, r), "pieces": []})
+	return id
+
+
+## Coupe une poutre au point le plus proche de p : un connecteur (en T) au milieu, deux poutres de part et
+## d'autre (mêmes réglages). Renvoie le connecteur (ou le bout de la poutre, si p en est tout près).
+func _couper(pid: String, p: Vector3) -> String:
+	var e := element(pid)
+	var n: Array = e["noeuds"]
+	var a := Armature.position(element(String(n[0])))
+	var b := Armature.position(element(String(n[1])))
+	var q := Geometry3D.get_closest_point_to_segment(p, a, b)
+	if q.distance_to(a) < Armature.LONGUEUR_MIN:
+		return String(n[0])
+	if q.distance_to(b) < Armature.LONGUEUR_MIN:
+		return String(n[1])
+	var c := _nouveau_connecteur(q, "", "")
+	var fin := String(n[1])
+	e["noeuds"] = [String(n[0]), c]
+	var id2 := _nouvelle_poutre(c, fin, e.get("reglages", {}))
+	# la jumelle de la poutre coupée sera coupée au même endroit (de l'autre côté) : les morceaux se
+	# retrouvent par leur place (_lier_poutres)
+	if e.has("symetrique"):
+		element(id2)["symetrique"] = "?"
+	return c
+
+
+## Un bout de poutre → l'id de son connecteur (créé s'il le faut). Bout : {"noeud": id} (un connecteur
+## qui existe), {"point": Vector3, "fixe_a", "articulation"} (un nouveau, posé sur cette pièce), ou
+## {"point": Vector3, "poutre": id} (sur une poutre : elle est coupée là).
+func _connecteur_du_bout(b: Dictionary, sym: bool) -> String:
+	if b.has("noeud"):
+		return String(b["noeud"]) if not element(String(b["noeud"])).is_empty() else ""
+	var p: Vector3 = b["point"]
+	if sym and absf(p.x) <= Armature.SUR_L_AXE:
+		p.x = 0.0   # sur l'axe du vaisseau : le connecteur est sa propre jumelle
+	var deja := connecteur_a(p)
+	if deja != "":
+		return deja
+	var par := poutre_par(p)   # (celle d'un bout « poutre » a pu être coupée par l'autre bout)
+	if par != "":
+		return _couper(par, p)
+	if b.has("poutre") and not element(String(b["poutre"])).is_empty():
+		return _couper(String(b["poutre"]), p)
+	return _nouveau_connecteur(p, String(b.get("fixe_a", "")), String(b.get("articulation", "")))
+
+
+static func _point_du_bout(b: Dictionary, donnees_: Dictionary) -> Variant:
+	if b.has("point"):
+		return b["point"]
+	for e in donnees_["pieces"]:
+		if Armature.est(e) and String(e["id"]) == String(b.get("noeud", "")):
+			return Armature.position(e)
+	return null
+
+
+## Le jumeau d'un connecteur (de l'autre côté du vaisseau) : lui-même s'il est sur l'axe ; sinon celui qui
+## est déjà au point miroir, ou une poutre coupée là, ou un nouveau, posé sur la pièce miroir de la sienne.
+func _jumeau_noeud(id: String) -> String:
+	var e := element(id)
+	var p := Armature.position(e)
+	if absf(p.x) <= Armature.SUR_L_AXE:
+		return id
+	if e.has("symetrique") and not element(String(e["symetrique"])).is_empty():
+		return String(e["symetrique"])
+	var q := Vector3(-p.x, p.y, p.z)
+	var c := connecteur_a(q, id)
+	if c == "":
+		var par := poutre_par(q)
+		if par != "":
+			c = _couper(par, q)
+		else:
+			c = _nouveau_connecteur(q, nom_miroir(String(e.get("fixe_a", ""))), nom_miroir(String(e.get("articulation_appui", ""))))
+	if c != id:
+		e["symetrique"] = c
+		element(c)["symetrique"] = id
+	return c
+
+
+## Les jumelles des poutres (et des connecteurs) retrouvées par leur place : après une coupe, les deux
+## morceaux de chaque côté se reconnaissent.
+func _lier_poutres() -> void:
+	var g := Armature.graphe(donnees)
+	for id in g["connecteurs"]:
+		var e: Dictionary = g["connecteurs"][id]
+		var p := Armature.position(e)
+		if String(e.get("symetrique", "")) == "" and absf(p.x) > Armature.SUR_L_AXE:
+			var c := connecteur_a(Vector3(-p.x, p.y, p.z), id)
+			if c != "" and String(g["connecteurs"][c].get("symetrique", "")) == "":
+				e["symetrique"] = c
+				g["connecteurs"][c]["symetrique"] = id
+	# chaque poutre qui avait une jumelle (ou un morceau de poutre coupée, « ? ») retrouve celle qui est
+	# vraiment à sa place miroir ; sinon elle devient seule
+	for id in g["poutres"]:
+		var e: Dictionary = g["poutres"][id]
+		if not e.has("symetrique"):
+			continue
+		var n: Array = e["noeuds"]
+		var ja := _sym_noeud(String(n[0]))
+		var jb := _sym_noeud(String(n[1]))
+		var j := Armature.poutre_entre(g, ja, jb) if ja != "" and jb != "" else ""
+		if j == "" or j == id:
+			e.erase("symetrique")
+		else:
+			e["symetrique"] = j
+			g["poutres"][j]["symetrique"] = id
+
+
+## La jumelle d'un connecteur s'il en a une (lui-même s'il est sur l'axe), sinon "".
+func _sym_noeud(id: String) -> String:
+	var e := element(id)
+	if e.is_empty():
+		return ""
+	if absf(Armature.position(e).x) <= Armature.SUR_L_AXE:
+		return id
+	var s := String(e.get("symetrique", ""))
+	return s if not element(s).is_empty() else ""
+
+
+## Trace une poutre de a à b (bouts : voir _connecteur_du_bout), avec ces réglages (matière, profil,
+## section, paroi) ; symetrie : sa jumelle aussi, de l'autre côté. Renvoie {"poutres": [ids], "debut":
+## connecteur de départ, "fin": connecteur d'arrivée (pour enchaîner), "erreur": texte ("" : posée)}.
+func tracer_poutre(a: Dictionary, b: Dictionary, reglages := {}, sym := false) -> Dictionary:
+	var pa = _point_du_bout(a, donnees)
+	var pb = _point_du_bout(b, donnees)
+	if pa == null or pb == null:
+		return {"poutres": [], "erreur": "connecteur introuvable"}
+	var l := (pa as Vector3).distance_to(pb)
+	if l < Armature.LONGUEUR_MIN:
+		return {"poutres": [], "erreur": "trop courte (5 cm au moins)"}
+	if l > Armature.LONGUEUR_MAX:
+		return {"poutres": [], "erreur": "trop longue (25 m au plus)"}
+	_avant()
+	var ida := _connecteur_du_bout(a, sym)
+	var idb := _connecteur_du_bout(b, sym)
+	var g := Armature.graphe(donnees)
+	if ida == "" or idb == "" or ida == idb or Armature.poutre_entre(g, ida, idb) != "":
+		donnees = _passe.pop_back()   # rien n'a changé
+		return {"poutres": [], "erreur": "il y a déjà une poutre entre ces deux connecteurs" if ida != idb else "les deux bouts sont au même endroit"}
+	var r := Armature.reglages_complets(Armature.POUTRE, reglages)
+	var id := _nouvelle_poutre(ida, idb, r)
+	var ids := [id]
+	if sym:
+		var ja := _jumeau_noeud(ida)
+		var jb := _jumeau_noeud(idb)
+		if Armature.cle([ja, jb]) != Armature.cle([ida, idb]) and ja != jb:
+			var g2 := Armature.graphe(donnees)
+			var j := Armature.poutre_entre(g2, ja, jb)
+			if j == "":
+				j = _nouvelle_poutre(ja, jb, r)
+				ids.append(j)
+			element(id)["symetrique"] = j
+			element(j)["symetrique"] = id
+	_lier_poutres()
+	Armature.refaire(donnees)
+	_apres()
+	return {"poutres": ids, "debut": ida, "fin": idb, "erreur": ""}
+
+
+## Remplit une zone fermée de l'armature (ses 3 ou 4 connecteurs) d'un panneau ; symetrie : la zone
+## jumelle aussi. Renvoie les panneaux posés (vide : ce n'est pas une zone libre).
+func remplir(noeuds: Array, reglages := {}, sym := false) -> Array:
+	var zones := Armature.zones(donnees)
+	var z := _zone(zones, Armature.cle(noeuds))
+	if z.is_empty() or String(z["rempli"]) != "":
+		return []
+	_avant()
+	var ids := [_nouveau_panneau(z["noeuds"], reglages)]
+	if sym:
+		var jn: Array = (z["noeuds"] as Array).map(func(i): return _sym_noeud(String(i)))
+		if not jn.has("") and Armature.cle(jn) != String(z["cle"]):
+			var zj := _zone(zones, Armature.cle(jn))
+			if not zj.is_empty() and String(zj["rempli"]) == "":
+				ids.append(_nouveau_panneau(zj["noeuds"], reglages))
+				element(ids[0])["symetrique"] = ids[1]
+				element(ids[1])["symetrique"] = ids[0]
+	Armature.refaire(donnees)
+	_apres()
+	return ids
+
+
+## Remplit toutes les zones libres de l'armature (une seule fois Ctrl + Z pour tout enlever).
+func remplir_tout(reglages := {}, sym := false) -> int:
+	var libres := Armature.zones(donnees).filter(func(z): return String(z["rempli"]) == "")
+	if libres.is_empty():
+		return 0
+	_avant()
+	var faits := {}
+	for z in libres:
+		faits[String(z["cle"])] = _nouveau_panneau(z["noeuds"], reglages)
+	if sym:
+		for z in libres:
+			var jn: Array = (z["noeuds"] as Array).map(func(i): return _sym_noeud(String(i)))
+			var k := Armature.cle(jn)
+			if not jn.has("") and k != String(z["cle"]) and faits.has(k):
+				element(faits[String(z["cle"])])["symetrique"] = faits[k]
+	Armature.refaire(donnees)
+	_apres()
+	return faits.size()
+
+
+static func _zone(zones: Array, k: String) -> Dictionary:
+	for z in zones:
+		if String(z["cle"]) == k:
+			return z
+	return {}
+
+
+func _nouveau_panneau(noeuds: Array, r: Dictionary) -> String:
+	var n := _numero_libre(Armature.PANNEAU)
+	var id := "%s_%d" % [Armature.PANNEAU, n]
+	pieces_racine().append({"id": id, "type": "ensemble", "modele": Armature.PANNEAU, "nom": "Panneau %d" % n,
+		"noeuds": noeuds.duplicate(), "reglages": Armature.reglages_complets(Armature.PANNEAU, r), "pieces": []})
+	return id
+
+
+## Repeint un panneau (et sa jumelle) avec d'autres réglages : matière, épaisseur, porte dans l'air.
+func repeindre(id: String, reglages: Dictionary) -> void:
+	var e := element(id)
+	if e.is_empty() or String(e.get("modele", "")) != Armature.PANNEAU:
+		return
+	var r := Armature.reglages_complets(Armature.PANNEAU, reglages)
+	if r == e.get("reglages", {}):
+		return
+	_avant()
+	for x in [e, element(String(e.get("symetrique", "")))]:
+		if not (x as Dictionary).is_empty():
+			x["reglages"] = r.duplicate()
+	Armature.refaire(donnees)
+	_apres()
+
+
+## Déplace un connecteur (repère du plan, ailes ouvertes) ; ses poutres et ses panneaux suivent, sa
+## jumelle aussi (en miroir). fixe_a : la pièce sur laquelle il est maintenant posé ("" : sur rien). Renvoie
+## "" ou ce qui l'empêche.
+func deplacer_noeud(id: String, p: Vector3, fixe_a := "", art := "") -> String:
+	var e := element(id)
+	if e.is_empty() or String(e.get("modele", "")) != Armature.CONNECTEUR:
+		return "ce n'est pas un connecteur"
+	var j := _sym_noeud(id)
+	var sur_axe := j == id
+	if sur_axe and absf(p.x) <= Armature.SUR_L_AXE:
+		p.x = 0.0
+	var autre := connecteur_a(p, id)
+	if autre != "" and autre != j:
+		return "il y a déjà un connecteur à cet endroit"
+	_avant()
+	_poser_noeud(e, p, fixe_a, art)
+	if j != "" and j != id:
+		_poser_noeud(element(j), Vector3(-p.x, p.y, p.z), nom_miroir(fixe_a), nom_miroir(art))
+	var g := Armature.graphe(donnees)
+	for pid in g["poutres"]:
+		var n: Array = g["poutres"][pid]["noeuds"]
+		var l := Armature.position(g["connecteurs"][String(n[0])]).distance_to(Armature.position(g["connecteurs"][String(n[1])]))
+		if l < Armature.LONGUEUR_MIN or l > Armature.LONGUEUR_MAX:
+			donnees = _passe.pop_back()
+			return "une de ses poutres serait trop courte ou trop longue"
+	Armature.refaire(donnees)
+	_apres()
+	return ""
+
+
+func _poser_noeud(e: Dictionary, p: Vector3, fixe_a: String, art: String) -> void:
+	e["position"] = [snappedf(p.x, 0.0001), snappedf(p.y, 0.0001), snappedf(p.z, 0.0001)]
+	if fixe_a != "" and fixe_a != String(e["id"]):
+		e["fixe_a"] = fixe_a
+	else:
+		e.erase("fixe_a")
+	if fixe_a != "" and art != "":
+		e["articulation_appui"] = art
+	else:
+		e.erase("articulation_appui")
+
+
+## Change des réglages de plusieurs éléments de l'armature à la fois (et de leurs jumelles) : un seul
+## Ctrl + Z. Chacun ne prend que les réglages qu'il a (une poutre n'a pas d'épaisseur de panneau).
+func regler_armature(ids: Array, reglages: Dictionary) -> int:
+	var a_changer := []
+	for id in ids:
+		for x in [element(String(id)), element(String(element(String(id)).get("symetrique", "")))]:
+			var e := x as Dictionary
+			if not Armature.est(e) or a_changer.has(e):
+				continue
+			if _nouveaux_reglages(e, reglages) != Armature.reglages_complets(String(e["modele"]), e.get("reglages", {})):
+				a_changer.append(e)
+	if a_changer.is_empty():
+		return 0
+	_avant()
+	for x in a_changer:
+		var e := x as Dictionary
+		e["reglages"] = _nouveaux_reglages(e, reglages)
+	Armature.refaire(donnees)
+	_apres()
+	return a_changer.size()
+
+
+static func _nouveaux_reglages(e: Dictionary, reglages: Dictionary) -> Dictionary:
+	var r: Dictionary = (e.get("reglages", {}) as Dictionary).duplicate()
+	for cle in reglages:
+		if not Armature.definition_reglage(String(e["modele"]), String(cle)).is_empty():
+			r[cle] = reglages[cle]
+	return Armature.reglages_complets(String(e["modele"]), r)
+
+
+## Ce qui part avec un élément de l'armature qu'on enlève : un connecteur emmène ses poutres et les
+## panneaux dont il est un coin ; une poutre, les panneaux qu'elle borde ; et les jumelles de tout ça.
+func _cascade_armature(a_enlever: Dictionary) -> void:
+	if not Armature.a_armature(donnees):
+		return
+	var g := Armature.graphe(donnees)
+	var encore := true
+	while encore:
+		encore = false
+		var avant := a_enlever.size()
+		for id in a_enlever.keys():
+			if g["connecteurs"].has(id):
+				for pid in Armature.poutres_de(g, id):
+					a_enlever[pid] = true
+				for qid in g["panneaux"]:
+					if (g["panneaux"][qid]["noeuds"] as Array).has(id):
+						a_enlever[qid] = true
+			elif g["poutres"].has(id):
+				var n: Array = g["poutres"][id]["noeuds"]
+				for qid in g["panneaux"]:
+					var c: Array = g["panneaux"][qid]["noeuds"]
+					for k in c.size():
+						if Armature.cle([c[k], c[(k + 1) % c.size()]]) == Armature.cle(n):
+							a_enlever[qid] = true
+			var e := element(String(id))
+			if Armature.est(e) and e.has("symetrique"):
+				a_enlever[String(e["symetrique"])] = true
+		encore = a_enlever.size() != avant
 
 
 func renommer(nouveau: String) -> void:
