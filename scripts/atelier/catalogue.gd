@@ -78,10 +78,10 @@ const TYPES := {
 		"description": "Bas d'une roue, train sorti, avec son amortisseur.",
 		"champs": ["point", "course_m", "raideur_n_m", "amorti_n_s_m"],
 		"facultatifs": ["rayon_m", "orientable_deg", "vitesse_braquage_deg_s", "freinee", "choc_max_m_s", "masse_kg",
-			"centre", "note"]},
+			"centre", "articulation", "note"]},
 	"contact_coque": {"nom": "point de coque", "pese": false,
 		"description": "Point de la coque qui peut toucher le sol (ventre, nez, queue).",
-		"champs": ["point"], "facultatifs": ["note"]},
+		"champs": ["point"], "facultatifs": ["articulation", "note"]},
 	"surface_air": {"nom": "surface d'air", "pese": false,
 		"description": "Plaque mince qui porte et freine dans l'air (bande d'aile, dérive).",
 		"champs": ["point", "normale", "surface_m2", "allongement"],
@@ -100,10 +100,28 @@ const TYPES := {
 ##   - tuyère à anneaux : anneaux_m = longueur de chaque anneau depuis le pivot ; chaque anneau tourne d'une
 ##     part égale de l'angle (3 anneaux pour 90° : 30° chacun) ; droite dans la pose de référence ;
 ##   - vérin : glisse de « course » (m, vecteur) entre le début et la fin de sa phase.
+## Étape 7, pièces mobiles GÉNÉRALES :
+##   - « porte_par » : l'articulation qui porte celle-ci (un volet sur une aile repliable, une roue sur une
+##     jambe qui pivote…) : elle suit d'abord la sienne, puis celle qui la porte. Une articulation écrite dans
+##     un ensemble posé sur une pièce mobile est portée par elle sans qu'on l'écrive ;
+##   - les pièces d'une articulation sont écrites dans la POSE DE RÉFÉRENCE du plan, sauf si elle dit
+##     elle-même dans quelle pose elles le sont : « angle_pose_deg » (charnière : l'angle de la pièce telle
+##     qu'elle est écrite, 0 pour une charnière posée dans l'atelier) ou « progression_pose » (vérin : où il en
+##     est de sa course, de 0 à 1). Tout ce qui est posé dessus suit : masses, moteurs, propulseurs, surfaces
+##     d'air, roues, points de la coque, dessin.
 const ARTICULATIONS := {
-	"charniere": {"nom": "charnière", "champs": ["commande", "point", "axe", "angle_0_deg", "angle_1_deg"]},
-	"tuyere_anneaux": {"nom": "tuyère à anneaux", "champs": ["commande", "pivot", "axe", "anneaux_m", "angle_1_deg"]},
-	"verin": {"nom": "vérin", "champs": ["commande", "course"]},
+	"charniere": {"nom": "charnière", "champs": ["commande", "point", "axe", "angle_0_deg", "angle_1_deg"],
+		"facultatifs": ["phase", "angle_pose_deg", "porte_par", "nom", "modele_3d"]},
+	"tuyere_anneaux": {"nom": "tuyère à anneaux", "champs": ["commande", "pivot", "axe", "anneaux_m", "angle_1_deg"],
+		"facultatifs": ["phase", "porte_par", "nom", "modele_3d"]},
+	"verin": {"nom": "vérin", "champs": ["commande", "course"],
+		"facultatifs": ["phase", "progression_pose", "porte_par", "nom", "modele_3d"]},
+}
+## Les commandes qui font bouger les pièces mobiles (touches du jeu) : 0 et 1, ce que ça veut dire.
+const COMMANDES := {
+	"ailes": {"nom": "ailes", "a_0": "repliées", "a_1": "ouvertes", "duree_s": 2.5},
+	"train": {"nom": "train d'atterrissage", "a_0": "rentré", "a_1": "sorti", "duree_s": 3.0},
+	"vertical": {"nom": "vol vertical", "a_0": "vol normal", "a_1": "vol vertical", "duree_s": 4.0},
 }
 
 

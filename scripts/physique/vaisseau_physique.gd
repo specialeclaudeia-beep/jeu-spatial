@@ -158,16 +158,7 @@ func _init(plan_vaisseau = null) -> void:
 
 
 func _construire() -> void:
-	var mp: Dictionary = plan.proprietes_masse()
-	masse = float(mp["masse"])
-	centre_gravite = mp["centre"]
-	var i6: Array = mp["inertie_liste"]
-	_i64 = PackedFloat64Array([i6[0], i6[3], i6[4], i6[3], i6[1], i6[5], i6[4], i6[5], i6[2]])
-	_inv64 = _inverse_3x3(_i64)
-	tenseur_inertie = mp["inertie"]
-	tenseur_inertie_inverse = Basis(Vector3(_inv64[0], _inv64[3], _inv64[6]), Vector3(_inv64[1], _inv64[4], _inv64[7]),
-		Vector3(_inv64[2], _inv64[5], _inv64[8]))
-	inertie = Vector3(tenseur_inertie.x.x, tenseur_inertie.y.y, tenseur_inertie.z.z)
+	_appliquer_masse(plan.proprietes_masse())
 	duree_ailes = plan.duree_commande("ailes")
 	duree_train = plan.duree_commande("train")
 	duree_vertical = plan.duree_commande("vertical")
@@ -183,12 +174,11 @@ func _construire() -> void:
 	_tuyere = {}
 	_verin_vertical = {}
 	for id in plan.articulations:
+		# (la pose où ses pièces sont écrites, « angle_ref » et « progression_ref », vient du plan : étape 7)
 		var a: Dictionary = (plan.articulations[id] as Dictionary).duplicate()
 		var c := String(a["commande"])
-		a["progression_ref"] = Plan.progression(a, plan.valeur_reference(c))
 		match String(a["type"]):
 			"charniere":
-				a["angle_ref"] = lerpf(float(a["angle_0_deg"]), float(a["angle_1_deg"]), float(a["progression_ref"]))
 				if c == "ailes" and String(id).begins_with("aile_"):
 					ailes_def[String(id).trim_prefix("aile_")] = {"charniere": a["point"], "ouvert": float(a["angle_1_deg"]),
 						"replie": float(a["angle_0_deg"]), "articulation": id}
@@ -235,9 +225,185 @@ func _construire() -> void:
 	_construire_sol()
 	_construire_coque()
 	aero.configurer(plan, centre_gravite)
-	_placer_propulseurs()
+	_construire_masses()
+	placer_pieces_mobiles()
 	_trouver_roles()
 	_calculer_poussees()
+
+
+# =====================================================================
+# MASSES QUI BOUGENT (étape 7 : pièces mobiles générales)
+# =====================================================================
+## Les pièces posées sur une pièce mobile emmènent leur masse : quand une aile se replie, qu'un train rentre
+## ou qu'une tuyère tourne, le centre de gravité et l'inertie changent. Les pièces sont rangées par
+## articulation (un « groupe » chacune, plus celui des pièces fixes) ; à chaque mouvement, chaque groupe est
+## déplacé comme son articulation et on refait la somme (Huygens). Le centre de gravité du vaisseau ENTIER ne
+## bouge pas dans l'espace (aucune force extérieure) : c'est la coque qui se décale autour de lui. Le moment
+## cinétique total aussi se garde : pendant le mouvement, les pièces qui tournent font tourner le reste du
+## vaisseau un peu dans l'autre sens (comme un chat qui se retourne en tombant), et tout s'arrête avec elles.
+var _groupes_masse: Array = []   # {art, masse, centre (Vector3, pose d'écriture), inertie (Basis, autour de son centre)}
+var _mobiles := false            # au moins un groupe de masse sur une pièce mobile
+var _xf_groupes: Array = []      # place de chaque groupe au dernier calcul (Transform3D)
+var _l_interne := Vector3.ZERO   # N·m·s : moment cinétique des pièces mobiles qui bougent (repère du vaisseau)
+var _train_mobile := false       # au moins une articulation suit la commande du train (étape 7)
+
+
+func _construire_masses() -> void:
+	var par_art := {}   # "articulation#anneau" → [art, anneau, pièces]
+	for p in plan.pieces:
+		var mc: Dictionary = p["masse_calculee"]
+		if float(mc["masse"]) <= 0.0:
+			continue
+		var art := String(p.get("articulation", ""))
+		if art != "" and not articulations.has(art):
+			art = ""
+		# tuyère : chaque anneau tourne de sa part de l'angle (comme le moteur au bout), pas d'un seul bloc
+		var anneau := -1
+		if art != "" and String((articulations[art] as Dictionary)["type"]) == "tuyere_anneaux":
+			anneau = Plan.anneau_de(articulations[art], mc["centre"])
+		var cle := "%s#%d" % [art, anneau]
+		if not par_art.has(cle):
+			par_art[cle] = [art, anneau, []]
+		(par_art[cle][2] as Array).append(p)
+	_groupes_masse = []
+	_mobiles = false
+	_train_mobile = false
+	for id in articulations:
+		if String((articulations[id] as Dictionary)["commande"]) == "train":
+			_train_mobile = true
+	for cle in par_art:
+		var art: String = par_art[cle][0]
+		var mp: Dictionary = plan.proprietes_masse(par_art[cle][2])
+		_groupes_masse.append({"art": art, "anneau": par_art[cle][1], "masse": float(mp["masse"]), "centre": mp["centre"],
+			"inertie": mp["inertie"]})
+		if art != "":
+			_mobiles = true
+	_xf_groupes = []
+	for g in _groupes_masse:
+		_xf_groupes.append(Transform3D.IDENTITY)
+	_l_interne = Vector3.ZERO
+
+
+## Recalcule masse, centre de gravité et inertie pour la pose actuelle des pièces mobiles. dt > 0 : le
+## mouvement a duré dt secondes, et le moment cinétique total est gardé (la rotation du vaisseau change) ;
+## dt = 0 : on se place simplement dans cette pose (départ, calcul des poussées possibles).
+func _maj_masse(dt: float) -> void:
+	if _groupes_masse.is_empty():
+		return
+	var xfs := []
+	var a_plat := true   # toutes les pièces mobiles dans la pose où elles sont écrites
+	var valeurs := valeurs_commandes()
+	for g in _groupes_masse:
+		var xf := Plan.transformation(articulations, String(g["art"]), valeurs, int(g["anneau"])) \
+			if String(g["art"]) != "" else Transform3D.IDENTITY
+		xfs.append(xf)
+		if xf != Transform3D.IDENTITY:
+			a_plat = false
+	var mp: Dictionary
+	if a_plat or not _mobiles:
+		mp = plan.proprietes_masse()   # exactement les chiffres du plan
+	else:
+		mp = _somme_groupes(xfs)
+	var l_avant := Vector3.ZERO
+	if dt > 0.0:
+		l_avant = _fois(_i64, omega) + _l_interne
+	_appliquer_masse(mp)
+	if dt > 0.0:
+		_l_interne = _moment_interne(xfs, dt)
+		omega = _fois(_inv64, l_avant - _l_interne)
+	_xf_groupes = xfs
+
+
+## Les pièces mobiles se sont arrêtées : leur moment cinétique revient au vaisseau.
+func _arreter_pieces_mobiles() -> void:
+	if _l_interne == Vector3.ZERO:
+		return
+	omega = _fois(_inv64, _fois(_i64, omega) + _l_interne)
+	_l_interne = Vector3.ZERO
+
+
+## Masse, centre et inertie de tous les groupes, chacun déplacé (double précision pour les sommes).
+func _somme_groupes(xfs: Array) -> Dictionary:
+	var m := 0.0
+	var s := [0.0, 0.0, 0.0]
+	var centres := []
+	for k in _groupes_masse.size():
+		var g: Dictionary = _groupes_masse[k]
+		var c: Vector3 = (xfs[k] as Transform3D) * (g["centre"] as Vector3)
+		centres.append(c)
+		var mi := float(g["masse"])
+		m += mi
+		s[0] += mi * c.x
+		s[1] += mi * c.y
+		s[2] += mi * c.z
+	var gx: float = s[0] / m
+	var gy: float = s[1] / m
+	var gz: float = s[2] / m
+	var i6 := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+	for k in _groupes_masse.size():
+		var g: Dictionary = _groupes_masse[k]
+		var mi := float(g["masse"])
+		var b: Basis = (xfs[k] as Transform3D).basis
+		var propre: Basis = b * (g["inertie"] as Basis) * b.transposed()
+		var c: Vector3 = centres[k]
+		var dx: float = c.x - gx
+		var dy: float = c.y - gy
+		var dz: float = c.z - gz
+		i6[0] += propre.x.x + mi * (dy * dy + dz * dz)
+		i6[1] += propre.y.y + mi * (dx * dx + dz * dz)
+		i6[2] += propre.z.z + mi * (dx * dx + dy * dy)
+		i6[3] += propre.x.y - mi * dx * dy
+		i6[4] += propre.x.z - mi * dx * dz
+		i6[5] += propre.y.z - mi * dy * dz
+	return {"masse": m, "centre": Vector3(gx, gy, gz), "inertie": Plan.Catalogue.vers_basis(i6), "inertie_liste": i6}
+
+
+## Moment cinétique (repère du vaisseau, autour du centre de gravité) des groupes qui bougent : vitesse et
+## rotation de chacun entre le calcul précédent et celui-ci.
+func _moment_interne(xfs: Array, dt: float) -> Vector3:
+	var l := Vector3.ZERO
+	for k in _groupes_masse.size():
+		var g: Dictionary = _groupes_masse[k]
+		if String(g["art"]) == "":
+			continue
+		var avant: Transform3D = _xf_groupes[k] if k < _xf_groupes.size() else Transform3D.IDENTITY
+		var apres: Transform3D = xfs[k]
+		if avant == apres:
+			continue
+		var c0: Vector3 = avant * (g["centre"] as Vector3)
+		var c1: Vector3 = apres * (g["centre"] as Vector3)
+		var vitesse := (c1 - c0) / dt
+		var q := Quaternion((apres.basis * avant.basis.inverse()).orthonormalized())
+		var w := Vector3.ZERO
+		var angle := q.get_angle()
+		if angle > 1e-12:
+			w = q.get_axis().normalized() * (angle / dt)
+		var b: Basis = apres.basis
+		var propre: Basis = b * (g["inertie"] as Basis) * b.transposed()
+		l += float(g["masse"]) * ((c0 + c1) * 0.5 - centre_gravite).cross(vitesse) + propre * w
+	return l
+
+
+func _appliquer_masse(mp: Dictionary) -> void:
+	masse = float(mp["masse"])
+	centre_gravite = mp["centre"]
+	var i6: Array = mp["inertie_liste"]
+	_i64 = PackedFloat64Array([i6[0], i6[3], i6[4], i6[3], i6[1], i6[5], i6[4], i6[5], i6[2]])
+	_inv64 = _inverse_3x3(_i64)
+	tenseur_inertie = mp["inertie"]
+	tenseur_inertie_inverse = Basis(Vector3(_inv64[0], _inv64[3], _inv64[6]), Vector3(_inv64[1], _inv64[4], _inv64[7]),
+		Vector3(_inv64[2], _inv64[5], _inv64[8]))
+	inertie = Vector3(tenseur_inertie.x.x, tenseur_inertie.y.y, tenseur_inertie.z.z)
+	aero.centre_gravite = centre_gravite
+
+
+## Tout ce qui suit les pièces mobiles, pour l'état actuel des commandes : moteurs et propulseurs, roues et
+## points de la coque, masses (dt : voir _maj_masse). Sert aussi à l'atelier (essai des mouvements).
+func placer_pieces_mobiles(dt := 0.0) -> void:
+	_placer_propulseurs()
+	if _contacts_mobiles:
+		_placer_contacts()
+	_maj_masse(dt)
 
 
 ## Inverse d'un tableau 3×3 (ligne par ligne), en double précision.
@@ -293,13 +459,15 @@ func _trouver_roles() -> void:
 ## peut s'arrêter à plat), puis poussée maximale dans la configuration actuelle.
 func _calculer_poussees() -> void:
 	var garde := vertical
+	var garde_l := _l_interne
 	vertical = 1.0
-	_placer_propulseurs()
+	placer_pieces_mobiles()
 	_preparer_repartition()
 	_calculer_poussee_max()
 	var verticale := _poussee_avant_vraie
 	vertical = garde
-	_placer_propulseurs()
+	placer_pieces_mobiles()
+	_l_interne = garde_l
 	_preparer_repartition()
 	_calculer_poussee_max()
 	poussee_verticale_max = verticale * facteur_poussee
@@ -365,23 +533,30 @@ func angle_tuyere() -> float:
 ## Déplacement d'une articulation entre la pose de référence du plan et la pose actuelle (repère du
 ## vaisseau) : une pièce posée sur elle est à transformation_articulation(id) × (sa place dans le plan).
 ## Sert à l'atelier (une pièce posée sur une aile repliée) ; la tuyère est comptée d'un seul bloc.
+## Étape 7 : une articulation portée par une autre (porte_par) suit aussi celle-là (Plan.transformation).
 func transformation_articulation(id: String) -> Transform3D:
 	if not articulations.has(id):
 		return Transform3D.IDENTITY
-	var a: Dictionary = articulations[id]
-	var p := progression(a)
-	match String(a["type"]):
-		"charniere":
-			var rot := Basis(a["axe"], deg_to_rad(lerpf(float(a["angle_0_deg"]), float(a["angle_1_deg"]), p) - float(a["angle_ref"])))
-			var c: Vector3 = a["point"]
-			return Transform3D(rot, c - rot * c)
-		"tuyere_anneaux":
-			var rot2 := Basis(a["axe"], deg_to_rad(float(a["angle_1_deg"]) * (p - float(a["progression_ref"]))))
-			var c2: Vector3 = a["pivot"]
-			return Transform3D(rot2, c2 - rot2 * c2)
-		"verin":
-			return Transform3D(Basis.IDENTITY, (a["course"] as Vector3) * (p - float(a["progression_ref"])))
-	return Transform3D.IDENTITY
+	return Plan.transformation(articulations, id, valeurs_commandes())
+
+
+## Valeurs actuelles des commandes : {ailes, train, vertical}.
+func valeurs_commandes() -> Dictionary:
+	return {"ailes": ailes, "train": train, "vertical": vertical}
+
+
+## Change la valeur d'une commande tout de suite (sans mouvement) : sert à l'atelier.
+func regler_commande(nom: String, valeur: float) -> void:
+	match nom:
+		"ailes":
+			ailes = valeur
+			ailes_consigne = valeur
+		"train":
+			train = valeur
+			train_consigne = valeur
+		"vertical":
+			vertical = valeur
+			vertical_consigne = valeur
 
 
 ## Place les propulseurs posés sur une pièce mobile (aile, tuyère, vérin) selon les commandes actuelles.
@@ -396,9 +571,9 @@ func _placer_propulseurs() -> void:
 		var d_ref: Vector3 = t["dir_ref"]
 		match String(a["type"]):
 			"charniere":
-				var rot := Basis(a["axe"], deg_to_rad(lerpf(float(a["angle_0_deg"]), float(a["angle_1_deg"]), p) - float(a["angle_ref"])))
-				t["position"] = (a["point"] as Vector3) + rot * (p_ref - (a["point"] as Vector3))
-				t["direction"] = rot * d_ref
+				var xf_c := Plan.transformation_locale(a, valeur_commande(String(a["commande"])))
+				t["position"] = xf_c * p_ref
+				t["direction"] = xf_c.basis * d_ref
 			"tuyere_anneaux":
 				# chaque anneau tourne d'une part de l'angle par rapport au précédent (3 x 30° = 90°)
 				var angle := deg_to_rad(float(a["angle_1_deg"]) * p)
@@ -419,6 +594,13 @@ func _placer_propulseurs() -> void:
 				t["direction"] = Basis(axe, angle) * d_ref
 			"verin":
 				t["position"] = p_ref + (a["course"] as Vector3) * (p - float(a["progression_ref"]))
+				t["direction"] = d_ref
+		# étape 7 : l'articulation peut être portée par une autre (moteur sur une aile, elle-même repliable)
+		var porteur := String(a.get("porte_par", ""))
+		if porteur != "":
+			var xf := transformation_articulation(porteur)
+			t["position"] = xf * (t["position"] as Vector3)
+			t["direction"] = xf.basis * (t["direction"] as Vector3)
 		# un moteur de levage à moitié sorti ne peut pas fonctionner (il soufflerait dans la coque)
 		if t["seulement_sorti"]:
 			t["poussee_max"] = float(t["poussee_n"]) if p >= 1.0 else 0.0
@@ -850,19 +1032,26 @@ func _pas_corps(dt: float) -> void:
 
 	# 1 bis. Les ailes et le train bougent à vitesse constante vers leur consigne. Les propulseurs
 	# des ailes tournent avec elles : le calcul des poussées est refait avec leurs nouvelles positions.
+	#    Étape 7 : tout ce qui est posé sur une pièce mobile la suit (moteurs, roues, masses : le centre de
+	#    gravité et l'inertie changent, la rotation du vaisseau aussi, moment cinétique gardé).
+	var bouge := false
 	if ailes != ailes_consigne:
 		ailes = move_toward(ailes, ailes_consigne, dt / duree_ailes)
-		_placer_propulseurs()
-		_preparer_repartition()
-		_recalcul_poussee = true
-	# posé sur le ventre, le train ne peut pas sortir : le sol bloque les jambes (il peut rentrer)
+		bouge = true
 	if vertical != vertical_consigne:
 		vertical = move_toward(vertical, vertical_consigne, dt / duree_vertical)
-		_placer_propulseurs()
-		_preparer_repartition()
-		_recalcul_poussee = true
+		bouge = true
+	# posé sur le ventre, le train ne peut pas sortir : le sol bloque les jambes (il peut rentrer)
 	if train != train_consigne and not (au_sol and train_consigne > train):
 		train = move_toward(train, train_consigne, dt / duree_train)
+		if _train_mobile:
+			bouge = true
+	if bouge:
+		placer_pieces_mobiles(dt)
+		_preparer_repartition()
+		_recalcul_poussee = true
+	elif _l_interne != Vector3.ZERO:
+		_arreter_pieces_mobiles()
 	# étape 6 (sol) : la roue avant tourne vers sa consigne à vitesse limitée (vérin de direction)
 	braquage = move_toward(braquage, clampf(braquage_consigne, -1.0, 1.0) * braquage_permis(), dt * vitesse_braquage)
 
@@ -890,7 +1079,7 @@ func _pas_corps(dt: float) -> void:
 		densite_air = 0.0
 		vitesse_air = 0.0
 		force_air = Vector3.ZERO
-		aero.forces(Vector3.ZERO, omega, 0.0, 1.0, ailes, train)
+		aero.forces(Vector3.ZERO, omega, 0.0, 1.0, ailes, train, vertical)
 		_chauffer(dt, 340.0)   # loin de l'air, la coque rayonne et revient vers l'équilibre de l'espace
 
 	# 3. Translation : méthode de Verlet (stable pour les orbites), appliquée à la vitesse propre u
@@ -1053,11 +1242,61 @@ func vider_prise_sol() -> void:
 		a.fill(0.0)
 	prise_f_sol.fill(Vector3.ZERO)
 var compression_roues := PackedFloat64Array()   # m, écrasement de chaque amortisseur (pour le dessin)
+## Étape 7 : une roue (ou un point de la coque) posée sur une pièce mobile la suit : jambe de train qui
+## rentre, aile qui se replie. Sa place dans le plan (pose d'écriture) et son articulation (ou "").
+var _roues_ref: Array = []
+var _roues_art: Array = []
+var _coque_ref: Array = []
+var _coque_art: Array = []
+var _contacts_mobiles := false
+
+
+func _art_contact(p: Dictionary) -> String:
+	var art := String(p.get("articulation", ""))
+	return art if articulations.has(art) else ""
+
+
+## Roues et points de la coque à leur place pour les commandes actuelles ; hauteurs de contact et empattement.
+func _placer_contacts() -> void:
+	var v := valeurs_commandes()
+	var v_sorti := v.duplicate()
+	v_sorti["train"] = 1.0   # hauteur du train : train complètement sorti
+	var roues_sorties := []
+	for i in _roues_ref.size():
+		var art: String = _roues_art[i]
+		if art == "":
+			roues[i] = _roues_ref[i]
+			roues_sorties.append(_roues_ref[i])
+		else:
+			roues[i] = Plan.transformation(articulations, art, v) * (_roues_ref[i] as Vector3)
+			roues_sorties.append(Plan.transformation(articulations, art, v_sorti) * (_roues_ref[i] as Vector3))
+	for i in _coque_ref.size():
+		var art2: String = _coque_art[i]
+		coque_points[i] = _coque_ref[i] if art2 == "" else Plan.transformation(articulations, art2, v) * (_coque_ref[i] as Vector3)
+	# hauteurs de contact (pilote automatique, affichage) : la roue la plus basse, le point de coque le plus bas
+	hauteur_train = 0.0
+	for r in roues_sorties:
+		hauteur_train = maxf(hauteur_train, -(r as Vector3).y)
+	hauteur_ventre = 0.0
+	for c in coque_points:
+		hauteur_ventre = maxf(hauteur_ventre, -(c as Vector3).y)
+	# empattement : de la roue orientable au milieu des autres roues (le long de l'axe avant-arrière)
+	empattement = 0.0
+	if roue_orientable >= 0 and roues_sorties.size() > 1:
+		var z := 0.0
+		for k in roues_sorties.size():
+			if k != roue_orientable:
+				z += (roues_sorties[k] as Vector3).z
+		empattement = absf(z / (roues_sorties.size() - 1) - (roues_sorties[roue_orientable] as Vector3).z)
 
 
 ## Train et points de la coque, lus dans le plan.
 func _construire_sol() -> void:
 	roues = []
+	_roues_ref = []
+	_roues_art = []
+	_coque_ref = []
+	_coque_art = []
 	course_train = []
 	raideur_train = []
 	amorti_train = []
@@ -1071,6 +1310,8 @@ func _construire_sol() -> void:
 			braquage_max = deg_to_rad(float(p["orientable_deg"]))
 			vitesse_braquage = deg_to_rad(float(p.get("vitesse_braquage_deg_s", 60.0)))
 		roues.append(p["point"])
+		_roues_ref.append(p["point"])
+		_roues_art.append(_art_contact(p))
 		course_train.append(float(p["course_m"]))
 		raideur_train.append(float(p["raideur_n_m"]))
 		amorti_train.append(float(p["amorti_n_s_m"]))
@@ -1078,21 +1319,13 @@ func _construire_sol() -> void:
 	coque_points = []
 	for p in plan.pieces_de_type("contact_coque"):
 		coque_points.append(p["point"])
-	# hauteurs de contact (pilote automatique, affichage) : la roue la plus basse, le point de coque le plus bas
-	hauteur_train = 0.0
-	for r in roues:
-		hauteur_train = maxf(hauteur_train, -(r as Vector3).y)
-	hauteur_ventre = 0.0
-	for c in coque_points:
-		hauteur_ventre = maxf(hauteur_ventre, -(c as Vector3).y)
-	# empattement : de la roue orientable au milieu des autres roues (le long de l'axe avant-arrière)
-	empattement = 0.0
-	if roue_orientable >= 0 and roues.size() > 1:
-		var z := 0.0
-		for k in roues.size():
-			if k != roue_orientable:
-				z += (roues[k] as Vector3).z
-		empattement = absf(z / (roues.size() - 1) - (roues[roue_orientable] as Vector3).z)
+		_coque_ref.append(p["point"])
+		_coque_art.append(_art_contact(p))
+	_contacts_mobiles = false
+	for art in _roues_art + _coque_art:
+		if String(art) != "":
+			_contacts_mobiles = true
+	_placer_contacts()
 	var nr := roues.size()
 	prise_points = nr + coque_points.size()
 	for a in [prise_choc, prise_choc_cote, prise_fn, prise_glisse]:
@@ -1338,9 +1571,9 @@ func _forces_air(base: Basis, dt: float) -> Array:
 	vitesse_air = v_rel.length()
 	var res: Array = [Vector3.ZERO, Vector3.ZERO]
 	if densite_air > 0.0:
-		res = aero.forces(base.inverse() * (-v_rel), omega, densite_air, float(et[3]), ailes, train)
+		res = aero.forces(base.inverse() * (-v_rel), omega, densite_air, float(et[3]), ailes, train, vertical)
 	else:
-		aero.forces(Vector3.ZERO, omega, 0.0, 1.0, ailes, train)
+		aero.forces(Vector3.ZERO, omega, 0.0, 1.0, ailes, train, vertical)
 	force_air = res[0]
 	_chauffer(dt, float(et[3]))
 	return res
@@ -1760,7 +1993,8 @@ func placer_en_orbite(altitude_m: float) -> void:
 	frein = 0.0
 	vertical = plan.valeur_depart("vertical")
 	vertical_consigne = vertical
-	_placer_propulseurs()
+	_l_interne = Vector3.ZERO
+	placer_pieces_mobiles()
 	_preparer_repartition()
 	_calculer_poussee_max()
 
@@ -1773,12 +2007,17 @@ func placer_en_orbite(altitude_m: float) -> void:
 ## avec la planète), puis la physique le laisse se poser pendant duree_calage secondes, gaz à zéro : il
 ## repose ensuite sur ses amortisseurs exactement comme après un vrai atterrissage. Rien n'est forcé : ce
 ## sont les ressorts du train et le frottement du sol qui le tiennent.
-func poser_au_sol(haut_planete: Vector3, avant_planete: Vector3, duree_calage := 2.0) -> void:
+## Étape 7 : commandes (facultatif) remplace cette pose ({ailes, train, vertical}, l'atelier essaie les mouvements).
+func poser_au_sol(haut_planete: Vector3, avant_planete: Vector3, duree_calage := 2.0, commandes := {}) -> void:
 	placer_en_orbite(0.0)   # remet tout l'état comme au départ du plan (commandes, chaleur, contacts)
-	train = 1.0
-	train_consigne = 1.0
-	ailes = 0.0
-	ailes_consigne = 0.0
+	regler_commande("train", 1.0)
+	regler_commande("ailes", 0.0)
+	for c in commandes:
+		regler_commande(String(c), clampf(float(commandes[c]), 0.0, 1.0))
+	# tout ce qui est posé sur les pièces mobiles à sa place dans cette pose (moteurs des ailes, roues, masses)
+	placer_pieces_mobiles()
+	_preparer_repartition()
+	_calculer_poussee_max()
 	var haut := _depuis_planete(haut_planete.normalized())
 	# positions en 64 bits (nombres séparés) : un Vector3 (32 bits) à 600 km ne voit que des pas de 6 cm
 	var r_sol := rayon_planete + hauteur_sol(haut.x * rayon_planete, haut.y * rayon_planete, haut.z * rayon_planete)
@@ -1798,12 +2037,13 @@ func poser_au_sol(haut_planete: Vector3, avant_planete: Vector3, duree_calage :=
 	# SES ROUES (le plan des points du sol sous chaque roue, pas seulement la pente au centre : sinon, sur
 	# un terrain inégal, une roue reste 15 cm en l'air et le nez tombe), et monté ou descendu pour que la
 	# roue la plus enfoncée soit à 1 cm du sol.
-	var e := hauteur_train + centre_gravite.y
+	var e := hauteur_contact() + centre_gravite.y
 	var cx := sx + n.x * e
 	var cy := sy + n.y * e
 	var cz := sz + n.z * e
-	# (un vaisseau de l'atelier sans roues se pose sur sa coque, ou sur son centre s'il n'a rien d'autre)
-	var appuis: Array = roues if not roues.is_empty() else (coque_points if not coque_points.is_empty() else [centre_gravite])
+	# (un vaisseau de l'atelier sans roues, ou train rentré, se pose sur sa coque, ou sur son centre s'il n'a rien d'autre)
+	var sur_roues := not roues.is_empty() and train >= 1.0
+	var appuis: Array = roues if sur_roues else (coque_points if not coque_points.is_empty() else [centre_gravite])
 	var roues_corps: Array = appuis.map(func(r): return (r as Vector3) - centre_gravite)
 	var n_roues := _normale_points(roues_corps, Vector3.UP)
 	for essai in 6:
@@ -1821,7 +2061,7 @@ func poser_au_sol(haut_planete: Vector3, avant_planete: Vector3, duree_calage :=
 			sous_roues.append(Vector3(qx * k_s - cx, qy * k_s - cy, qz * k_s - cz))
 		var rc := sqrt(cx * cx + cy * cy + cz * cz)
 		var haut_c := Vector3(cx / rc, cy / rc, cz / rc)
-		if essai < 3 and roues.size() >= 3:
+		if essai < 3 and sur_roues and roues.size() >= 3:
 			var n_sol := _normale_points(sous_roues, haut_c)
 			var n_vaisseau := b * n_roues
 			if n_sol.length() > 0.5 and n_vaisseau.length() > 0.5 and n_vaisseau.angle_to(n_sol) > 1e-6:

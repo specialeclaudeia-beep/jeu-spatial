@@ -84,6 +84,7 @@ func lire_dictionnaire(d: Dictionary) -> bool:
 		erreurs.append("version du plan manquante")
 		return false
 	_aplatir(d.get("pieces", []), d.get("articulations", []), Transform3D.IDENTITY, "", "", 0)
+	_poses_ecrites()
 	_verifier()
 	return erreurs.is_empty()
 
@@ -122,7 +123,8 @@ func valeur_depart(commande: String) -> float:
 
 ## Durée (s) d'un mouvement complet d'une commande.
 func duree_commande(commande: String) -> float:
-	return float((donnees.get("commandes", {}) as Dictionary).get(commande, {}).get("duree_s", 1.0))
+	var defaut := float(Catalogue.COMMANDES.get(commande, {}).get("duree_s", 1.0))   # (plan sans « commandes »)
+	return float((donnees.get("commandes", {}) as Dictionary).get(commande, {}).get("duree_s", defaut))
 
 
 ## Avancement (0 à 1) d'une articulation quand sa commande vaut c : la commande ramenée à sa phase.
@@ -146,6 +148,7 @@ func _aplatir(liste: Array, arts: Array, xf: Transform3D, prefixe: String, art_h
 		erreurs.append("ensembles imbriqués trop profondément (plus de 8 niveaux) : " + prefixe)
 		return
 	var locales := {}
+	var nouvelles := []
 	for a in arts:
 		if not a is Dictionary or not a.has("id"):
 			erreurs.append("articulation sans id dans « %s »" % (prefixe if prefixe != "" else "le plan"))
@@ -155,6 +158,18 @@ func _aplatir(liste: Array, arts: Array, xf: Transform3D, prefixe: String, art_h
 			erreurs.append("articulation « %s » en double" % id)
 		locales[String(a["id"])] = id
 		articulations[id] = _placer_articulation(a, xf, id)
+		nouvelles.append(id)
+	# étape 7 : une articulation est portée par celle qu'elle dit (nom local ou complet), sinon par la pièce
+	# mobile sur laquelle son ensemble est posé (une charnière posée sur une aile qui se replie)
+	for id in nouvelles:
+		var q: Dictionary = articulations[id]
+		var porteur := String(q.get("porte_par", "")) if q.get("porte_par", null) != null else ""
+		if porteur != "":
+			q["porte_par"] = String(locales.get(porteur, porteur))
+		elif art_herite != "":
+			q["porte_par"] = art_herite
+		else:
+			q.erase("porte_par")
 	for i in liste.size():
 		var p = liste[i]
 		if not p is Dictionary:
@@ -244,7 +259,25 @@ func _placer_articulation(a: Dictionary, xf: Transform3D, id: String) -> Diction
 	if q.has("axe"):
 		# un axe de rotation est retourné par un miroir (la rotation change de sens) : signe du déterminant
 		q["axe"] = ((b * Catalogue.vecteur(q["axe"])) * signf(b.determinant())).normalized()
+	if String(q.get("type", "")) == "tuyere_anneaux":
+		# sens de la tuyère droite (du pivot vers la sortie du jet) ; par défaut vers l'arrière (+Z)
+		q["direction"] = (b * Catalogue.vecteur(q.get("direction", [0.0, 0.0, 1.0]))).normalized()
 	return q
+
+
+## Pose dans laquelle les pièces de chaque articulation sont écrites (étape 7) : « angle_ref » (charnière,
+## degrés) et « progression_ref » (toutes, de 0 à 1 dans sa phase). Par défaut, la pose de référence du plan.
+func _poses_ecrites() -> void:
+	for id in articulations:
+		var a: Dictionary = articulations[id]
+		var c := String(a.get("commande", ""))
+		var p_ref := progression(a, valeur_reference(c))
+		if a.has("progression_pose"):
+			p_ref = float(a["progression_pose"])
+		a["progression_ref"] = p_ref
+		if String(a.get("type", "")) == "charniere" and a.has("angle_0_deg") and a.has("angle_1_deg"):
+			a["angle_ref"] = float(a["angle_pose_deg"]) if a.has("angle_pose_deg") \
+				else lerpf(float(a["angle_0_deg"]), float(a["angle_1_deg"]), p_ref)
 
 
 func _champs_presents(p: Dictionary, t: String, id: String) -> bool:
@@ -290,10 +323,134 @@ func _verifier() -> void:
 		for c in Catalogue.ARTICULATIONS[t]["champs"]:
 			if not a.has(c):
 				erreurs.append("articulation « %s » (%s) : réglage « %s » manquant" % [id, t, c])
-		if not (donnees.get("commandes", {}) as Dictionary).has(String(a.get("commande", ""))):
+		var cmd := String(a.get("commande", ""))   # une commande du plan, ou du catalogue (plan sans « commandes »)
+		if not ((donnees.get("commandes", {}) as Dictionary).has(cmd) or Catalogue.COMMANDES.has(cmd)):
 			erreurs.append("articulation « %s » : commande « %s » inconnue" % [id, a.get("commande", "")])
-		elif t == "tuyere_anneaux" and progression(a, valeur_reference(String(a["commande"]))) > 0.0:
+		elif t == "tuyere_anneaux" and float(a.get("progression_ref", 0.0)) > 0.0:
 			erreurs.append("tuyère « %s » : elle doit être droite dans la pose de référence du plan" % id)
+		# chaîne d'articulations (étape 7) : chacune porte la suivante, sans boucle
+		var vues := {id: true}
+		var porteur := String(a.get("porte_par", ""))
+		while porteur != "":
+			if not articulations.has(porteur):
+				erreurs.append("articulation « %s » : portée par « %s », introuvable" % [id, porteur])
+				break
+			if vues.has(porteur) or vues.size() > PROFONDEUR_CHAINE:
+				erreurs.append("articulation « %s » : chaîne d'articulations qui tourne en rond" % id)
+				break
+			vues[porteur] = true
+			porteur = String((articulations[porteur] as Dictionary).get("porte_par", ""))
+
+
+# =====================================================================
+# PIÈCES MOBILES : OÙ EN EST CHAQUE ARTICULATION (étape 7)
+# =====================================================================
+const PROFONDEUR_CHAINE := 16   # articulations portées l'une par l'autre, au plus
+
+
+## Valeurs des commandes dans la pose de référence du plan : {ailes, train, vertical}.
+func valeurs_reference() -> Dictionary:
+	var d := {}
+	for c in Catalogue.COMMANDES:
+		d[c] = valeur_reference(c)
+	return d
+
+
+## Déplacement d'UNE articulation (sans celle qui la porte), de la pose où ses pièces sont écrites à la pose
+## où la commande vaut c (repère du vaisseau, pose d'écriture de l'articulation qui la porte). La tuyère est
+## comptée d'un seul bloc (ses anneaux : vaisseau_physique.gd).
+static func transformation_locale(a: Dictionary, c: float) -> Transform3D:
+	var p := progression(a, c)
+	match String(a.get("type", "")):
+		"charniere":
+			var angle := lerpf(float(a["angle_0_deg"]), float(a["angle_1_deg"]), p) - float(a.get("angle_ref", 0.0))
+			if angle == 0.0:
+				return Transform3D.IDENTITY
+			var rot := Basis(a["axe"], deg_to_rad(angle))
+			var pt: Vector3 = a["point"]
+			return Transform3D(rot, pt - rot * pt)
+		"tuyere_anneaux":
+			var angle2 := float(a["angle_1_deg"]) * (p - float(a.get("progression_ref", 0.0)))
+			if angle2 == 0.0:
+				return Transform3D.IDENTITY
+			var rot2 := Basis(a["axe"], deg_to_rad(angle2))
+			var pv: Vector3 = a["pivot"]
+			return Transform3D(rot2, pv - rot2 * pv)
+		"verin":
+			var k := p - float(a.get("progression_ref", 0.0))
+			if k == 0.0:
+				return Transform3D.IDENTITY
+			return Transform3D(Basis.IDENTITY, (a["course"] as Vector3) * k)
+	return Transform3D.IDENTITY
+
+
+## Déplacement complet d'une articulation (elle, puis celles qui la portent) pour ces valeurs des commandes
+## ({ailes, train, vertical}) : une pièce posée dessus, écrite en r dans le plan, est en
+## transformation(…) × r. Identité pour "" (pièce fixe). anneau ≥ 0 (tuyère) : le déplacement de cet anneau
+## (chacun tourne d'une part de l'angle par rapport au précédent), au lieu de la tuyère d'un seul bloc.
+static func transformation(arts: Dictionary, id: String, valeurs: Dictionary, anneau := -1) -> Transform3D:
+	var xf := Transform3D.IDENTITY
+	var n := 0
+	while id != "" and arts.has(id) and n < PROFONDEUR_CHAINE:
+		var a: Dictionary = arts[id]
+		var c := float(valeurs.get(String(a.get("commande", "")), 0.0))
+		if n == 0 and anneau >= 0 and String(a.get("type", "")) == "tuyere_anneaux":
+			xf = transformation_anneau(a, c, anneau) * xf
+		else:
+			xf = transformation_locale(a, c) * xf
+		id = String(a.get("porte_par", ""))
+		n += 1
+	return xf
+
+
+## Tuyère à anneaux : l'anneau (0 = celui du pivot) où se trouve un point de la tuyère écrite droite.
+static func anneau_de(a: Dictionary, point: Vector3) -> int:
+	var anneaux: Array = a.get("anneaux_m", [])
+	if anneaux.is_empty():
+		return 0
+	var s := (point - (a["pivot"] as Vector3)).dot(a.get("direction", Vector3.BACK))
+	var fin := 0.0
+	for k in anneaux.size():
+		fin += float(anneaux[k])
+		if s < fin:
+			return k
+	return anneaux.size() - 1
+
+
+## Tuyère à anneaux : déplacement de l'anneau k quand la commande vaut c. Comme le moteur au bout de la
+## tuyère (vaisseau_physique.gd, _placer_propulseurs) : l'anneau k tourne de (k + 1) parts de l'angle, au bout
+## des anneaux qui le précèdent.
+static func transformation_anneau(a: Dictionary, c: float, k: int) -> Transform3D:
+	var xf := _anneau_droit(a, float(a["angle_1_deg"]) * progression(a, c), k)
+	var p_ref := float(a.get("progression_ref", 0.0))
+	if p_ref != 0.0:
+		xf = xf * _anneau_droit(a, float(a["angle_1_deg"]) * p_ref, k).affine_inverse()
+	return xf
+
+
+static func _anneau_droit(a: Dictionary, angle_deg: float, k: int) -> Transform3D:
+	if angle_deg == 0.0:
+		return Transform3D.IDENTITY
+	var anneaux: Array = a.get("anneaux_m", [1.0])
+	var part := deg_to_rad(angle_deg) / maxi(anneaux.size(), 1)
+	var axe: Vector3 = a["axe"]
+	var u: Vector3 = a.get("direction", Vector3.BACK)
+	var debut: Vector3 = a["pivot"]   # début de l'anneau k, déplacé
+	var debut_droit: Vector3 = a["pivot"]   # le même, tuyère droite
+	for j in mini(k, anneaux.size()):
+		debut += Basis(axe, part * (j + 1)) * (u * float(anneaux[j]))
+		debut_droit += u * float(anneaux[j])
+	var rot := Basis(axe, part * (k + 1))
+	return Transform3D(rot, debut - rot * debut_droit)
+
+
+## Les articulations d'une chaîne, de celle-ci à la première (celle qui porte toutes les autres).
+static func chaine(arts: Dictionary, id: String) -> Array:
+	var sortie := []
+	while id != "" and arts.has(id) and sortie.size() < PROFONDEUR_CHAINE:
+		sortie.append(id)
+		id = String((arts[id] as Dictionary).get("porte_par", ""))
+	return sortie
 
 
 # =====================================================================

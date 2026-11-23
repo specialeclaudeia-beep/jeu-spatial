@@ -153,13 +153,33 @@ func tuiles() -> Array:
 		["COUPLE DES MOTEURS", "%s N·m" % nombre(c.length()), _texte_couple(t)],
 		["ROTATION (PROPULSEURS)", "%s / %s / %s kN·m" % [nombre(cm.x / 1000.0), nombre(cm.y / 1000.0), nombre(cm.z / 1000.0)],
 			"tangage / lacet / roulis : %s / %s / %s °/s²" % [nombre(ar.x, 1), nombre(ar.y, 1), nombre(ar.z, 1)]],
-		["CENTRE DE GRAVITÉ", "%s m" % nombre(cg.z, 2), "derrière l'origine du modèle (hauteur %s m)" % nombre(cg.y, 2)],
+		["CENTRE DE GRAVITÉ", "%s m" % nombre(cg.z, 2), "derrière l'origine du modèle (hauteur %s m)" % nombre(cg.y, 2)
+			+ _texte_cg_mobiles()],
 		_tuile_symetrie(),
 	]
 
 
+## Étape 7 : ce que les pièces mobiles font au centre de gravité (dans la tuile), "" sans pièce mobile.
+func _texte_cg_mobiles() -> String:
+	if plan.articulations.is_empty():
+		return ""
+	var m := mobiles()
+	var dmax := 0.0
+	for c in m["commandes"]:
+		dmax = maxf(dmax, float(c["deplacement"]))
+	return " · pièces mobiles : il bouge de %s au plus" % longueur_txt(dmax)
+
+
 ## Ce que montre un clic sur chaque tuile du tableau (même ordre que tuiles()) : la page d'analyse détaillée.
 const DETAIL_TUILES := ["masses", "poussees", "poussees", "poussees", "poussees", "poussees", "masses", "symetrie"]
+
+
+## Les mêmes, pour ce vaisseau : avec des pièces mobiles (étape 7), la tuile du centre de gravité ouvre leur page.
+func details_tuiles() -> Array:
+	var d := DETAIL_TUILES.duplicate()
+	if not plan.articulations.is_empty():
+		d[6] = "mobiles"
+	return d
 
 
 func _tuile_symetrie() -> Array:
@@ -602,6 +622,107 @@ static func role_propulseur(e: Dictionary) -> String:
 		2:
 			return "tourner en roulis, pencher à %s (effet %s)" % ["gauche" if signe > 0 else "droite", nombre(effet, 2)]
 	return "glisser (déplacement), effet de rotation %s seulement" % nombre(effet, 2)
+
+
+# =====================================================================
+# ÉTAPE 7 : LES PIÈCES MOBILES
+# =====================================================================
+var _mobiles := {}
+
+
+## Les pièces mobiles du vaisseau, calculées par la physique du jeu :
+##   commandes : [{commande, nom, a_0, a_1, duree, articulations (ids), masse (kg emmenés), cg_0, cg_1,
+##                 deplacement (m)}] : centre de gravité quand la commande vaut 0, puis 1 (les autres comme au
+##                 départ du jeu) ;
+##   articulations : [{id, nom, type, commande, masse (kg emmenés, celles qu'elle porte comprises), pieces (ids),
+##                     porte_par, element ({genre, id} : ce qu'on choisit dans le vaisseau)}].
+func mobiles() -> Dictionary:
+	if not _mobiles.is_empty():
+		return _mobiles
+	var arts: Dictionary = plan.articulations
+	var par_art := {}   # articulation → ids des pièces qu'elle emmène (elle et celles qu'elle porte)
+	for id in arts:
+		par_art[id] = []
+	for p in plan.pieces:
+		for id in Plan.chaine(arts, String(p.get("articulation", ""))):
+			(par_art[id] as Array).append(String(p["id"]))
+	var liste := []
+	for id in arts:
+		var a: Dictionary = arts[id]
+		var ids: Array = par_art[id]
+		var el := {}
+		var k := String(id).rfind("/")
+		if k > 0 and ajouts.has(String(id).substr(0, k)):
+			el = {"genre": "ajout", "id": String(id).substr(0, k)}   # partie mobile d'une pièce posée
+		elif not ids.is_empty():
+			el = element_de(piece(String(ids[0])))
+		liste.append({"id": id, "nom": nom_articulation(id), "type": String(a.get("type", "")), "commande": String(a.get("commande", "")),
+			"masse": float(_masse_de(ids)[0]), "pieces": ids, "porte_par": String(a.get("porte_par", "")), "element": el})
+	var commandes := []
+	for c in Catalogue.COMMANDES:
+		var les := []
+		var masse := 0.0
+		for x in liste:
+			if x["commande"] == c:
+				les.append(x["id"])
+				if String(x["porte_par"]) == "" or String((arts[x["porte_par"]] as Dictionary).get("commande", "")) != c:
+					masse += float(x["masse"])   # (une articulation portée par une autre de la même commande : déjà comptée)
+		if les.is_empty():
+			continue
+		var avant: float = v.valeur_commande(c)
+		var cgs := []
+		for x in [0.0, 1.0]:
+			v.regler_commande(c, x)
+			v.placer_pieces_mobiles()
+			cgs.append(v.centre_gravite)
+		v.regler_commande(c, avant)
+		v.placer_pieces_mobiles()
+		var d: Dictionary = Catalogue.COMMANDES[c]
+		commandes.append({"commande": c, "nom": String(d["nom"]), "a_0": String(d["a_0"]), "a_1": String(d["a_1"]),
+			"duree": plan.duree_commande(c), "articulations": les, "masse": masse, "cg_0": cgs[0], "cg_1": cgs[1],
+			"deplacement": ((cgs[1] as Vector3) - (cgs[0] as Vector3)).length()})
+	_mobiles = {"commandes": commandes, "articulations": liste}
+	return _mobiles
+
+
+## Nom lisible d'une articulation : celle d'une pièce posée prend le nom de la pièce (« Charnière motorisée 1 »).
+func nom_articulation(id: String) -> String:
+	var a: Dictionary = plan.articulations.get(id, {})
+	var k := id.rfind("/")
+	if k > 0 and ajouts.has(id.substr(0, k)):
+		return "%s (%s)" % [String(ajouts[id.substr(0, k)].get("nom", id.substr(0, k))), String(a.get("nom", id.substr(k + 1)))]
+	return _majuscule(String(a.get("nom", _mots(id))))
+
+
+## Page « Pièces mobiles » : chaque commande (ce qu'elle emmène, de combien le centre de gravité bouge),
+## puis chaque articulation (cliquable : ses pièces en orange).
+func fiche_mobiles() -> Dictionary:
+	var m := mobiles()
+	var lignes := []
+	lignes.append(["Pièces mobiles", "%d articulation%s" % [(m["articulations"] as Array).size(), "s" if (m["articulations"] as Array).size() > 1 else ""]])
+	for c in m["commandes"]:
+		var dcg: Vector3 = (c["cg_1"] as Vector3) - (c["cg_0"] as Vector3)
+		lignes.append([_majuscule(String(c["nom"])) + " (0 → 1)", "%s emmenés · centre de gravité %s · %s s" % [
+			masse_txt(float(c["masse"])), ("bouge de " + longueur_txt(dcg.length()) + " " + sens_txt(dcg)) if dcg.length() >= 0.0005 else "ne bouge pas",
+			nombre(float(c["duree"]), 1)]])
+	var sections := []
+	for c in m["commandes"]:
+		var liste := []
+		for x in m["articulations"]:
+			if x["commande"] != c["commande"]:
+				continue
+			var porte := ""
+			if String(x["porte_par"]) != "":
+				porte = " · portée par " + nom_articulation(String(x["porte_par"]))
+			liste.append(ligne_liste(String(x["nom"]), masse_txt(float(x["masse"])) + porte, float(x["masse"]) / maxf(masse_totale, 1e-9),
+				x["element"]))
+		sections.append({"titre": "%s : 0 = %s, 1 = %s" % [String(c["nom"]).to_upper(), String(c["a_0"]), String(c["a_1"])], "liste": liste})
+	return {"titre": "Pièces mobiles", "sous_titre": "analyse ingénieur · même calcul que le jeu", "lignes": lignes, "sections": sections,
+		"note": "Tout ce qui est posé sur une pièce mobile la suit : moteurs, roues, ailes, et leur masse. Quand une pièce bouge, le centre de gravité se déplace et le vaisseau tourne un peu dans l'autre sens (comme un chat qui se retourne en tombant), puis s'arrête avec elle. « Mouvements » (en haut) les essaie dans le hangar."}
+
+
+static func masse_txt(m: float) -> String:
+	return "%s kg" % nombre(m, 1 if m < 100.0 else 0)
 
 
 func _texte_articulation(a: Dictionary) -> String:
@@ -1139,6 +1260,17 @@ static func vecteur_txt(a) -> String:
 
 
 ## Direction lisible : « l'avant », « le haut », ou les trois nombres.
+## Sens d'un déplacement en mots : « vers le bas », « vers le bas et l'avant » (les parts de plus d'un quart).
+static func sens_txt(d: Vector3) -> String:
+	var u := d.normalized()
+	var parts := []
+	for k in 3:
+		if absf(u[k]) > 0.25:
+			parts.append([absf(u[k]), [["la droite", "la gauche"], ["le haut", "le bas"], ["l'arrière", "l'avant"]][k][0 if u[k] > 0.0 else 1]])
+	parts.sort_custom(func(a, b): return a[0] > b[0])
+	return "vers " + " et ".join(parts.map(func(p): return p[1]))
+
+
 static func _direction_txt(a) -> String:
 	var d := Catalogue.vecteur(a).normalized()
 	var noms := [[Vector3(0, 0, -1), "l'avant"], [Vector3(0, 0, 1), "l'arrière"], [Vector3(0, 1, 0), "le haut"],

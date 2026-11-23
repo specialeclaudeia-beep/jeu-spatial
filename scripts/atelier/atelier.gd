@@ -78,6 +78,11 @@ var edition                              # le plan en cours de construction (ann
 var dessin                               # dessin du vaisseau : modules enlevés cachés, pièces posées dessinées
 var dossier_vaisseaux := Edition.DOSSIER # où les vaisseaux sont enregistrés (les tests en prennent un autre)
 var vaisseau_pose                        # la physique, posée sur le sol du hangar (donne la pose du modèle)
+## Étape 7 : pose essayée dans le hangar ({ailes, train, vertical}) ; vide : celle du hangar (train sorti,
+## ailes repliées). _essai : un mouvement en cours {commande, cible}.
+var commandes_essai := {}
+var _essai := {}
+var bouton_mouvements: Button
 var hangar
 var camera: CameraAtelier
 var pilote: Node3D                       # le vaisseau, origine au centre de gravité
@@ -288,13 +293,15 @@ func _poser_physique() -> void:
 	var v = VaisseauPhysique.new(plan)
 	v.gm = GRAVITE_SURFACE * RAYON_PLANETE * RAYON_PLANETE
 	v.rayon_planete = RAYON_PLANETE
-	v.poser_au_sol(Vector3.UP, Vector3.FORWARD, 2.0)
+	v.poser_au_sol(Vector3.UP, Vector3.FORWARD, 2.0, commandes_essai)
 	vaisseau_pose = v
 	pilote.transform = Transform3D(Basis(v.orientation), Vector3(0.0, v.py - RAYON_PLANETE, 0.0))
 	corps.position = -v.centre_gravite
 	if modele != null:
 		modele.poser(v)
 		modele.amortir(v, 0.0)
+	if dessin != null:
+		dessin.poser(v)
 
 
 ## Le dessin pour le plan actuel : modules enlevés cachés, pièces posées dessinées, formes cliquables.
@@ -356,6 +363,8 @@ func _forme_cliquable(mi: MeshInstance3D, id: String, convexe := false) -> Stati
 	corps_clic.collision_layer = 1 << (COUCHE_PIECES - 1)
 	corps_clic.collision_mask = 0
 	corps_clic.set_meta("piece", id)
+	if mi.has_meta("articulation"):
+		corps_clic.set_meta("articulation", mi.get_meta("articulation"))   # partie mobile d'une pièce posée
 	var cs := CollisionShape3D.new()
 	cs.shape = forme
 	corps_clic.add_child(cs)
@@ -464,7 +473,7 @@ func _element_existe(e: Dictionary) -> bool:
 		"categorie", "type", "matiere":
 			return true
 		"analyse":
-			return id in ["masses", "poussees", "symetrie"]
+			return id in ["masses", "poussees", "symetrie", "mobiles"]
 	return false
 
 
@@ -756,6 +765,8 @@ func choisir(genre: String, id: String, garder_pose := false) -> void:
 					_afficher_fiche(analyse.fiche_poussees())
 				"symetrie":
 					_afficher_fiche(analyse.fiche_symetrie())
+				"mobiles":
+					_afficher_fiche(analyse.fiche_mobiles())
 				"controle":
 					if controle == null:
 						controle = controle_vol()
@@ -1120,6 +1131,8 @@ func pieces_choisies() -> Array:
 					return (analyse.symetrie()["sans_jumelle"] as Array).duplicate()
 				"poussees":
 					return plan.pieces.filter(func(p): return p["type"] == "moteur").map(func(p): return p["id"])
+				"mobiles":
+					return plan.pieces.filter(func(p): return String(p.get("articulation", "")) != "").map(func(p): return p["id"])
 				"controle":
 					# en orange : les pièces de ce qui bloque ou avertit
 					var vus := {}
@@ -1443,7 +1456,7 @@ func commencer_pose(modele_piece: String, reglages: Dictionary, deplace := "") -
 	if deplace != "":
 		for i in [deplace, String(analyse.ajouts[deplace].get("symetrique", ""))]:
 			if dessin.ajouts.has(i):
-				(dessin.ajouts[i] as Node3D).visible = false
+				dessin.montrer_ajout(i, false)
 				_cache_pendant_pose.append(i)
 	_maj_pose_exclusions()
 	aide.text = AIDE_POSE
@@ -1460,7 +1473,7 @@ func _maj_pose_exclusions() -> void:
 			if is_instance_valid(b):
 				ex.append((b as StaticBody3D).get_rid())
 		if dessin.ajouts.has(i):
-			(dessin.ajouts[i] as Node3D).visible = false
+			dessin.montrer_ajout(i, false)
 	pose["exclure"] = ex
 
 
@@ -1473,8 +1486,8 @@ func finir_pose() -> void:
 	_fantome = null
 	_fantome_jumeau = null
 	for i in _cache_pendant_pose:
-		if dessin.ajouts.has(i) and is_instance_valid(dessin.ajouts[i]):
-			(dessin.ajouts[i] as Node3D).visible = true
+		if dessin.ajouts.has(i):
+			dessin.montrer_ajout(i, true)
 	_cache_pendant_pose.clear()
 	pose = {}
 	if aide != null:
@@ -1520,7 +1533,8 @@ func calculer_pose_rayon(depart: Vector3, dir_cam: Vector3) -> void:
 	var n: Vector3
 	if not r.is_empty():
 		support = String(r["collider"].get_meta("piece", ""))
-		art = _articulation_de(support)
+		# étape 7 : sur la partie mobile d'une pièce posée (battant d'une charnière…), elle suivra cette partie
+		art = String(r["collider"].get_meta("articulation", _articulation_de(support)))
 		# une aile repliée dans le hangar : on ramène le point dans la pose du plan (ailes ouvertes)
 		var a_inv: Transform3D = vaisseau_pose.transformation_articulation(art).affine_inverse()
 		point = a_inv * (vers_corps * (r["position"] as Vector3))
@@ -2496,6 +2510,11 @@ func _barre_haut() -> Control:
 	copie.tooltip_text = "Enregistrer une copie sous un autre nom (l'original reste)"
 	copie.pressed.connect(enregistrer_copie)
 	h.add_child(copie)
+	var mouvements := Style.bouton("Mouvements ▾", 14)
+	mouvements.tooltip_text = "Essayer les pièces mobiles dans le hangar : ailes, train, vol vertical"
+	mouvements.pressed.connect(_ouvrir_menu_mouvements.bind(mouvements))
+	h.add_child(mouvements)
+	bouton_mouvements = mouvements
 	var cam := Style.bouton("Caméra ▾", 14)
 	cam.pressed.connect(_ouvrir_menu_camera.bind(cam))
 	h.add_child(cam)
@@ -2544,7 +2563,7 @@ func _remplir_tableau() -> void:
 		c.queue_free()
 	var en_salle := not salle.is_empty()
 	var tuiles: Array = analyse.tuiles_groupe(pieces_salle()) if en_salle else analyse.tuiles()
-	var details: Array = [] if en_salle else Analyse.DETAIL_TUILES.duplicate()
+	var details: Array = [] if en_salle else analyse.details_tuiles()
 	if not en_salle:
 		controle = controle_vol()
 		tuiles.append(controle.tuile())
@@ -2914,6 +2933,8 @@ func _outils_ajout(id: String) -> void:
 					texte = Analyse._majuscule(String(Catalogue.MATIERES[c]["nom"]))
 				elif Pieces.CONTENUS.has(c):
 					texte = Analyse._majuscule(String(Pieces.CONTENUS[c]["nom"]))
+				elif Pieces.NOMS_CHOIX.has(c):
+					texte = Analyse._majuscule(String(Pieces.NOMS_CHOIX[c]))
 				o.add_item(texte, k)
 				if c == String(r[cle]):
 					o.select(k)
@@ -2932,6 +2953,8 @@ func _outils_ajout(id: String) -> void:
 		fiche_outils.add_child(ligne)
 	# place et orientation, à la main (repère du vaisseau, ailes ouvertes)
 	fiche_outils.add_child(Style.label("PLACE (m, repère du vaisseau, ailes ouvertes)  ·  ROTATION (°)", 11, Style.TEXTE_DOUX))
+	if Pieces.mobile(modele_piece):
+		_outils_piece_mobile(id, modele_piece)
 	var pos: Array = e.get("position", [0.0, 0.0, 0.0])
 	var rot: Array = e.get("rotation_deg", [0.0, 0.0, 0.0])
 	for ligne_def in [["Place", pos, 0.01, -40.0, 40.0, " m"], ["Rotation", rot, 1.0, -180.0, 180.0, "°"]]:
@@ -2956,6 +2979,173 @@ func _outils_ajout(id: String) -> void:
 	if String(e.get("symetrique", "")) != "" and analyse.ajouts.has(String(e["symetrique"])):
 		_bouton_fiche("Séparer de sa jumelle (elles bougeront chacune de leur côté)", func(): edition.separer_symetrie(id))
 	fiche_outils.add_child(HSeparator.new())
+
+
+## Étape 7 : une pièce mobile. Sa commande (0 et 1 : ce que ça veut dire), où elle en est, et deux boutons
+## pour l'essayer tout de suite dans le hangar (tout suit : ce qui est posé dessus, les masses, les roues).
+func _outils_piece_mobile(id: String, modele_piece: String) -> void:
+	var arts: Array = Pieces.articulations(modele_piece, analyse.ajouts[id].get("reglages", {}))
+	if arts.is_empty():
+		return
+	var c := String((arts[0] as Dictionary)["commande"])
+	var d: Dictionary = Catalogue.COMMANDES.get(c, {"nom": c, "a_0": "0", "a_1": "1"})
+	fiche_outils.add_child(Style.label("PIÈCE MOBILE", 11, Style.TEXTE_DOUX))
+	var l := Style.label("Commande « %s » : 0 = %s, 1 = %s. En ce moment : %s." % [String(d["nom"]), String(d["a_0"]),
+		String(d["a_1"]), texte_commande(c, vaisseau_pose.valeur_commande(c))], 13, Style.TEXTE)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	fiche_outils.add_child(l)
+	var boutons := HBoxContainer.new()
+	boutons.add_theme_constant_override("separation", 4)
+	fiche_outils.add_child(boutons)
+	_bouton_fiche("Essayer : %s (0)" % String(d["a_0"]), func(): essayer_mouvement(c, 0.0), boutons)
+	_bouton_fiche("Essayer : %s (1)" % String(d["a_1"]), func(): essayer_mouvement(c, 1.0), boutons)
+
+
+# =====================================================================
+# ÉTAPE 7 : ESSAYER LES PIÈCES MOBILES DANS LE HANGAR
+# =====================================================================
+## Les commandes qui font bouger au moins une pièce du plan, et combien de pièces mobiles chacune.
+func commandes_utilisees() -> Dictionary:
+	var d := {}
+	for id in plan.articulations:
+		var c := String((plan.articulations[id] as Dictionary).get("commande", ""))
+		d[c] = int(d.get(c, 0)) + 1
+	return d
+
+
+## « repliées », « ouvertes », ou « 40 % » entre les deux.
+static func texte_commande(c: String, x: float) -> String:
+	var d: Dictionary = Catalogue.COMMANDES.get(c, {})
+	if x <= 0.0:
+		return String(d.get("a_0", "0"))
+	if x >= 1.0:
+		return String(d.get("a_1", "1"))
+	return "%d %% vers « %s »" % [roundi(100.0 * x), String(d.get("a_1", "1"))]
+
+
+## Lance un mouvement : la commande va vers cible à la vitesse du plan (sa durée), dessin et physique ensemble.
+func essayer_mouvement(c: String, cible: float) -> void:
+	if vaisseau_pose == null:
+		return
+	_essai = {"commande": c, "cible": clampf(cible, 0.0, 1.0)}
+	set_process(true)
+
+
+## Revient à la pose du hangar (train sorti, ailes repliées).
+func remettre_pose_hangar() -> void:
+	_essai = {}
+	commandes_essai = {}
+	if avis != null and texte_avis.text.begins_with("Dans cette pose"):
+		avis.visible = false   # (l'avis « sous le sol » ne vaut plus)
+	_demander_rafraichir()
+
+
+func _process(delta: float) -> void:
+	if _essai.is_empty():
+		set_process(false)
+		return
+	_avancer_essai(delta)
+
+
+## Un pas du mouvement essayé : la physique place tout (moteurs, roues, masses), le dessin suit, le vaisseau
+## se décale autour de son nouveau centre de gravité. À la fin, il est reposé sur le sol dans sa nouvelle pose
+## (sur ses roues, ou sur sa coque si le train est rentré).
+func _avancer_essai(delta: float) -> void:
+	var c := String(_essai["commande"])
+	var cible := float(_essai["cible"])
+	var v = vaisseau_pose
+	var x: float = move_toward(v.valeur_commande(c), cible, delta / maxf(plan.duree_commande(c), 0.05))
+	v.regler_commande(c, x)
+	v.placer_pieces_mobiles()
+	dessin.poser(v)
+	if modele != null:
+		modele.amortir(v, 0.0)
+	corps.position = -v.centre_gravite
+	if x == cible:
+		_essai = {}
+		commandes_essai[c] = cible
+		_rafraichir()
+		var passe := sous_le_sol()
+		if passe > 0.05:
+			montrer_avis("Dans cette pose, une partie du vaisseau passe %s sous le sol du hangar (ailes du bas, jambe de train…). En vol, rien ne gêne ; posé, elle toucherait le sol." % (Analyse.nombre(passe, 2) + " m"), 8.0)
+
+
+## De combien (m) le dessin du vaisseau descend sous le sol du hangar (0 : rien ne passe dessous).
+func sous_le_sol() -> float:
+	var b := boite_vaisseau()
+	return maxf(0.0, -b.position.y)
+
+
+## Durée d'un mouvement complet (s) : enregistrée dans le plan du vaisseau.
+func regler_duree_mouvement(c: String, s: float) -> void:
+	edition.regler_duree_commande(c, s)
+
+
+func _ouvrir_menu_mouvements(bouton: Button) -> void:
+	var pp := PopupPanel.new()
+	pp.theme = ui.theme
+	pp.transparent_bg = false
+	pp.add_theme_stylebox_override("panel", Style.boite(Color(Style.FOND_CLAIR, 1.0), Style.BORD, 6, 12.0))
+	var cadre := PanelContainer.new()
+	cadre.add_theme_stylebox_override("panel", Style.boite(Color(Style.FOND_CLAIR, 1.0), Color(0, 0, 0, 0), 0, 4.0, 0))
+	pp.add_child(cadre)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	v.custom_minimum_size = Vector2(380, 0)
+	cadre.add_child(v)
+	_remplir_menu_mouvements(v)
+	ui.add_child(pp)
+	pp.popup_hide.connect(pp.queue_free)
+	var r := bouton.get_global_rect()
+	pp.popup(Rect2i(Vector2i(int(r.position.x + r.size.x - 400), int(r.position.y + r.size.y + 6)), Vector2i(400, 0)))
+
+
+func _remplir_menu_mouvements(v: VBoxContainer) -> void:
+	v.add_child(Style.label("PIÈCES MOBILES : LES ESSAYER", 12, Style.TEXTE_DOUX))
+	var utilisees := commandes_utilisees()
+	if utilisees.is_empty():
+		var l := Style.label("Ce vaisseau n'a pas de pièce mobile. Pose une charnière, un vérin, une aile repliable ou une jambe de train (catalogue : « Pièces mobiles »).", 13, Style.TEXTE)
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		l.custom_minimum_size = Vector2(380, 0)   # (sa largeur connue d'avance : le menu garde la bonne hauteur)
+		v.add_child(l)
+		return
+	for c in Catalogue.COMMANDES:
+		if not utilisees.has(c):
+			continue
+		var d: Dictionary = Catalogue.COMMANDES[c]
+		var titre := Style.label("%s  ·  %d pièce%s mobile%s  ·  %s" % [Analyse._majuscule(String(d["nom"])), int(utilisees[c]),
+			"s" if int(utilisees[c]) > 1 else "", "s" if int(utilisees[c]) > 1 else "",
+			texte_commande(c, vaisseau_pose.valeur_commande(c))], 13, Style.TEXTE)
+		v.add_child(titre)
+		var h := HBoxContainer.new()
+		h.add_theme_constant_override("separation", 4)
+		v.add_child(h)
+		for k in [0, 1]:
+			var b := Style.bouton("%s (%d)" % [String(d["a_%d" % k]), k], 13)
+			b.pressed.connect(essayer_mouvement.bind(String(c), float(k)))
+			h.add_child(b)
+		var s := SpinBox.new()
+		s.min_value = 0.2
+		s.max_value = 30.0
+		s.step = 0.1
+		s.value = plan.duree_commande(c)
+		s.suffix = " s"
+		s.prefix = "durée"
+		s.custom_minimum_size = Vector2(130, 0)
+		s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		s.tooltip_text = "Durée d'un mouvement complet (0 → 1), en vol comme ici"
+		s.value_changed.connect(func(x): regler_duree_mouvement(String(c), x))
+		h.add_child(s)
+	var remettre := Style.bouton("Revenir à la pose du hangar (train sorti, ailes repliées)", 13)
+	remettre.pressed.connect(remettre_pose_hangar)
+	v.add_child(remettre)
+	var page := Style.bouton("Analyse des pièces mobiles (masses, centre de gravité)", 13)
+	page.pressed.connect(func(): ouvrir_detail("mobiles"))
+	v.add_child(page)
+	var note := Style.label("Tout suit, comme en vol : ce qui est posé sur les pièces mobiles, leurs moteurs, les roues, les masses et le centre de gravité.", 12, Style.TEXTE_DOUX)
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.custom_minimum_size = Vector2(380, 0)
+	v.add_child(note)
 
 
 func _regler_place(id: String, rotation: bool, k: int, x: float) -> void:

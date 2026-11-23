@@ -52,7 +52,7 @@ func _init(d: Dictionary = {}, chemin_source := "") -> void:
 	for e in donnees["pieces"]:
 		if e is Dictionary and e.has("modele") and Pieces.existe(String(e["modele"])):
 			e["reglages"] = Pieces.reglages_complets(String(e["modele"]), e.get("reglages", {}))
-			e["pieces"] = Pieces.pieces(String(e["modele"]), e["reglages"], String(e["id"]))
+			Pieces.remplir(e, String(e["modele"]), e["reglages"])
 	if Armature.a_armature(donnees):
 		Armature.refaire(donnees)
 
@@ -220,6 +220,13 @@ func nom_miroir(id: String) -> String:
 	for c in candidats:
 		if not element(c).is_empty() or p.articulations.has(c) or _a_piece(p, c):
 			return c
+	# étape 7 : partie d'une pièce posée (« charniere_1/mouvement ») : la même partie de sa jumelle
+	var i := id.rfind("/")
+	if i > 0:
+		var base := id.substr(0, i)
+		var m := nom_miroir(base)
+		if m != base:
+			return m + id.substr(i)
 	return id
 
 
@@ -278,7 +285,7 @@ func _nouvel_ensemble(id: String, modele: String, r: Dictionary, xf: Transform3D
 		e["fixe_a"] = fixe_a
 	if articulation != "":
 		e["articulation"] = articulation
-	e["pieces"] = Pieces.pieces(modele, r, id)
+	Pieces.remplir(e, modele, r)
 	return e
 
 
@@ -343,7 +350,7 @@ func regler(id: String, cle: String, valeur) -> void:
 		if (x as Dictionary).is_empty():
 			continue
 		x["reglages"] = r.duplicate()
-		x["pieces"] = Pieces.pieces(modele, r, String(x["id"]))
+		Pieces.remplir(x, modele, r)
 	_apres()
 
 
@@ -380,10 +387,34 @@ func supprimer(ids: Array) -> int:
 	for e in reste:
 		if e is Dictionary and e.has("symetrique") and a_enlever.has(String(e["symetrique"])):
 			e.erase("symetrique")
+		# étape 7 : posée sur une pièce mobile enlevée (« charniere_1/mouvement ») : elle ne bouge plus
+		if e is Dictionary and e.has("articulation"):
+			var art := String(e["articulation"])
+			var k := art.rfind("/")
+			if k > 0 and a_enlever.has(art.substr(0, k)):
+				e.erase("articulation")
 	if Armature.a_armature(donnees):
 		Armature.refaire(donnees)   # les connecteurs qui n'ont plus de poutre partent aussi
 	_apres()
 	return a_enlever.size()
+
+
+## Étape 7 : durée (s) d'un mouvement complet d'une commande (ailes, train, vol vertical), dans le plan.
+func regler_duree_commande(c: String, s: float) -> void:
+	if not Catalogue.COMMANDES.has(c):
+		return
+	s = clampf(s, 0.2, 30.0)
+	var cmds: Dictionary = donnees.get("commandes", {})
+	var d: Dictionary = cmds.get(c, {})
+	if is_equal_approx(float(d.get("duree_s", -1.0)), s):
+		return
+	_avant()
+	if not donnees.has("commandes"):
+		donnees["commandes"] = {}
+	if not (donnees["commandes"] as Dictionary).has(c):
+		donnees["commandes"][c] = {"nom": String(Catalogue.COMMANDES[c]["nom"])}
+	donnees["commandes"][c]["duree_s"] = snappedf(s, 0.1)
+	_apres()
 
 
 ## Délie une pièce de sa jumelle (elles deviennent deux pièces indépendantes).

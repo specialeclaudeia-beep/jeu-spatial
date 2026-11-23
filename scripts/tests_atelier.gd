@@ -14,6 +14,9 @@ extends Node
 ## pièces posées fusionnées par matière, compte de ce que la carte graphique dessine) et le CONTRÔLE AVANT LE
 ## VOL (scripts/atelier/controle_vol.gd : vitesse du PC, lumière, au sol, en vol, symétrie), et dans l'écran :
 ## la tuile AVANT LE VOL, sa page, la fenêtre de « Lancer » (atelier) et de « Jouer » (accueil).
+## Étape 6 : l'armature (poutres, connecteurs, panneaux). Étape 7 : les PIÈCES MOBILES générales (chaînes
+## d'articulations, masses et roues qui suivent, moment cinétique gardé, pièces toutes faites mobiles, dessin
+## qui suit, analyse, contrôle) et dans l'écran : poser sur un battant, « Mouvements », la page.
 ## Ligne de commande :
 ##   Godot_console.exe --headless --path . res://scenes/tests_atelier.tscn
 ## Les valeurs « d'avant » viennent du code d'avant l'atelier (vaisseau écrit en dur), gardées dans
@@ -83,6 +86,7 @@ func _ready() -> void:
 	_tests_dessin_etape5()
 	_tests_controle_vol()
 	_tests_armature()
+	_tests_pieces_mobiles()
 	# l'écran de l'atelier s'ouvre sur le chasseur de départ, et ce que les tests enregistrent ne touche pas
 	# aux vaisseaux ni au dernier vaisseau ouvert du joueur
 	var partie_avant = Engine.get_meta("partie") if Engine.has_meta("partie") else null
@@ -93,6 +97,7 @@ func _ready() -> void:
 	await _tests_ecran_etape4()
 	await _tests_ecran_etape5()
 	await _tests_ecran_etape6()
+	await _tests_ecran_etape7()
 	if partie_avant != null:
 		Engine.set_meta("partie", partie_avant)
 	else:
@@ -829,7 +834,7 @@ static func _ed_depart():
 
 func _tests_pieces_toutes_faites() -> void:
 	# chaque pièce du catalogue se pose : le plan reste valide, la physique gagne exactement sa masse
-	var lignes := []
+	var lignes: Array = []
 	var ok := true
 	var m0: float = VaisseauPhysique.new().masse
 	for modele in Pieces.MODELES:
@@ -1122,7 +1127,7 @@ func _tests_vaisseaux_limites() -> void:
 func _tests_pose_calcul() -> void:
 	# repère aligné sur la surface : l'axe d'attache suit la normale, les autres restent droits
 	var ok := true
-	var lignes := []
+	var lignes: Array = []
 	for n in [Vector3.UP, Vector3.DOWN, Vector3.RIGHT, Vector3.LEFT, Vector3(0.6, 0.8, 0.0), Vector3(0.0, 0.6, -0.8)]:
 		for axe in 3:
 			var b: Basis = AtelierScript.base_alignee(axe, n)
@@ -1271,7 +1276,7 @@ func _tests_ecran_etape3() -> void:
 	var fus: MeshInstance3D = at.maillages["Fuselage"][0]
 	var b_fus: AABB = fus.global_transform * fus.get_aabb()
 	at.calculer_pose_rayon(b_fus.get_center() + Vector3(0.6, 30.0, 0.0), Vector3.DOWN)
-	var sur := String(at.pose.get("fixe_a", ""))
+	var sur: String = String(at.pose.get("fixe_a", ""))
 	at.valider_pose()
 	await _attendre_atelier()
 	var e1: Dictionary = at.edition.element(id1)
@@ -1512,7 +1517,7 @@ func _tests_ecran_etape4() -> void:
 	# poser une pièce dans la salle : elle y entre (sa jumelle, sur l'autre aile, reste cachée avec le vaisseau)
 	at.commencer_pose("propulseur", {})
 	at.calculer_pose_rayon(r_aile[0], r_aile[1])
-	var sur := String(at.pose.get("fixe_a", ""))
+	var sur: String = String(at.pose.get("fixe_a", ""))
 	at.valider_pose()
 	await _attendre_atelier()
 	var ici := ""
@@ -2098,7 +2103,7 @@ static func _rayon_dessus(at, p: Vector3) -> Array:
 
 
 func _viser(at, p: Vector3) -> void:
-	var r := _rayon_dessus(at, p)
+	var r: Array = _rayon_dessus(at, p)
 	at.calculer_trace_rayon(r[0], r[1])
 
 
@@ -2121,7 +2126,7 @@ func _tests_ecran_etape6() -> void:
 	# 2. un carré tracé à la souris dans le vide, à droite du vaisseau (le dernier clic revient sur le premier
 	#    connecteur) : 4 poutres + leurs jumelles, 4 connecteurs d'angle de chaque côté
 	var coins := [Vector3(9.0, 0.0, -0.5), Vector3(10.0, 0.0, -0.5), Vector3(10.0, 0.0, 0.5), Vector3(9.0, 0.0, 0.5), Vector3(9.0, 0.0, -0.5)]
-	var textes := []
+	var textes: Array = []
 	for c in coins:
 		_viser(at, c)
 		textes.append(String(at.trace["texte"]))
@@ -2292,4 +2297,278 @@ func _tests_ecran_etape5() -> void:
 	_resultat(ok, "Écran (étape 5) : Jouer (accueil) passe par le contrôle", "boîte qui flotte : %s, fenêtre %s ; avertissement seul : %s, fenêtre %s" % [
 		"PARTI" if joue else "refusé", b1, "PARTI" if joue2 else "pas parti", b2])
 	ac.queue_free()
+	await get_tree().process_frame
+
+
+# =====================================================================
+# 7. LES PIÈCES MOBILES (étape 7)
+# =====================================================================
+const PLAN_CHAINE := {"format": "plan-vaisseau", "version": 3, "nom": "chaîne", "commandes": {},
+	"articulations": [
+		{"id": "bras", "type": "charniere", "commande": "ailes", "point": [0.0, 0.0, 0.0], "axe": [0.0, 0.0, 1.0],
+			"angle_0_deg": 0.0, "angle_1_deg": 90.0},
+		{"id": "tige", "type": "verin", "commande": "vertical", "course": [1.0, 0.0, 0.0], "porte_par": "bras"}],
+	"pieces": [
+		{"id": "socle", "type": "bloc", "forme": "boite", "dimensions_m": [1.0, 1.0, 1.0], "position": [0.0, 0.0, 0.0], "masse_kg": 1000.0},
+		{"id": "bloc", "type": "bloc", "forme": "boite", "dimensions_m": [0.2, 0.2, 0.2], "position": [2.0, 0.0, 0.0], "masse_kg": 100.0,
+			"articulation": "tige"}]}
+
+
+func _tests_pieces_mobiles() -> void:
+	# 1. une chaîne : la tige (vérin) est portée par le bras (charnière). Le bloc au bout de la tige sort de
+	#    1 m, puis le bras tourne de 90° : (2, 0, 0) → (3, 0, 0) → (0, 3, 0)
+	var p = _plan_de(PLAN_CHAINE)
+	var bout: Vector3 = Plan.transformation(p.articulations, "tige", {"ailes": 1.0, "vertical": 1.0}) * Vector3(2.0, 0.0, 0.0)
+	var seul: Vector3 = Plan.transformation(p.articulations, "tige", {"ailes": 0.0, "vertical": 1.0}) * Vector3(2.0, 0.0, 0.0)
+	var boucle: Dictionary = PLAN_CHAINE.duplicate(true)
+	boucle["articulations"][0]["porte_par"] = "tige"
+	var pb = _plan_de(boucle)
+	var erreur_boucle: bool = " ".join(pb.erreurs).contains("rond")
+	var ok: bool = p.valide() and bout.is_equal_approx(Vector3(0.0, 3.0, 0.0)) and seul.is_equal_approx(Vector3(3.0, 0.0, 0.0)) \
+		and p.articulations["tige"]["porte_par"] == "bras" and not pb.valide() and erreur_boucle and Plan.chaine(p.articulations, "tige") == ["tige", "bras"]
+	_resultat(ok, "Pièces mobiles : une articulation portée par une autre", "bout de la tige %s (attendu (0 ; 3 ; 0)), sans le bras %s ; boucle refusée : %s" % [
+		Analyse.vecteur_txt(bout), Analyse.vecteur_txt(seul), erreur_boucle])
+	# 2. la physique suit : centre de gravité (1000 kg au centre, 100 kg au bout) et rotation gardée dans le vide
+	var v = VaisseauPhysique.new(p)
+	var cg0: Vector3 = v.centre_gravite
+	v.regler_commande("ailes", 1.0)
+	v.regler_commande("vertical", 1.0)
+	v.placer_pieces_mobiles()
+	var cg1: Vector3 = v.centre_gravite
+	var attendu: Vector3 = Vector3(0.0, 300.0 / 1100.0, 0.0)
+	ok = cg0.is_equal_approx(Vector3(200.0 / 1100.0, 0.0, 0.0)) and (cg1 - attendu).length() < 1e-5
+	_resultat(ok, "Pièces mobiles : le centre de gravité suit", "replié %s, ouvert et sorti %s (attendu (0 ; 0,273 ; 0))" % [
+		Analyse.vecteur_txt(cg0), Analyse.vecteur_txt(cg1)])
+	v = VaisseauPhysique.new(p)
+	v.omega = Vector3.ZERO
+	v.ouvrir_ailes(true)
+	var l_ecart: float = 0.0
+	var l_int: float = 0.0
+	for i in int(v.duree_ailes * 120.0) + 20:
+		v.pas(1.0 / 120.0)
+		l_ecart = maxf(l_ecart, (Basis(v.orientation) * (v.tenseur_inertie * v.omega + v._l_interne)).length())
+		l_int = maxf(l_int, v._l_interne.length())
+	var angle: float = Basis(v.orientation).get_euler().z
+	ok = v.ailes == 1.0 and l_int > 10.0 and l_ecart < 1e-4 * l_int and v.omega.length() < 1e-6 and angle < -0.01
+	_resultat(ok, "Pièces mobiles : moment cinétique gardé", "le bras (100 kg à 2 m) tourne de 90° en %s s : jusqu'à %s N·m·s, total gardé à %s près ; le vaisseau a tourné de %s° dans l'autre sens, puis s'est arrêté (%s rad/s)" % [
+		Analyse.nombre(v.duree_ailes, 1), Analyse.nombre(l_int, 1), String.num_scientific(l_ecart), Analyse.nombre(rad_to_deg(angle), 2), String.num_scientific(v.omega.length())])
+	# 3. les pièces toutes faites mobiles : articulations écrites dans l'ensemble, battant / tige / pli / jambe
+	var lignes: Array = []
+	ok = true
+	for m in ["charniere", "verin", "aile_repliable", "jambe_train"]:
+		var arts: Array = Pieces.articulations(m, {})
+		var morceaux: Array = Pieces.pieces(m, {}, m + "_1")
+		var bougent: Array = morceaux.filter(func(q): return String(q.get("articulation", "")) == String(arts[0]["id"]))
+		var formes: Array = Pieces.dessin(m, {}).filter(func(f): return String(f.get("articulation", "")) == String(arts[0]["id"]))
+		ok = ok and arts.size() == 1 and Pieces.porte(m) == String(arts[0]["id"]) and not bougent.is_empty() and not formes.is_empty() and Pieces.masse(m, {}) > 0.0
+		lignes.append("%s : « %s » (%s), %d morceaux qui bougent, %s" % [Pieces.nom(m), arts[0]["id"], arts[0]["commande"], bougent.size(), Pieces.resume(m, {})])
+	var cats: Array = Pieces.PROPOSITIONS.filter(func(pr): return pr[0] == "Pièces mobiles")
+	ok = ok and cats.size() == 5
+	_resultat(ok, "Pièces mobiles : les pièces toutes faites", " ; ".join(lignes) + " ; %d propositions" % cats.size())
+	# 4. poser sur une pièce mobile : une charnière sur un socle (avec sa jumelle), une aile sur son battant,
+	#    un propulseur sur le battant ; la jumelle de l'aile va sur le battant de la charnière jumelle
+	var ed = _ed_vide()
+	var socle: Array = ed.ajouter("boite", {"masse_kg": 2000.0, "largeur_m": 3.0, "hauteur_m": 1.0, "longueur_m": 6.0}, Transform3D.IDENTITY)
+	var ch: Array = ed.ajouter("charniere", {}, Transform3D(Basis.IDENTITY, Vector3(1.0, 0.5, 0.0)), socle[0], "", true)
+	var art_g: String = String(ch[0]) + "/mouvement"
+	var dc: Vector3 = Pieces.dimensions_charniere(0.5)
+	var sur_battant: Vector3 = Vector3(1.0, 0.5 + dc.z + dc.y * 0.5, -dc.x * 0.5)
+	var aile: Array = ed.ajouter("aile", {}, Transform3D(Basis.IDENTITY, sur_battant + Vector3(0.2, 0.05, 0.0)), ch[0], art_g, true)
+	var prop: Array = ed.ajouter("propulseur", {}, Transform3D(Basis.IDENTITY, sur_battant), ch[0], art_g, false)
+	var pl = ed.plan()
+	var art_d: String = String(ch[1]) + "/mouvement"
+	var jumelle_ok: bool = ch.size() == 2 and aile.size() == 2 and String(ed.element(aile[1]).get("articulation", "")) == art_d \
+		and ed.nom_miroir(art_g) == art_d
+	var sur_art: Array = pl.pieces.filter(func(q): return String(q.get("articulation", "")) == art_g)
+	var a_g: Dictionary = pl.articulations.get(art_g, {})
+	ok = pl.valide() and jumelle_ok and not a_g.is_empty() and not a_g.has("porte_par") and float(a_g["angle_ref"]) == 0.0 \
+		and sur_art.size() >= 4 and (pl.articulations[art_d]["axe"] as Vector3).is_equal_approx(Vector3.RIGHT)
+	_resultat(ok, "Pièces mobiles : poser sur un battant (et sa jumelle)", "%d pièces sur « %s » (battant, aile, propulseur) ; jumelle sur « %s » : %s ; axe de la jumelle %s" % [
+		sur_art.size(), art_g, art_d, jumelle_ok, Analyse.vecteur_txt(pl.articulations.get(art_d, {}).get("axe", Vector3.ZERO))])
+	# 5. ce qui est posé suit : le propulseur tourne, la plaque de l'aile aussi (elle se met face au vent)
+	v = VaisseauPhysique.new(pl)
+	var t0: Dictionary = {}
+	for t in v.rcs:
+		if String(t["id"]).begins_with(String(prop[0]) + "/"):
+			t0 = t
+	var pos0: Vector3 = t0.get("position", Vector3.ZERO)
+	var dir0: Vector3 = t0.get("direction", Vector3.ZERO)
+	var vent: Vector3 = Vector3(0.0, 0.0, 80.0)
+	var f0: Vector3 = v.aero.forces(vent, Vector3.ZERO, 1.2, 340.0, 0.0, 0.0)[0]
+	v.regler_commande("ailes", 1.0)
+	v.placer_pieces_mobiles()
+	var xf_b: Transform3D = v.transformation_articulation(art_g)
+	var pos1: Vector3 = t0.get("position", Vector3.ZERO)
+	var f1: Vector3 = v.aero.forces(vent, Vector3.ZERO, 1.2, 340.0, 1.0, 0.0)[0]
+	ok = not t0.is_empty() and pos1.is_equal_approx(xf_b * pos0) and (t0["direction"] as Vector3).is_equal_approx(xf_b.basis * dir0) \
+		and (pos1 - pos0).length() > 0.05 and absf(f1.z) > 5.0 * absf(f0.z)
+	_resultat(ok, "Pièces mobiles : moteurs et ailes posés suivent", "propulseur %s → %s ; traînée de l'aile %s N (à plat) → %s N (battant levé, face au vent)" % [
+		Analyse.vecteur_txt(pos0), Analyse.vecteur_txt(pos1), Analyse.nombre(f0.z), Analyse.nombre(f1.z)])
+	# 6. le dessin suit : un pivot par articulation, le battant et l'aile rangés dessous, placés comme la physique
+	var ext: Node3D = Node3D.new()
+	var d = DessinVaisseau.new(ext, null)
+	v = VaisseauPhysique.new(pl)
+	d.construire(pl, v)
+	var pv: Node3D = d.pivots.get(art_g)
+	var racines: Array = d.racines_ajouts.get(ch[0], [])
+	var aile_sous: bool = pv != null and d.ajouts.has(aile[0]) and (d.ajouts[aile[0]] as Node).get_parent() == pv
+	v.regler_commande("ailes", 1.0)
+	d.poser(v)
+	var place: bool = pv != null and pv.transform.is_equal_approx(v.transformation_articulation(art_g))
+	d.montrer_ajout(ch[0], false)
+	var caches: bool = racines.all(func(n): return not (n as Node3D).visible)
+	ok = pv != null and racines.size() == 2 and (racines[1] as Node).get_parent() == pv and aile_sous and place and caches \
+		and (d.maillages_ajouts[ch[0]] as Array).size() == 3
+	_resultat(ok, "Pièces mobiles : le dessin suit", "%d pivots ; charnière en %d morceaux (le battant sous son pivot) ; aile sous le pivot : %s ; pivot placé comme la physique : %s ; cachée en entier : %s" % [
+		d.pivots.size(), racines.size(), aile_sous, place, caches])
+	ext.free()
+	# 7. jambes de train : leurs roues suivent, l'amortisseur est réglé pour le poids ; posé, il tient dessus
+	var ed2 = _ed_vide()
+	var s2: Array = ed2.ajouter("boite", {"masse_kg": 2000.0, "largeur_m": 3.0, "hauteur_m": 1.0, "longueur_m": 6.0}, Transform3D.IDENTITY)
+	ed2.ajouter("jambe_train", {}, Transform3D(Basis.IDENTITY, Vector3(1.0, -0.5, 1.5)), s2[0], "", true)
+	ed2.ajouter("jambe_train", {"orientable": "oui", "charge_t": 1.5}, Transform3D(Basis.IDENTITY, Vector3(0.0, -0.5, -2.5)), s2[0], "", true)
+	var p2 = ed2.plan()
+	var v2 = VaisseauPhysique.new(p2)
+	var rentree: Vector3 = v2.roues[0]
+	var h_train: float = v2.hauteur_train
+	v2.regler_commande("train", 1.0)
+	v2.placer_pieces_mobiles()
+	var sortie: Vector3 = v2.roues[0]
+	var ecrite: Vector3 = p2.pieces_de_type("roue")[0]["point"]
+	v2.gm = GRAVITE_SURFACE * RAYON_PLANETE * RAYON_PLANETE
+	v2.rayon_planete = RAYON_PLANETE
+	v2.poser_au_sol(Vector3.UP, Vector3.FORWARD, 2.0)
+	var penche: float = rad_to_deg(Basis(v2.orientation).y.angle_to(Vector3(v2.px, v2.py, v2.pz).normalized()))
+	var c2 = ControleVol.new(p2)
+	var sol_ok: bool = c2.elements.any(func(e): return e["titre"] == "Au sol : il tient sur ses roues")
+	ok = p2.valide() and p2.pieces_de_type("roue").size() == 3 and v2.roue_orientable == 2 and rentree.is_equal_approx(ecrite + Vector3(0.0, 1.25, -1.25)) \
+		and sortie.is_equal_approx(ecrite) and is_equal_approx(h_train, 1.75) and v2.au_sol and not v2.ecrase and penche < 1.0 and sol_ok
+	_resultat(ok, "Pièces mobiles : jambes de train", "roue rentrée %s, sortie %s ; hauteur du train %s m ; posé : %s, penché %s° ; contrôle : %s" % [
+		Analyse.vecteur_txt(rentree), Analyse.vecteur_txt(sortie), Analyse.nombre(h_train, 2), v2.au_sol, Analyse.nombre(penche, 2), sol_ok])
+	# 8. analyse et contrôle : une lourde boîte sur un battant fait bouger le centre de gravité (avertit) ;
+	#    une charnière qui ne porte rien (pour information) ; la tuile du centre de gravité ouvre leur page
+	var ed3 = _ed_vide()
+	var s3: Array = ed3.ajouter("boite", {"masse_kg": 50.0}, Transform3D.IDENTITY)
+	var c3: Array = ed3.ajouter("charniere", {"longueur_m": 3.0}, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.225, 0.0)), s3[0], "", false)
+	var dc3: Vector3 = Pieces.dimensions_charniere(3.0)   # (largeur du battant, épaisseur, hauteur de l'axe)
+	ed3.ajouter("boite", {"masse_kg": 2000.0}, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.225 + dc3.z + dc3.y + 0.225, -1.0)), c3[0], String(c3[0]) + "/mouvement", false)
+	ed3.ajouter("charniere", {}, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.225, 0.8)), s3[0], "", false)
+	var p3 = ed3.plan()
+	var a3 = Analyse.new(p3)
+	var m3: Dictionary = a3.mobiles()
+	var dep: float = float(m3["commandes"][0]["deplacement"])
+	var ctl = ControleVol.new(p3, a3)
+	var avert: bool = ctl.elements.any(func(e): return e["niveau"] == ControleVol.AVERTIT and String(e["titre"]).begins_with("Le centre de gravité bouge beaucoup"))
+	var vide: bool = ctl.elements.any(func(e): return e["niveau"] == ControleVol.INFO and String(e["titre"]).ends_with("ne porte rien"))
+	var fiche: Dictionary = a3.fiche_mobiles()
+	ok = dep > ControleVol.CG_MOBILE_AVERTIT and avert and vide and a3.details_tuiles()[6] == "mobiles" and fiche["titre"] == "Pièces mobiles" \
+		and (fiche["sections"] as Array).size() == 1 and String(a3.tuiles()[6][2]).contains("pièces mobiles") \
+		and Analyse.new(Plan.par_defaut()).details_tuiles()[6] == "mobiles"
+	_resultat(ok, "Pièces mobiles : analyse et contrôle avant le vol", "centre de gravité déplacé de %s (avertit : %s) ; charnière à vide (info : %s) ; tuile « %s »" % [
+		Analyse.longueur_txt(dep), avert, vide, a3.tuiles()[6][2]])
+	# 9. le chasseur de départ : rien ne bloque ni n'avertit, ses pièces mobiles bougent à peine le centre de gravité
+	var cd = ControleVol.new(Plan.par_defaut())
+	var mob: Array = cd.elements.filter(func(e): return e["categorie"] == "Pièces mobiles")
+	ok = not cd.bloque() and not cd.avertit() and mob.size() == 2 and mob.all(func(e): return e["niveau"] in [ControleVol.OK, ControleVol.INFO])
+	_resultat(ok, "Pièces mobiles : le chasseur de départ", " ; ".join(mob.map(func(e): return "%s (%s)" % [e["titre"], e["niveau"]])))
+	# 10. enlever une charnière : ce qui était posé sur son battant ne bouge plus ; la durée d'un mouvement
+	#     s'enregistre dans le plan (sans « commandes » : celle du catalogue)
+	ed.supprimer([ch[0]])
+	var libre: bool = not ed.element(aile[0]).has("articulation") and not ed.element(prop[0]).has("articulation") and ed.plan().valide()
+	var duree_defaut: float = _plan_de({"format": "plan-vaisseau", "version": 3, "pieces": []}).duree_commande("train")
+	ed.regler_duree_commande("ailes", 1.7)
+	ok = libre and is_equal_approx(duree_defaut, 3.0) and is_equal_approx(ed.plan().duree_commande("ailes"), 1.7)
+	_resultat(ok, "Pièces mobiles : enlever, durée des mouvements", "posées libérées : %s ; durée par défaut du train %s s ; durée des ailes réglée %s s" % [
+		libre, Analyse.nombre(duree_defaut, 1), Analyse.nombre(ed.plan().duree_commande("ailes"), 1)])
+
+
+func _tests_ecran_etape7() -> void:
+	_vider_dossier(DOSSIER_ESSAI)
+	Engine.set_meta("partie", {"plan": Plan.PLAN_PAR_DEFAUT, "depart": "", "plan_lu": true})
+	var at = (load(SCENE_ATELIER) as PackedScene).instantiate()
+	at.dossier_vaisseaux = DOSSIER_ESSAI
+	add_child(at)
+	await _attendre_atelier()
+	at.case_symetrie.button_pressed = false
+	# 1. le catalogue a la catégorie « Pièces mobiles »
+	var textes: Array = []
+	var it: TreeItem = at.arbre.get_root()
+	while it != null:
+		textes.append(it.get_text(0))
+		it = it.get_next_in_tree()
+	var ok: bool = textes.has("Pièces mobiles") and textes.has("Charnière motorisée (0° → 90°)") and textes.has("Jambe de train (3 t)")
+	_resultat(ok, "Écran (étape 7) : le catalogue", "« Pièces mobiles » : %s" % textes.has("Pièces mobiles"))
+	# 2. une charnière posée à la souris sur le dos du fuselage, puis une boîte posée sur son battant
+	at.commencer_pose("charniere", {})
+	var r: Array = _rayon_dessus(at, Vector3(0.0, 0.0, 0.6))
+	at.calculer_pose_rayon(r[0], r[1])
+	var touche: bool = bool(at.pose.get("touche", false))
+	at.valider_pose()
+	await _attendre_atelier()
+	await _attendre_atelier()
+	var ch: String = ""
+	for id in at.analyse.ajouts:
+		if String(at.analyse.ajouts[id]["modele"]) == "charniere":
+			ch = id
+	var battant: MeshInstance3D = null
+	if ch != "":
+		battant = (at.dessin.maillages_ajouts[ch] as Array).filter(func(m): return (m as Node).has_meta("articulation"))[0]
+	var c_battant: Vector3 = (battant.global_transform * battant.get_aabb()).get_center() if battant != null else Vector3.ZERO
+	at.commencer_pose("boite", {"masse_kg": 400.0, "largeur_m": 0.3, "hauteur_m": 0.2, "longueur_m": 0.2})
+	var bas: Vector3 = -(at.corps.global_transform.basis.y).normalized()
+	at.calculer_pose_rayon(c_battant - bas * 5.0, bas)
+	var sur: String = String(at.pose.get("articulation", ""))
+	var fixe: String = String(at.pose.get("fixe_a", ""))
+	at.valider_pose()
+	await _attendre_atelier()
+	await _attendre_atelier()
+	var boite: String = ""
+	for id in at.analyse.ajouts:
+		if String(at.analyse.ajouts[id]["modele"]) == "boite":
+			boite = id
+	ok = touche and ch != "" and sur == ch + "/mouvement" and fixe == ch and boite != "" \
+		and String(at.edition.element(boite).get("articulation", "")) == ch + "/mouvement"
+	_resultat(ok, "Écran (étape 7) : poser sur le battant d'une charnière", "charnière « %s » (touche : %s) ; boîte posée sur « %s », suit « %s »" % [ch, touche, fixe, sur])
+	# 3. sa fiche : la commande, et deux boutons pour l'essayer
+	at.choisir("ajout", ch)
+	await get_tree().process_frame
+	var boutons: Array = _boutons(at.fiche_outils)
+	ok = boutons.has("Essayer : repliées (0)") and boutons.has("Essayer : ouvertes (1)")
+	_resultat(ok, "Écran (étape 7) : la fiche d'une pièce mobile", "%s" % [boutons.filter(func(b): return String(b).begins_with("Essayer"))])
+	# 4. « Mouvements » : ouvrir les ailes dans le hangar (durée raccourcie) ; la boîte suit le battant, les
+	#    ailes du chasseur s'ouvrent (les ailes du bas passent sous le sol : avis), le centre de gravité bouge
+	var menu: VBoxContainer = VBoxContainer.new()
+	at._remplir_menu_mouvements(menu)
+	var b_menu: Array = _boutons(menu)
+	menu.free()
+	at.regler_duree_mouvement("ailes", 0.3)
+	await _attendre_atelier()
+	at.deselectionner()
+	var cg_avant: Vector3 = at.vaisseau_pose.centre_gravite
+	at.essayer_mouvement("ailes", 1.0)
+	for i in 300:
+		await get_tree().process_frame
+		if at._essai.is_empty():
+			break
+	await _attendre_atelier()
+	var v = at.vaisseau_pose
+	var xf_b: Transform3D = v.transformation_articulation(ch + "/mouvement")
+	var ecrite: Vector3 = Edition.xf_de(at.edition.element(boite)).origin
+	var dessinee: Vector3 = (at.dessin.ajouts[boite] as Node3D).global_transform.origin
+	var attendue: Vector3 = at.corps.global_transform * (xf_b * ecrite)
+	ok = b_menu.has("repliées (0)") and b_menu.has("ouvertes (1)") and b_menu.has("vol vertical (1)") and v.ailes == 1.0 \
+		and float(at.commandes_essai.get("ailes", 0.0)) == 1.0 and (dessinee - attendue).length() < 0.01 and (xf_b.origin.length() > 0.01 or not xf_b.basis.is_equal_approx(Basis.IDENTITY)) \
+		and at.sous_le_sol() > 0.3 and at.avis.visible and (v.centre_gravite - cg_avant).length() > 0.001
+	_resultat(ok, "Écran (étape 7) : « Mouvements » ouvre les ailes", "menu %s ; ailes %s ; boîte dessinée à %s cm de sa place ; %s m sous le sol (avis : %s) ; centre de gravité déplacé de %s" % [
+		b_menu.slice(0, 6), Analyse.nombre(v.ailes, 1), Analyse.nombre((dessinee - attendue).length() * 100.0, 2), Analyse.nombre(at.sous_le_sol(), 2), at.avis.visible,
+		Analyse.longueur_txt((v.centre_gravite - cg_avant).length())])
+	# 5. la tuile du centre de gravité ouvre la page des pièces mobiles ; retour à la pose du hangar
+	(at.tableau.get_child(6) as Control).gui_input.emit(_clic_gauche())
+	var page: String = String(at.fiche_titre.text)
+	at.remettre_pose_hangar()
+	await _attendre_atelier()
+	await _attendre_atelier()
+	ok = page == "Pièces mobiles" and at.vaisseau_pose.ailes == 0.0 and at.commandes_essai.is_empty()
+	_resultat(ok, "Écran (étape 7) : la page, et retour à la pose du hangar", "page « %s » ; ailes %s" % [page, Analyse.nombre(at.vaisseau_pose.ailes, 1)])
+	at.queue_free()
 	await get_tree().process_frame

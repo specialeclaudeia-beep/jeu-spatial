@@ -25,6 +25,11 @@ extends RefCounted
 ## Étape 6 : l'ARMATURE (scripts/atelier/armature.gd) est dessinée comme les pièces posées : poutres
 ## (boîte ou cylindre), connecteurs (petite boule) et panneaux (plaque plate entre leurs coins, d'épaisseur
 ## réelle ; en verre : une vitre). Elle est fusionnée par matière dans le jeu comme le reste.
+## Étape 7 : les PIÈCES MOBILES générales. Chaque articulation du plan qui n'a pas de nœud dans le modèle
+## Blender (charnière, vérin, aile repliable, jambe de train posés dans l'atelier, ou écrits dans le plan) a
+## un « pivot » : un nœud placé à chaque image comme la physique place ses pièces (Plan.transformation, la
+## chaîne des articulations qui se portent l'une l'autre comprise). Les morceaux d'une pièce posée qui bougent
+## (forme qui dit « articulation ») et tout ce qui est posé sur eux sont rangés sous ce pivot : poser(v).
 ## Rien ici ne change la physique : le dessin suit le plan.
 
 const Plan = preload("res://scripts/atelier/plan.gd")
@@ -53,6 +58,10 @@ var bruts := {}                  # id d'une pièce du plan sans dessin Blender �
 var maillages_bruts := {}        # id → [MeshInstance3D] (sans les lueurs et les jets)
 var lueurs_bruts := {}           # id → [MeshInstance3D] (lueurs et jets)
 var fusions: Array = []          # maillages fusionnés (jeu : une matière par charnière)
+var pivots := {}                 # id d'articulation sans nœud dans le modèle → son nœud (étape 7)
+var racines_ajouts := {}         # id de la pièce posée → [ses nœuds] (le fixe, puis chaque partie mobile)
+var _racines: Array = []         # tous les nœuds de pièces dessinés (pour les enlever)
+var _cle_pose := Vector3(-1.0, -1.0, -1.0)   # commandes du dernier poser() des pivots
 var caches: Array = []           # maillages du chasseur cachés (pièces enlevées du plan)
 var _piece_v27 := {}             # MeshInstance3D → id de la pièce du plan de départ qu'il dessine
 var _moteur_v27 := {}            # lueur / jet du modèle → id du moteur ou propulseur de départ
@@ -159,10 +168,22 @@ static func elements(p_plan) -> Array:
 			continue
 		var id := String(e["id"])
 		var formes := Pieces.dessin(String(e["modele"]), e.get("reglages", {}))
+		# étape 7 : les morceaux qui bougent (forme qui dit « articulation ») sont un élément à part, rangé
+		# sous le pivot de leur articulation (« id/mouvement »)
+		var parties := {"": []}
 		for f in formes:
 			f["id_physique"] = id + "/poussee"
-		sortie.append({"id": id, "genre": "ajout", "articulation": String(e.get("articulation", "")),
-			"xf": Edition.xf_de(e), "formes": formes})
+			var locale := String(f.get("articulation", ""))
+			if not parties.has(locale):
+				parties[locale] = []
+			(parties[locale] as Array).append(f)
+		var xf_e := Edition.xf_de(e)
+		for locale in parties:
+			if (parties[locale] as Array).is_empty():
+				continue
+			var art := String(e.get("articulation", "")) if locale == "" else id + "/" + String(locale)
+			sortie.append({"id": id, "genre": "ajout", "articulation": art, "xf": xf_e, "formes": parties[locale],
+				"partie": String(locale)})
 	for p in p_plan.pieces:
 		var id := String(p["id"])
 		if p.has("ajout") or ids.has(id) or not TYPES_DESSINES.has(String(p.get("type", ""))):
@@ -317,18 +338,26 @@ func construire(p_plan, v, fusion := false) -> void:
 	if droide != null:
 		droide.visible = presents.has("Masse_droide") or not ids_depart().has("Masse_droide")
 	# 2. les pièces posées et les pièces sans dessin Blender
-	for liste in [ajouts, bruts]:
-		for id in liste:
-			var n: Node = liste[id]
-			if is_instance_valid(n):
-				n.get_parent().remove_child(n)
-				n.queue_free()
-		liste.clear()
+	for n in _racines:
+		if is_instance_valid(n) and (n as Node).get_parent() != null:
+			(n as Node).get_parent().remove_child(n)
+			(n as Node).queue_free()
+	_racines.clear()
+	ajouts.clear()
+	bruts.clear()
+	racines_ajouts.clear()
 	for f in fusions:
 		if is_instance_valid(f):
 			(f as Node).get_parent().remove_child(f)
 			(f as Node).queue_free()
 	fusions.clear()
+	for id in pivots:
+		var pv: Node = pivots[id]
+		if is_instance_valid(pv):
+			pv.get_parent().remove_child(pv)
+			pv.queue_free()
+	pivots.clear()
+	_cle_pose = Vector3(-1.0, -1.0, -1.0)
 	maillages_ajouts.clear()
 	lueurs_ajouts.clear()
 	maillages_bruts.clear()
@@ -338,10 +367,46 @@ func construire(p_plan, v, fusion := false) -> void:
 		return
 	# place des charnières dans la pose de référence du plan (ailes ouvertes…) : la pièce posée y est rangée
 	var refs := _poses_reference(v)
+	# étape 7 : un pivot pour chaque articulation sans nœud dans le modèle, placé comme la physique
+	for id in plan.articulations:
+		if refs.has(id):
+			continue
+		var pv := Node3D.new()
+		pv.name = "Pivot_" + String(id).replace("/", "_")
+		pv.set_meta("articulation", String(id))
+		exterieur.add_child(pv)
+		pivots[id] = pv
 	for el in els:
 		_dessiner_element(el, refs)
+	if v != null:
+		poser(v)
 	if fusion:
 		_fusionner()
+
+
+## Pose le dessin comme la physique : le modèle du chasseur (ailes, train, tuyère…) et les pivots des
+## pièces mobiles (étape 7). Le jeu l'appelle à chaque image.
+func poser(v) -> void:
+	if modele != null:
+		modele.poser(v)
+	if pivots.is_empty():
+		return
+	var cle := Vector3(v.ailes, v.train, v.vertical)
+	if cle == _cle_pose:
+		return
+	_cle_pose = cle
+	var valeurs := {"ailes": v.ailes, "train": v.train, "vertical": v.vertical}
+	for id in pivots:
+		var pv: Node3D = pivots[id]
+		if is_instance_valid(pv):
+			pv.transform = Plan.transformation(plan.articulations, id, valeurs)
+
+
+## Montre ou cache une pièce posée (toutes ses parties, celles qui bougent comprises).
+func montrer_ajout(id: String, oui: bool) -> void:
+	for n in racines_ajouts.get(id, []):
+		if is_instance_valid(n):
+			(n as Node3D).visible = oui
 
 
 ## Nœud du dessin et sa transformation (repère du plan) dans la pose de référence, pour chaque
@@ -376,11 +441,17 @@ func _dessiner_element(el: Dictionary, refs: Dictionary) -> void:
 	if refs.has(art):
 		parent = refs[art][0]
 		xf = (refs[art][1] as Transform3D).affine_inverse() * xf
+	elif pivots.has(art):
+		parent = pivots[art]   # (pivot : l'identité dans la pose où le plan est écrit)
+	var partie := String(el.get("partie", ""))
 	var racine := Node3D.new()
-	racine.name = ("Ajout_" if ajout else "Piece_plan_") + id.replace("/", "_")
+	racine.name = ("Ajout_" if ajout else "Piece_plan_") + id.replace("/", "_") + ("_" + partie if partie != "" else "")
 	racine.transform = xf
 	racine.set_meta("ajout" if ajout else "piece_plan", id)
+	if partie != "":
+		racine.set_meta("articulation", art)
 	parent.add_child(racine)
+	_racines.append(racine)
 	var liste := []
 	var brillants := []
 	var nom := id.replace("/", "_")
@@ -429,12 +500,20 @@ func _dessiner_element(el: Dictionary, refs: Dictionary) -> void:
 					if _plus_grand_cote(String(f["forme"]), t) < SANS_OMBRE_SOUS:
 						mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 				mi.set_meta("cle_matiere", cle_matiere(f))
+				if partie != "":
+					mi.set_meta("articulation", art)   # (l'atelier : ce qu'on pose dessus suit cette partie)
 				liste.append(mi)
 		racine.add_child(mi)
 	if ajout:
-		ajouts[id] = racine
-		maillages_ajouts[id] = liste
-		lueurs_ajouts[id] = brillants
+		# (une pièce mobile a plusieurs nœuds : le premier est celui de sa partie fixe)
+		if not ajouts.has(id):
+			ajouts[id] = racine
+			racines_ajouts[id] = []
+			maillages_ajouts[id] = []
+			lueurs_ajouts[id] = []
+		(racines_ajouts[id] as Array).append(racine)
+		(maillages_ajouts[id] as Array).append_array(liste)
+		(lueurs_ajouts[id] as Array).append_array(brillants)
 	else:
 		bruts[id] = racine
 		maillages_bruts[id] = liste
